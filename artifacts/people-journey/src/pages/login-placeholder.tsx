@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { Link } from 'wouter';
-import { ArrowLeft, HeartHandshake, LockKeyhole } from 'lucide-react';
+import { ArrowLeft, HeartHandshake, LayoutDashboard, LockKeyhole } from 'lucide-react';
 
 export function LoginPlaceholder() {
   useEffect(() => {
@@ -28,6 +28,7 @@ export function LoginPlaceholder() {
         <p>People Journey workspace access isn’t configured yet. When your people team is ready, they’ll share the right way to sign in.</p>
         <div className="login-status"><span className="status-dot" /> Workspace access is not available yet</div>
         <Link href="/" className="button button-primary login-return" data-testid="link-return-home"><ArrowLeft size={15} /> Back to People Journey</Link>
+        <Link href="/dashboard" className="button button-secondary login-return demo-login-link" data-testid="link-demo-dashboard"><LayoutDashboard size={15} /> Open the demo dashboard</Link>
         <div className="login-help"><HeartHandshake size={15} /><span>Need a hand? Reach out to your people operations team.</span></div>
       </section>
       <div className="login-footer">A thoughtful workspace for every employee journey.</div>
