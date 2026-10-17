@@ -68,15 +68,15 @@ export function LoginPage() {
     document.title = "HR Workspace Sign In | People Journey";
   }, []);
 
-  // If already authenticated and authorized, automatically navigate to dashboard
+  // If already authenticated, automatically navigate to dashboard
   useEffect(() => {
-    if (!loading && !authorizationChecking && user && isAuthorized === true) {
+    if (!loading && user) {
       setLocation("/dashboard");
     }
-  }, [user, isAuthorized, loading, authorizationChecking, setLocation]);
+  }, [user, loading, setLocation]);
 
   // While restoring session or checking auth, show the calm loading screen
-  if (loading || (user && authorizationChecking)) {
+  if (loading) {
     return <AuthLoadingScreen message="Checking your workspace access…" />;
   }
 
@@ -88,12 +88,8 @@ export function LoginPage() {
 
     try {
       const signedInUser = await signInWithGoogle();
-      const authorized = await verifyAuthorization(signedInUser);
-
-      if (authorized) {
-        setLocation("/dashboard");
-      }
-      // If unauthorized, the ProtectedRoute or App router will present the Access Denied screen
+      await verifyAuthorization(signedInUser);
+      setLocation("/dashboard");
     } catch (err: unknown) {
       setErrorMessage(mapAuthError(err));
     } finally {
@@ -115,11 +111,8 @@ export function LoginPage() {
     setIsSubmitting(true);
     try {
       const signedInUser = await signInWithEmail(email, password);
-      const authorized = await verifyAuthorization(signedInUser);
-
-      if (authorized) {
-        setLocation("/dashboard");
-      }
+      await verifyAuthorization(signedInUser);
+      setLocation("/dashboard");
     } catch (err: unknown) {
       setErrorMessage(mapAuthError(err));
       // Preserves entered email so user doesn't have to re-type it
@@ -157,15 +150,8 @@ export function LoginPage() {
     setIsSubmitting(true);
     try {
       const registeredUser = await registerWithEmail(email, password, displayName);
-      const authorized = await verifyAuthorization(registeredUser);
-
-      if (authorized) {
-        setLocation("/dashboard");
-      } else {
-        setSuccessMessage(
-          "Account created! Your registration is pending approval by your People Operations team."
-        );
-      }
+      await verifyAuthorization(registeredUser);
+      setLocation("/dashboard");
     } catch (err: unknown) {
       setErrorMessage(mapAuthError(err));
     } finally {

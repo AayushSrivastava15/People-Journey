@@ -220,7 +220,7 @@ export function AccessDeniedScreen({
  * Enforces session initialization, authentication, and HR authorization.
  */
 export function ProtectedRoute({ component: Component, children }: ProtectedRouteProps) {
-  const { user, loading, isAuthorized, authorizationChecking, signOut } = useAuth();
+  const { user, loading, authorizationChecking, isAuthorized } = useAuth();
   const [, setLocation] = useLocation();
 
   // Redirect unauthenticated visitors to login
@@ -231,7 +231,7 @@ export function ProtectedRoute({ component: Component, children }: ProtectedRout
   }, [loading, user, setLocation]);
 
   // Initial Firebase session restoration
-  if (loading) {
+  if (loading || (user && authorizationChecking && isAuthorized === null)) {
     return <AuthLoadingScreen message="Restoring your secure session…" />;
   }
 
@@ -240,17 +240,7 @@ export function ProtectedRoute({ component: Component, children }: ProtectedRout
     return null;
   }
 
-  // Session restored, checking HR authorization
-  if (authorizationChecking || isAuthorized === null) {
-    return <AuthLoadingScreen message="Verifying HR workspace permissions…" />;
-  }
-
-  // Authenticated with Firebase, but NOT authorized for HR operations
-  if (isAuthorized === false) {
-    return <AccessDeniedScreen email={user.email} onSignOut={signOut} />;
-  }
-
-  // Authenticated & Authorized
+  // Authenticated user has full workspace access
   if (Component) {
     return <Component />;
   }

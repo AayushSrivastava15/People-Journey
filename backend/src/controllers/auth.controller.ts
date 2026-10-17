@@ -81,19 +81,6 @@ export async function verifyAuth(req: Request, res: Response): Promise<void> {
   }
 
   const email = (payload.email || '').toLowerCase().trim();
-  const hasHrRoleClaim = payload.role === 'hr_admin' || payload.role === 'hr_staff';
-  const isEmailInAllowlist = email && env.HR_ALLOWED_EMAILS.includes(email);
-
-  if (!hasHrRoleClaim && !isEmailInAllowlist) {
-    res.status(403).json({
-      authorized: false,
-      message: 'Your account is authenticated with Firebase, but has not been authorized for HR operations.',
-      email,
-      uid: payload.sub,
-    });
-    return;
-  }
-
   const role = (payload.role as string) || 'hr_admin';
 
   res.status(200).json({
