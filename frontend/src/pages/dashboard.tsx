@@ -12,6 +12,7 @@ import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer,
 import { Form } from '@/components/ui/form';
 import { dateFromToday, demoDepartments, demoEmployees, demoExitInterviews, demoNotifications, employeeById, recentMonthBuckets, type LifecycleStatus, type NoticeStatus } from '@/lib/demo-data';
 import { z } from 'zod';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { useAuth } from '@/context';
 
 const navGroups = [
@@ -65,6 +66,7 @@ function Shell({ children, title, path, onNavigate, searchValue, onSearchChange 
   const [menuOpen, setMenuOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const { user, authRole, signOut } = useAuth();
+  const shouldReduceMotion = useReducedMotion();
 
   const handleSignOut = async () => {
     await signOut();
@@ -75,120 +77,210 @@ function Shell({ children, title, path, onNavigate, searchValue, onSearchChange 
   const avatarLetter = (displayName[0] || 'H').toUpperCase();
   const roleLabel = authRole === 'hr_admin' ? 'Admin' : 'HR Staff';
 
-  return <div className="dashboard-frame">
-    <DemoBanner />
-    <div className="dashboard-shell">
-      <aside className={`dash-sidebar ${collapsed ? 'is-collapsed' : ''} ${menuOpen ? 'is-open' : ''}`} aria-label="Workspace navigation">
-        <Link href="/dashboard" className="dash-brand"><span className="dash-brand-symbol" aria-hidden="true"><i /><i /><i /></span><span className="dash-brand-name">people<span>journey</span><small>DEMO WORKSPACE</small></span></Link>
-        <div className="workspace-label">PEOPLE WORKSPACE</div>
-        <nav className="dash-nav">
-          {navGroups.map(group => <div className="nav-group" key={group.label}><p>{group.label}</p>{group.links.map(item => {
-            const Icon = item.icon; const active = item.path === path;
-            return <Link key={item.path} href={item.path} onClick={() => { setMenuOpen(false); onNavigate(item.path); }} className={`dash-nav-link ${active ? 'active' : ''}`} aria-current={active ? 'page' : undefined} title={collapsed ? item.label : undefined}><Icon size={17} strokeWidth={1.8} /><span>{item.label}</span>{item.path === '/dashboard/hr-users' && <small className="nav-unavailable">N/A</small>}</Link>;
-          })}</div>)}
-        </nav>
-        <div className="sidebar-foot">
-          <span className="help-icon" style={{ background: '#f8e6ea', color: '#974d66' }}>
-            <UserCheck size={16} />
-          </span>
-          <span style={{ minWidth: 0 }}>
-            <b style={{ maxWidth: '135px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {displayName}
-            </b>
-            <small style={{ maxWidth: '135px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {user?.email || roleLabel}
-            </small>
-          </span>
-        </div>
-        <button className="collapse-sidebar" type="button" onClick={() => setCollapsed(!collapsed)} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}><ChevronLeft size={16} /></button>
-      </aside>
-      {menuOpen && <button className="nav-scrim" onClick={() => setMenuOpen(false)} aria-label="Close navigation" />}
-      <main className="dash-main">
-        <header className="dash-topbar">
-          <button className="mobile-nav-toggle" aria-label="Open navigation" onClick={() => setMenuOpen(true)}><Menu size={20} /></button>
-          <div className="breadcrumbs"><span>People Workspace</span><ChevronRight size={13} /><strong>{title}</strong></div>
-          <label className="global-search"><Search size={16} /><span className="sr-only">Search fictional employee records</span><input value={searchValue} onChange={event => { const value = event.target.value; onSearchChange(value); if (value.trim() && path !== '/dashboard/employees') onNavigate('/dashboard/employees'); }} placeholder="Search sample people..." /><kbd>DEMO</kbd></label>
-          <Link href="/dashboard/notifications" className="topbar-bell" aria-label="View notification preview"><Bell size={18} /><i>{demoNotifications.filter(item => item.status === 'Pending').length}</i></Link>
-          <span className="topbar-date">{new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date())}</span>
+  return (
+    <div className="dashboard-frame">
+      <DemoBanner />
+      <div className="dashboard-shell">
+        <aside className={`dash-sidebar ${collapsed ? 'is-collapsed' : ''} ${menuOpen ? 'is-open' : ''}`} aria-label="Workspace navigation">
+          <Link href="/dashboard" className="dash-brand">
+            <span className="dash-brand-symbol" aria-hidden="true"><i /><i /><i /></span>
+            <span className="dash-brand-name">people<span>journey</span><small>DEMO WORKSPACE</small></span>
+          </Link>
+          <div className="workspace-label">PEOPLE WORKSPACE</div>
+          <nav className="dash-nav">
+            {navGroups.map(group => (
+              <div className="nav-group" key={group.label}>
+                <p>{group.label}</p>
+                {group.links.map(item => {
+                  const Icon = item.icon;
+                  const active = item.path === path;
+                  return (
+                    <Link
+                      key={item.path}
+                      href={item.path}
+                      onClick={() => { setMenuOpen(false); onNavigate(item.path); }}
+                      className={`dash-nav-link ${active ? 'active' : ''}`}
+                      aria-current={active ? 'page' : undefined}
+                      title={collapsed ? item.label : undefined}
+                    >
+                      {active && (
+                        <motion.span
+                          layoutId="activeSidebarPill"
+                          className="dash-nav-active-pill"
+                          transition={
+                            shouldReduceMotion
+                              ? { duration: 0 }
+                              : { type: 'spring', stiffness: 420, damping: 32 }
+                          }
+                          aria-hidden="true"
+                        />
+                      )}
+                      <Icon size={17} strokeWidth={1.8} className="dash-nav-icon" />
+                      <span className="dash-nav-text">{item.label}</span>
+                      {item.path === '/dashboard/hr-users' && (
+                        <small className="nav-unavailable">N/A</small>
+                      )}
+                    </Link>
+                  );
+                })}
+              </div>
+            ))}
+          </nav>
+          <div className="sidebar-foot">
+            <span className="help-icon" style={{ background: '#f8e6ea', color: '#974d66' }}>
+              <UserCheck size={16} />
+            </span>
+            <span style={{ minWidth: 0 }}>
+              <b style={{ maxWidth: '135px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {displayName}
+              </b>
+              <small style={{ maxWidth: '135px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {user?.email || roleLabel}
+              </small>
+            </span>
+          </div>
+          <button className="collapse-sidebar" type="button" onClick={() => setCollapsed(!collapsed)} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+            <ChevronLeft size={16} />
+          </button>
+        </aside>
+        {menuOpen && <button className="nav-scrim" onClick={() => setMenuOpen(false)} aria-label="Close navigation" />}
+        <main className="dash-main">
+          <header className="dash-topbar">
+            <button className="mobile-nav-toggle" aria-label="Open navigation" onClick={() => setMenuOpen(true)}>
+              <Menu size={20} />
+            </button>
+            <div className="breadcrumbs">
+              <span>People Workspace</span>
+              <ChevronRight size={13} />
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.strong
+                  key={title}
+                  initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 }}
+                  animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+                  exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: 4 }}
+                  transition={{ duration: 0.18, ease: 'easeOut' }}
+                >
+                  {title}
+                </motion.strong>
+              </AnimatePresence>
+            </div>
+            <label className="global-search">
+              <Search size={16} />
+              <span className="sr-only">Search fictional employee records</span>
+              <input
+                value={searchValue}
+                onChange={event => {
+                  const value = event.target.value;
+                  onSearchChange(value);
+                  if (value.trim() && path !== '/dashboard/employees') onNavigate('/dashboard/employees');
+                }}
+                placeholder="Search sample people..."
+              />
+              <kbd>DEMO</kbd>
+            </label>
+            <Link href="/dashboard/notifications" className="topbar-bell" aria-label="View notification preview">
+              <Bell size={18} />
+              <i>{demoNotifications.filter(item => item.status === 'Pending').length}</i>
+            </Link>
+            <span className="topbar-date">
+              {new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date())}
+            </span>
 
-          {/* Authenticated user pill & logout button */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '4px' }}>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '7px',
-                padding: '4px 10px 4px 6px',
-                borderRadius: '999px',
-                background: '#fffdfb',
-                border: '1px solid #ebdada',
-                fontSize: '11px',
-                color: '#52434d',
-              }}
-              title={user?.email || displayName}
-            >
-              <span
+            {/* Authenticated user pill & logout button */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '4px' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '7px',
+                  padding: '4px 10px 4px 6px',
+                  borderRadius: '999px',
+                  background: '#fffdfb',
+                  border: '1px solid #ebdada',
+                  fontSize: '11px',
+                  color: '#52434d',
+                }}
+                title={user?.email || displayName}
+              >
+                <span
+                  style={{
+                    display: 'grid',
+                    placeItems: 'center',
+                    width: '26px',
+                    height: '26px',
+                    borderRadius: '50%',
+                    background: '#f6e5e9',
+                    color: '#8b4b62',
+                    fontWeight: 700,
+                    fontSize: '10px',
+                  }}
+                >
+                  {avatarLetter}
+                </span>
+                <span style={{ maxWidth: '110px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                  {displayName}
+                </span>
+                <span
+                  style={{
+                    padding: '2px 5px',
+                    borderRadius: '4px',
+                    background: '#f8ebf0',
+                    color: '#93586d',
+                    fontSize: '8px',
+                    fontWeight: 700,
+                    letterSpacing: '.05em',
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  {roleLabel}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleSignOut}
+                title="Sign out of HR Workspace"
+                aria-label="Sign out of HR Workspace"
                 style={{
                   display: 'grid',
                   placeItems: 'center',
-                  width: '26px',
-                  height: '26px',
-                  borderRadius: '50%',
-                  background: '#f6e5e9',
-                  color: '#8b4b62',
-                  fontWeight: 700,
-                  fontSize: '10px',
+                  width: '35px',
+                  height: '35px',
+                  borderRadius: '10px',
+                  border: '1px solid #eee4e4',
+                  background: '#fffdfa',
+                  color: '#86727d',
+                  cursor: 'pointer',
+                  transition: 'background-color .18s, color .18s, border-color .18s',
                 }}
               >
-                {avatarLetter}
-              </span>
-              <span style={{ maxWidth: '110px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>
-                {displayName}
-              </span>
-              <span
-                style={{
-                  padding: '2px 5px',
-                  borderRadius: '4px',
-                  background: '#f8ebf0',
-                  color: '#93586d',
-                  fontSize: '8px',
-                  fontWeight: 700,
-                  letterSpacing: '.05em',
-                  textTransform: 'uppercase',
-                }}
-              >
-                {roleLabel}
-              </span>
+                <LogOut size={16} />
+              </button>
             </div>
-
-            <button
-              type="button"
-              onClick={handleSignOut}
-              title="Sign out of HR Workspace"
-              aria-label="Sign out of HR Workspace"
-              style={{
-                display: 'grid',
-                placeItems: 'center',
-                width: '35px',
-                height: '35px',
-                borderRadius: '10px',
-                border: '1px solid #eee4e4',
-                background: '#fffdfa',
-                color: '#86727d',
-                cursor: 'pointer',
-                transition: 'background-color .18s, color .18s, border-color .18s',
-              }}
-            >
-              <LogOut size={16} />
-            </button>
+          </header>
+          <div className="dash-content">
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={path}
+                initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: 12, filter: 'blur(4px)' }}
+                animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0, filter: 'blur(0px)' }}
+                exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -8, filter: 'blur(2px)' }}
+                transition={{
+                  duration: 0.24,
+                  ease: [0.22, 1, 0.36, 1],
+                }}
+                className="dash-tab-pane"
+              >
+                {children}
+              </motion.div>
+            </AnimatePresence>
           </div>
-        </header>
-        <div className="dash-content">{children}</div>
-        <footer className="dash-footer">People Journey preview · Fictional data only · No connection to email or HR systems</footer>
-      </main>
+          <footer className="dash-footer">People Journey preview · Fictional data only · No connection to email or HR systems</footer>
+        </main>
+      </div>
+      <span className="sr-only" aria-live="polite">{searchValue ? `Searching sample employee records for ${searchValue}` : ''}</span>
     </div>
-    <span className="sr-only" aria-live="polite">{searchValue ? `Searching sample employee records for ${searchValue}` : ''}</span>
-  </div>;
+  );
 }
 
 function Status({ value }: { value: LifecycleStatus | NoticeStatus | 'Invited' | 'Submitted' | 'Expired' }) {
@@ -251,7 +343,46 @@ function Overview() {
       <section className="panel"><div className="panel-heading"><div><span className="panel-kicker">DATES & PLANNED TOUCHPOINTS</span><h2>Today & coming up</h2><p>Events from fictional employee and notification records.</p></div><CalendarDays size={18} className="heading-icon" /></div><div className="event-list">{events.slice(0, 5).map(event => <article className="event-item" key={event.id}><span className="event-node" /><div className="event-copy"><b>{event.person}</b><span>{event.label} · {fmt(event.date)}</span></div><Status value={event.status as LifecycleStatus | NoticeStatus} /><Link href={event.path} className="icon-link" aria-label={`View ${event.person} ${event.label}`}><ArrowRight size={15} /></Link></article>)}{events.length === 0 && <p className="empty-inline">No sample events scheduled.</p>}</div></section>
       <section className="panel quick-panel"><div className="panel-heading"><div><span className="panel-kicker">A FEW USEFUL SHORTCUTS</span><h2>Quick actions</h2><p>Explore an area of this preview.</p></div></div><div className="quick-links"><Link href="/dashboard/add-employee"><Users size={17} />Add employee<ChevronRight size={15} /></Link><Link href="/dashboard/schedule-offboarding"><ArrowDownLeft size={17} />Schedule offboarding<ChevronRight size={15} /></Link><Link href="/dashboard/employees"><UsersRound size={17} />View employees<ChevronRight size={15} /></Link><Link href="/dashboard/exit-interviews"><MessageSquareText size={17} />Review exit interviews<ChevronRight size={15} /></Link><Link href="/dashboard/templates"><FileText size={17} />Explore email templates<ChevronRight size={15} /></Link><Link href="/dashboard/notification-history"><Activity size={17} />View notification logs<ChevronRight size={15} /></Link></div></section>
     </div>
-    <section className="panel notification-panel"><div className="panel-heading panel-heading-wrap"><div><span className="panel-kicker">PLANNED WORKFLOW ACTIVITY · FICTIONAL</span><h2>Notification activity</h2><p>These are example job records only. No email has been delivered or attempted.</p></div><label className="filter-select"><ListFilter size={15} /><span className="sr-only">Filter notification status</span><select value={activityFilter} onChange={event => { setActivityFilter(event.target.value); setPage(0); }}><option>All</option>{(['Pending', 'Processing', 'Sent', 'Failed', 'Cancelled'] as NoticeStatus[]).map(status => <option key={status}>{status}</option>)}</select><ChevronDown size={14} /></label></div><NotificationTable rows={shownNotices} /><div className="pagination"><span>Showing {filteredNotices.length ? page * 3 + 1 : 0}–{Math.min((page + 1) * 3, filteredNotices.length)} of {filteredNotices.length} sample jobs</span><div><button type="button" aria-label="Previous page" disabled={page === 0} onClick={() => setPage(Math.max(0, page - 1))}><ChevronLeft size={16} /></button><button type="button" aria-label="Next page" disabled={(page + 1) * 3 >= filteredNotices.length} onClick={() => setPage(page + 1)}><ChevronRight size={16} /></button></div></div></section>
+    <section className="panel notification-panel">
+      <div className="panel-heading panel-heading-wrap">
+        <div>
+          <span className="panel-kicker">PLANNED WORKFLOW ACTIVITY · FICTIONAL</span>
+          <h2>Notification activity</h2>
+          <p>These are example job records only. No email has been delivered or attempted.</p>
+        </div>
+        <label className="filter-select">
+          <ListFilter size={15} />
+          <span className="sr-only">Filter notification status</span>
+          <select value={activityFilter} onChange={event => { setActivityFilter(event.target.value); setPage(0); }}>
+            <option>All</option>
+            {(['Pending', 'Processing', 'Sent', 'Failed', 'Cancelled'] as NoticeStatus[]).map(status => <option key={status}>{status}</option>)}
+          </select>
+          <ChevronDown size={14} />
+        </label>
+      </div>
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={`notices-${activityFilter}-${page}`}
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -4 }}
+          transition={{ duration: 0.18, ease: 'easeOut' }}
+        >
+          <NotificationTable rows={shownNotices} />
+        </motion.div>
+      </AnimatePresence>
+      <div className="pagination">
+        <span>Showing {filteredNotices.length ? page * 3 + 1 : 0}–{Math.min((page + 1) * 3, filteredNotices.length)} of {filteredNotices.length} sample jobs</span>
+        <div>
+          <button type="button" aria-label="Previous page" disabled={page === 0} onClick={() => setPage(Math.max(0, page - 1))}>
+            <ChevronLeft size={16} />
+          </button>
+          <button type="button" aria-label="Next page" disabled={(page + 1) * 3 >= filteredNotices.length} onClick={() => setPage(page + 1)}>
+            <ChevronRight size={16} />
+          </button>
+        </div>
+      </div>
+    </section>
   </>;
 }
 
@@ -285,10 +416,61 @@ function ListingPage({ path, globalSearch, setGlobalSearch }: { path: string; gl
   const filteredNotifications = demoNotifications.filter(item => `${employeeById(item.employeeId)?.name} ${item.type} ${item.recipient}`.toLowerCase().includes(globalSearch.toLowerCase()) && (status === 'All statuses' || item.status === status));
   const pageSize = 5;
   const pageCount = Math.max(1, Math.ceil((peopleMode ? filteredPeople.length : filteredNotifications.length) / pageSize));
-  return <><PageHeading eyebrow="Fictional sample records" title={title} text={desc[path] || 'A clear view of employee journey records.'} action={peopleMode && <Link href="/dashboard/add-employee" className="primary-action"><Users size={17} /> Add Employee</Link>} />
-    {path === '/dashboard/departments' && <div className="department-strip">{demoDepartments.map(dept => <span key={dept}>{dept}<b>{demoEmployees.filter(p => p.department === dept).length}</b></span>)}</div>}
-    <section className="panel listing-panel"><div className="list-controls"><label className="list-search"><Search size={16} /><span className="sr-only">Search {title}</span><input value={globalSearch} onChange={event => { setGlobalSearch(event.target.value); setPage(0); }} placeholder="Search name, department, manager..." /></label><label className="filter-select"><ListFilter size={15} /><span className="sr-only">Filter status</span><select value={status} onChange={event => { setStatus(event.target.value); setPage(0); }}><option>All statuses</option>{(notificationMode ? ['Pending', 'Processing', 'Sent', 'Failed', 'Cancelled'] : ['Active', 'Onboarding', 'Offboarding', 'Exited']).map(value => <option key={value}>{value}</option>)}</select><ChevronDown size={14} /></label></div>{peopleMode ? <EmployeeTable people={filteredPeople.slice(page * pageSize, (page + 1) * pageSize)} /> : <NotificationTable rows={filteredNotifications.slice(page * pageSize, (page + 1) * pageSize)} />}<div className="pagination"><span>Page {page + 1} of {pageCount} · {peopleMode ? filteredPeople.length : filteredNotifications.length} sample records</span><div><button type="button" aria-label="Previous page" disabled={page === 0} onClick={() => setPage(Math.max(0, page - 1))}><ChevronLeft size={16} /></button><button type="button" aria-label="Next page" disabled={page + 1 >= pageCount} onClick={() => setPage(page + 1)}><ChevronRight size={16} /></button></div></div></section>
-  </>;
+  return (
+    <>
+      <PageHeading eyebrow="Fictional sample records" title={title} text={desc[path] || 'A clear view of employee journey records.'} action={peopleMode && <Link href="/dashboard/add-employee" className="primary-action"><Users size={17} /> Add Employee</Link>} />
+      {path === '/dashboard/departments' && (
+        <motion.div
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.2 }}
+          className="department-strip"
+        >
+          {demoDepartments.map(dept => <span key={dept}>{dept}<b>{demoEmployees.filter(p => p.department === dept).length}</b></span>)}
+        </motion.div>
+      )}
+      <section className="panel listing-panel">
+        <div className="list-controls">
+          <label className="list-search">
+            <Search size={16} />
+            <span className="sr-only">Search {title}</span>
+            <input value={globalSearch} onChange={event => { setGlobalSearch(event.target.value); setPage(0); }} placeholder="Search name, department, manager..." />
+          </label>
+          <label className="filter-select">
+            <ListFilter size={15} />
+            <span className="sr-only">Filter status</span>
+            <select value={status} onChange={event => { setStatus(event.target.value); setPage(0); }}>
+              <option>All statuses</option>
+              {(notificationMode ? ['Pending', 'Processing', 'Sent', 'Failed', 'Cancelled'] : ['Active', 'Onboarding', 'Offboarding', 'Exited']).map(value => <option key={value}>{value}</option>)}
+            </select>
+            <ChevronDown size={14} />
+          </label>
+        </div>
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={`${path}-${status}-${page}`}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+          >
+            {peopleMode ? <EmployeeTable people={filteredPeople.slice(page * pageSize, (page + 1) * pageSize)} /> : <NotificationTable rows={filteredNotifications.slice(page * pageSize, (page + 1) * pageSize)} />}
+          </motion.div>
+        </AnimatePresence>
+        <div className="pagination">
+          <span>Page {page + 1} of {pageCount} · {peopleMode ? filteredPeople.length : filteredNotifications.length} sample records</span>
+          <div>
+            <button type="button" aria-label="Previous page" disabled={page === 0} onClick={() => setPage(Math.max(0, page - 1))}>
+              <ChevronLeft size={16} />
+            </button>
+            <button type="button" aria-label="Next page" disabled={page + 1 >= pageCount} onClick={() => setPage(page + 1)}>
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      </section>
+    </>
+  );
 }
 
 function ExitTable() {
