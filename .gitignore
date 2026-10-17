@@ -11,6 +11,15 @@ out-tsc
 # dependencies
 node_modules
 
+# environment variables & secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials.json
+firebase-adminsdk*.json
+
 # IDEs and editors
 /.idea
 .project
