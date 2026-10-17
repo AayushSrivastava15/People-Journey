@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "People Journey"
+description = "A polished landing page for an HR onboarding and offboarding workspace, introducing employee lifecycle workflows and a fictional product preview."
+version = "1.0.0"
+id = "artifacts/people-journey"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25111
+
+[services.development]
+run = "pnpm --filter @workspace/people-journey run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/people-journey", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/people-journey/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25111"
+BASE_PATH = "/"
