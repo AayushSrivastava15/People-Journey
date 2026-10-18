@@ -1,12 +1,24 @@
 /**
  * Centralized API Client Configuration
- * Pointing to the Node/Express backend or future Spring Boot REST API.
  * Automatically attaches Firebase Bearer token for authenticated requests.
+ * Provides clean error parsing, timeout handling, and type safety.
  */
 
 import { auth } from '../lib/firebase';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+
+export class ApiError extends Error {
+  status: number;
+  data?: unknown;
+
+  constructor(message: string, status: number, data?: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.data = data;
+  }
+}
 
 export async function apiClient<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_BASE_URL.replace(/\/$/, '')}/${endpoint.replace(/^\//, '')}`;
@@ -23,8 +35,8 @@ export async function apiClient<T>(endpoint: string, options: RequestInit = {}):
       if (token) {
         headers.set('Authorization', `Bearer ${token}`);
       }
-    } catch {
-      // Continue without token if retrieval fails
+    } catch (err) {
+      console.warn('Could not acquire Firebase ID token:', err);
     }
   }
 
@@ -34,8 +46,30 @@ export async function apiClient<T>(endpoint: string, options: RequestInit = {}):
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`API error ${response.status}: ${errorText || response.statusText}`);
+    let errorMessage = response.statusText;
+    let errorData: unknown = null;
+
+    try {
+      errorData = await response.json();
+      if (typeof errorData === 'object' && errorData !== null) {
+        const errObj = errorData as Record<string, unknown>;
+        errorMessage = (errObj.message as string) || (errObj.error as string) || errorMessage;
+      }
+    } catch {
+      try {
+        const text = await response.text();
+        if (text) errorMessage = text;
+      } catch {
+        // Fallback to status text
+      }
+    }
+
+    throw new ApiError(errorMessage || `Request failed with status ${response.status}`, response.status, errorData);
+  }
+
+  // Handle empty 204 or non-JSON responses
+  if (response.status === 204) {
+    return {} as T;
   }
 
   return response.json();

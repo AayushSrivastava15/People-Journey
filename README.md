@@ -3,8 +3,8 @@
 A human-centric employee lifecycle management workspace for onboarding, offboarding, milestone communications, and exit interviews.
 
 Built with a clean separation of concerns:
-- **`frontend/`**: Standalone React 19 + TypeScript web application powered by Vite, Tailwind CSS, shadcn/ui, and Motion (framer-motion).
-- **`backend/`**: Node.js + Express 5 development API server providing REST endpoints, Zod schema validation, and database connection scaffolding.
+- **`frontend/`**: Standalone React 19 + TypeScript web application powered by Vite, Tailwind CSS, shadcn/ui, Motion, Firebase Authentication, and TanStack Query.
+- **`backend/`**: Express 5 + TypeScript REST API integrated with **Oracle Database Free** (Thin mode connection pool) and **Firebase Admin SDK** for enterprise HR role-based access control.
 - **`docs/`**: Architectural specifications, OpenAPI contract definitions, and roadmap documentation.
 
 ---
@@ -133,6 +133,10 @@ npm run typecheck
 
 ---
 
-## Backend Roadmap
+## Backend & Database Architecture
 
-The current Node.js/Express service in `backend/` serves as the development API. The long-term production target is a **Java + Spring Boot REST API** with **Firebase Authentication** and **PostgreSQL**, fully documented in [`docs/architecture.md`](docs/architecture.md).
+The backend is built with **Node.js, Express 5, and TypeScript**, connecting directly via `oracledb` Thin mode to **Oracle Database Free (`FREEPDB1`)** hosted on a private Debian Home Server (`100.94.73.89:1521`).
+- Application Schema: `PEOPLE_JOURNEY`
+- 7 Core Tables: `HR_DEPARTMENTS`, `HR_DESIGNATIONS`, `HR_USERS`, `HR_EMPLOYEES`, `HR_ONBOARDING`, `HR_OFFBOARDING`, `HR_AUDIT_LOGS`
+- Real-time audit trails and transactional lifecycle operations (onboarding, offboarding).
+- Full details and operational instructions are available in [`backend/README.md`](backend/README.md).

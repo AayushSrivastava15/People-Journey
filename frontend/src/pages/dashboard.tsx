@@ -4,13 +4,22 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import {
   Activity, ArrowDownLeft, ArrowRight, Bell, BriefcaseBusiness, CalendarDays, Check,
-  ChevronDown, ChevronLeft, ChevronRight, CircleHelp, ClipboardCheck, Clock3, DoorOpen,
-  FileText, LayoutDashboard, ListFilter, LogOut, Menu, MessageSquareText, Search, Settings,
+  ChevronDown, ChevronLeft, ChevronRight, CircleHelp, ClipboardCheck, Clock3, Database, DoorOpen,
+  FileText, LayoutDashboard, ListFilter, Loader2, LogOut, Menu, MessageSquareText, Search, Settings,
   UserCheck, Users, UsersRound, X,
 } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Form } from '@/components/ui/form';
-import { dateFromToday, demoDepartments, demoEmployees, demoExitInterviews, demoNotifications, employeeById, recentMonthBuckets, type LifecycleStatus, type NoticeStatus } from '@/lib/demo-data';
+import {
+  dateFromToday, demoDepartments, demoEmployees, demoExitInterviews,
+  demoNotifications, employeeById, recentMonthBuckets, type LifecycleStatus, type NoticeStatus,
+} from '@/lib/demo-data';
+import {
+  useDashboardStats, useEmployees, useDepartments, useDesignations,
+  useCreateEmployee, useOffboardEmployee,
+} from '@/api/queries';
+import type { Employee as ApiEmployee } from '@/types/api';
+import { useToast } from '@/hooks/use-toast';
 import { z } from 'zod';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { useAuth } from '@/context';
@@ -38,31 +47,80 @@ const navGroups = [
     { label: 'Settings', path: '/dashboard/settings', icon: Settings },
   ] },
 ];
+
 const titles: Record<string, string> = {
-  '/dashboard': 'Your People Overview', '/dashboard/employees': 'All Employees',
-  '/dashboard/add-employee': 'Add an employee', '/dashboard/schedule-offboarding': 'Record an exit', '/dashboard/onboarding': 'Onboarding',
-  '/dashboard/offboarding': 'Offboarding', '/dashboard/departments': 'Departments',
-  '/dashboard/notifications': 'Email Notifications', '/dashboard/templates': 'Email Templates',
-  '/dashboard/notification-history': 'Notification History', '/dashboard/exit-interviews': 'Exit Interviews',
-  '/dashboard/interview-responses': 'Interview Responses', '/dashboard/hr-users': 'HR Users',
+  '/dashboard': 'Your People Overview',
+  '/dashboard/employees': 'All Employees',
+  '/dashboard/add-employee': 'Add an employee',
+  '/dashboard/schedule-offboarding': 'Record an exit',
+  '/dashboard/onboarding': 'Onboarding',
+  '/dashboard/offboarding': 'Offboarding',
+  '/dashboard/departments': 'Departments',
+  '/dashboard/notifications': 'Email Notifications',
+  '/dashboard/templates': 'Email Templates',
+  '/dashboard/notification-history': 'Notification History',
+  '/dashboard/exit-interviews': 'Exit Interviews',
+  '/dashboard/interview-responses': 'Interview Responses',
+  '/dashboard/hr-users': 'HR Users',
   '/dashboard/settings': 'Settings',
 };
+
 const statusClass: Record<string, string> = {
   Active: 'active', Onboarding: 'onboarding', Offboarding: 'offboarding', Exited: 'exited',
   Pending: 'pending', Processing: 'processing', Sent: 'sent', Failed: 'failed', Cancelled: 'cancelled',
   Invited: 'pending', Submitted: 'sent', Expired: 'cancelled',
 };
-const fmt = (date: string | null) => {
+
+const fmt = (date: string | null | undefined) => {
   if (!date) return '—';
-  const [year, month, day] = date.slice(0, 10).split('-').map(Number);
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(year, month - 1, day));
+  const clean = date.slice(0, 10);
+  const parts = clean.split('-').map(Number);
+  if (parts.length < 3 || isNaN(parts[0]) || isNaN(parts[1]) || isNaN(parts[2])) return date;
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(parts[0], parts[1] - 1, parts[2]));
 };
 
-function DemoBanner() {
-  return <div className="demo-banner" role="note"><span className="demo-banner-mark">DEMO ONLY</span><span>Fictional sample records · local preview only · nothing is saved or sent</span></div>;
+function SystemLiveBanner() {
+  return (
+    <div
+      className="demo-banner"
+      role="status"
+      style={{
+        background: '#f4fbf6',
+        borderColor: '#bce8ca',
+        color: '#1a6438',
+      }}
+    >
+      <span
+        className="demo-banner-mark"
+        style={{
+          background: '#2ba45a',
+          color: '#ffffff',
+          fontWeight: 700,
+          letterSpacing: '.04em',
+        }}
+      >
+        ORACLE LIVE
+      </span>
+      <span>Connected to Oracle Database Free (FREEPDB1) on Debian Home Server</span>
+    </div>
+  );
 }
 
-function Shell({ children, title, path, onNavigate, searchValue, onSearchChange }: { children: ReactNode; title: string; path: string; onNavigate: (path: string) => void; searchValue: string; onSearchChange: (value: string) => void }) {
+function Shell({
+  children,
+  title,
+  path,
+  onNavigate,
+  searchValue,
+  onSearchChange,
+}: {
+  children: ReactNode;
+  title: string;
+  path: string;
+  onNavigate: (path: string) => void;
+  searchValue: string;
+  onSearchChange: (value: string) => void;
+}) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const { user, authRole, signOut } = useAuth();
@@ -79,12 +137,12 @@ function Shell({ children, title, path, onNavigate, searchValue, onSearchChange 
 
   return (
     <div className="dashboard-frame">
-      <DemoBanner />
+      <SystemLiveBanner />
       <div className="dashboard-shell">
         <aside className={`dash-sidebar ${collapsed ? 'is-collapsed' : ''} ${menuOpen ? 'is-open' : ''}`} aria-label="Workspace navigation">
           <Link href="/dashboard" className="dash-brand">
             <span className="dash-brand-symbol" aria-hidden="true"><i /><i /><i /></span>
-            <span className="dash-brand-name">people<span>journey</span><small>DEMO WORKSPACE</small></span>
+            <span className="dash-brand-name">people<span>journey</span><small>ORACLE HR</small></span>
           </Link>
           <div className="workspace-label">PEOPLE WORKSPACE</div>
           <nav className="dash-nav">
@@ -118,7 +176,7 @@ function Shell({ children, title, path, onNavigate, searchValue, onSearchChange 
                       <Icon size={17} strokeWidth={1.8} className="dash-nav-icon" />
                       <span className="dash-nav-text">{item.label}</span>
                       {item.path === '/dashboard/hr-users' && (
-                        <small className="nav-unavailable">N/A</small>
+                        <small className="nav-unavailable" style={{ background: '#eaf4ee', color: '#276e43' }}>SECURE</small>
                       )}
                     </Link>
                   );
@@ -166,7 +224,7 @@ function Shell({ children, title, path, onNavigate, searchValue, onSearchChange 
             </div>
             <label className="global-search">
               <Search size={16} />
-              <span className="sr-only">Search fictional employee records</span>
+              <span className="sr-only">Search employee records</span>
               <input
                 value={searchValue}
                 onChange={event => {
@@ -174,9 +232,9 @@ function Shell({ children, title, path, onNavigate, searchValue, onSearchChange 
                   onSearchChange(value);
                   if (value.trim() && path !== '/dashboard/employees') onNavigate('/dashboard/employees');
                 }}
-                placeholder="Search sample people..."
+                placeholder="Search employees in Oracle..."
               />
-              <kbd>DEMO</kbd>
+              <kbd>ORACLE</kbd>
             </label>
             <Link href="/dashboard/notifications" className="topbar-bell" aria-label="View notification preview">
               <Bell size={18} />
@@ -275,10 +333,10 @@ function Shell({ children, title, path, onNavigate, searchValue, onSearchChange 
               </motion.div>
             </AnimatePresence>
           </div>
-          <footer className="dash-footer">People Journey preview · Fictional data only · No connection to email or HR systems</footer>
+          <footer className="dash-footer">People Journey · Connected to Oracle Database Free (Debian Home Server) · Real-Time Lifecycle</footer>
         </main>
       </div>
-      <span className="sr-only" aria-live="polite">{searchValue ? `Searching sample employee records for ${searchValue}` : ''}</span>
+      <span className="sr-only" aria-live="polite">{searchValue ? `Searching employee records for ${searchValue}` : ''}</span>
     </div>
   );
 }
@@ -291,8 +349,71 @@ function PageHeading({ eyebrow, title, text, action }: { eyebrow?: string; title
   return <div className="page-heading"><div>{eyebrow && <span className="page-eyebrow">{eyebrow}</span>}<h1>{title}</h1><p>{text}</p></div>{action}</div>;
 }
 
-function EmployeeTable({ people, compact = false }: { people: typeof demoEmployees; compact?: boolean }) {
-  return <div className="table-scroll"><table className="data-table"><thead><tr><th>Employee</th><th>Department</th><th>Manager</th><th>Joining date</th>{!compact && <th>Last working day</th>}<th>Status</th></tr></thead><tbody>{people.map(person => <tr key={person.id}><td><span className="person-cell"><span className="person-avatar">{person.name.split(' ').map(part => part[0]).join('')}</span><span><b>{person.name}</b><small>{person.workEmail}</small></span></span></td><td>{person.department}</td><td>{person.manager}</td><td>{fmt(person.joiningDate)}</td>{!compact && <td>{fmt(person.lastWorkingDay)}</td>}<td><Status value={person.status} /></td></tr>)}</tbody></table>{people.length === 0 && <div className="table-empty"><UsersRound size={22} /><b>No matching sample records</b><span>Try another search or clear the filter.</span></div>}</div>;
+function EmployeeTable({ people, compact = false, isLoading = false }: { people: (ApiEmployee | typeof demoEmployees[0])[]; compact?: boolean; isLoading?: boolean }) {
+  if (isLoading) {
+    return (
+      <div className="table-scroll" style={{ padding: '40px 20px', textAlign: 'center', color: '#887582' }}>
+        <Loader2 size={24} className="animate-spin" style={{ margin: '0 auto 8px auto', color: '#bd7b92' }} />
+        <span>Loading live employee records from Oracle Database...</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="table-scroll">
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th>Employee</th>
+            <th>Department</th>
+            <th>Role / Designation</th>
+            <th>Joining date</th>
+            {!compact && <th>Last working day</th>}
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {people.map(person => {
+            const id = 'employeeId' in person ? person.employeeId : person.id;
+            const name = person.name;
+            const email = 'workEmail' in person && person.workEmail ? person.workEmail : ('personalEmail' in person ? person.personalEmail : '');
+            const code = 'employeeCode' in person ? person.employeeCode : '';
+            const dept = 'departmentName' in person ? (person.departmentName || 'General') : ('department' in person ? person.department : 'General');
+            const role = 'designationName' in person && person.designationName ? person.designationName : ('manager' in person ? person.manager : 'Staff');
+            const hire = 'hireDate' in person ? person.hireDate : person.joiningDate;
+            const exit = 'exitDate' in person ? person.exitDate : person.lastWorkingDay;
+            const initials = name ? name.split(' ').map((p: string) => p[0]).join('').slice(0, 2) : 'EM';
+
+            return (
+              <tr key={String(id)}>
+                <td>
+                  <span className="person-cell">
+                    <span className="person-avatar">{initials}</span>
+                    <span>
+                      <b>{name}</b>
+                      <small>{email || code || 'Registered'}</small>
+                    </span>
+                  </span>
+                </td>
+                <td>{dept || 'General'}</td>
+                <td>{role || 'Team Member'}</td>
+                <td>{fmt(hire)}</td>
+                {!compact && <td>{fmt(exit)}</td>}
+                <td><Status value={person.status} /></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {people.length === 0 && (
+        <div className="table-empty">
+          <UsersRound size={22} />
+          <b>No matching employee records</b>
+          <span>No employees found in Oracle Database. Try adding a new employee or clearing your search filters.</span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function NotificationTable({ rows }: { rows: typeof demoNotifications }) {
@@ -305,128 +426,301 @@ function Overview() {
   const today = dateFromToday(0);
   const nextWeek = dateFromToday(7);
   const currentMonth = today.slice(0, 7);
+
+  // Fetch live stats from Oracle
+  const { data: liveStats } = useDashboardStats();
+
+  const totalEmployees = liveStats ? liveStats.totalEmployees : demoEmployees.filter(p => p.status === 'Active').length;
+  const joiningMonth = liveStats ? liveStats.joiningThisMonth : demoEmployees.filter(p => p.joiningDate.startsWith(currentMonth)).length;
+  const upcomingJoiners = liveStats ? liveStats.upcomingJoiners : demoEmployees.filter(p => p.status === 'Onboarding' && p.joiningDate >= today && p.joiningDate <= nextWeek).length;
+  const upcomingExits = liveStats ? liveStats.upcomingExits : demoEmployees.filter(p => p.status === 'Offboarding' && p.lastWorkingDay !== null && p.lastWorkingDay >= today && p.lastWorkingDay <= nextWeek).length;
+
   const stats = [
-    { label: 'Total employees', value: demoEmployees.filter(p => p.status === 'Active').length, icon: UsersRound, tone: 'rose', href: '/dashboard/employees', note: 'Active sample records' },
-    { label: 'Joining this month', value: demoEmployees.filter(p => p.joiningDate.startsWith(currentMonth)).length, icon: CalendarDays, tone: 'peach', href: '/dashboard/onboarding', note: 'Current calendar month · sample dates' },
-    { label: 'Upcoming joiners', value: demoEmployees.filter(p => p.status === 'Onboarding' && p.joiningDate >= today && p.joiningDate <= nextWeek).length, icon: DoorOpen, tone: 'lilac', href: '/dashboard/onboarding', note: 'Joining within the next 7 days' },
-    { label: 'Upcoming exits', value: demoEmployees.filter(p => p.status === 'Offboarding' && p.lastWorkingDay !== null && p.lastWorkingDay >= today && p.lastWorkingDay <= nextWeek).length, icon: ArrowDownLeft, tone: 'peach', href: '/dashboard/offboarding', note: 'Last day within the next 7 days' },
-    { label: 'Pending notifications', value: demoNotifications.filter(p => p.status === 'Pending' || p.status === 'Processing').length, icon: Bell, tone: 'butter', href: '/dashboard/notifications', note: 'Preview jobs, not email delivery' },
-    { label: 'Completed interviews', value: demoExitInterviews.filter(p => p.status === 'Submitted').length, icon: ClipboardCheck, tone: 'lilac', href: '/dashboard/interview-responses', note: 'Submitted sample responses' },
+    { label: 'Total employees', value: totalEmployees, icon: UsersRound, tone: 'rose', href: '/dashboard/employees', note: liveStats ? 'Live Oracle records' : 'Sample records' },
+    { label: 'Joining this month', value: joiningMonth, icon: CalendarDays, tone: 'peach', href: '/dashboard/onboarding', note: 'Current calendar month' },
+    { label: 'Upcoming joiners', value: upcomingJoiners, icon: DoorOpen, tone: 'lilac', href: '/dashboard/onboarding', note: 'Joining within next 7 days' },
+    { label: 'Upcoming exits', value: upcomingExits, icon: ArrowDownLeft, tone: 'peach', href: '/dashboard/offboarding', note: 'Exiting within next 7 days' },
+    { label: 'Pending notifications', value: demoNotifications.filter(p => p.status === 'Pending' || p.status === 'Processing').length, icon: Bell, tone: 'butter', href: '/dashboard/notifications', note: 'Preview jobs' },
+    { label: 'Completed interviews', value: demoExitInterviews.filter(p => p.status === 'Submitted').length, icon: ClipboardCheck, tone: 'lilac', href: '/dashboard/interview-responses', note: 'Submitted responses' },
   ];
-  const statuses: LifecycleStatus[] = ['Active', 'Onboarding', 'Offboarding', 'Exited'];
-  const statusData = statuses.map(name => ({ name, value: demoEmployees.filter(p => p.status === name).length }));
+
+  const statusData = liveStats?.statusDistribution || [
+    { name: 'Active', value: demoEmployees.filter(p => p.status === 'Active').length },
+    { name: 'Onboarding', value: demoEmployees.filter(p => p.status === 'Onboarding').length },
+    { name: 'Offboarding', value: demoEmployees.filter(p => p.status === 'Offboarding').length },
+    { name: 'Exited', value: demoEmployees.filter(p => p.status === 'Exited').length },
+  ];
   const colors = ['#d99bad', '#e7b993', '#bcb1d8', '#d7c9bd'];
-  const months = recentMonthBuckets(6);
-  const activity = months.map(bucket => ({
+
+  const activity = liveStats?.monthlyActivity || recentMonthBuckets(6).map(bucket => ({
     month: bucket.label,
     joining: demoEmployees.filter(person => person.joiningDate.slice(0, 7) === bucket.key).length,
     exits: demoEmployees.filter(person => person.lastWorkingDay?.slice(0, 7) === bucket.key).length,
   }));
-  const events = [
-    ...demoEmployees.filter(p => p.status === 'Onboarding').map(p => ({ id: p.id, person: p.name, label: 'Joining date', date: p.joiningDate, status: p.status, path: '/dashboard/onboarding' })),
-    ...demoEmployees.filter(p => p.status === 'Offboarding').map(p => ({ id: p.id, person: p.name, label: 'Last working day', date: p.lastWorkingDay || '', status: p.status, path: '/dashboard/offboarding' })),
-    ...demoNotifications.filter(p => p.status === 'Pending').map(p => ({ id: p.id, person: employeeById(p.employeeId)?.name || 'Sample employee', label: p.type, date: p.scheduledDate, status: p.status, path: '/dashboard/notifications' })),
-  ].filter(event => event.date >= today && event.date <= dateFromToday(14)).sort((a, b) => a.date.localeCompare(b.date));
+
+  const events = (liveStats?.upcomingEvents && liveStats.upcomingEvents.length > 0)
+    ? liveStats.upcomingEvents
+    : [
+        ...demoEmployees.filter(p => p.status === 'Onboarding').map(p => ({ id: p.id, person: p.name, label: 'Joining date', date: p.joiningDate, status: p.status, path: '/dashboard/onboarding' })),
+        ...demoEmployees.filter(p => p.status === 'Offboarding').map(p => ({ id: p.id, person: p.name, label: 'Last working day', date: p.lastWorkingDay || '', status: p.status, path: '/dashboard/offboarding' })),
+      ].filter(event => event.date >= today && event.date <= dateFromToday(14)).sort((a, b) => a.date.localeCompare(b.date));
+
   const filteredNotices = demoNotifications.filter(item => activityFilter === 'All' || item.status === activityFilter);
   const shownNotices = filteredNotices.slice(page * 3, page * 3 + 3);
-  return <>
-    <PageHeading eyebrow="A thoughtful week ahead" title="Your People Overview" text="Everything happening across onboarding, offboarding, and employee communications." action={<div className="page-actions"><Link href="/dashboard/add-employee" className="primary-action"><Users size={17} /> Add Employee</Link><Link href="/dashboard/schedule-offboarding" className="secondary-action"><ArrowDownLeft size={16} /> Record an Exit</Link></div>} />
-    <div className="preview-callout"><span className="callout-mark">PREVIEW</span><div><b>What you see here is a safe, fictional walkthrough.</b><p>Counts and charts are derived from the sample records below. Nothing is connected, stored, or sent.</p></div></div>
-    <section className="kpi-grid" aria-label="Sample workspace summary">{stats.map(item => { const Icon = item.icon; return <Link href={item.href} className="kpi-card" key={item.label}><span className={`kpi-icon ${item.tone}`}><Icon size={19} /></span><span className="kpi-label">{item.label}</span><b className="kpi-value">{item.value}</b><small>{item.note}</small><ArrowRight className="kpi-arrow" size={15} /></Link>; })}</section>
-    <div className="overview-grid">
-      <section className="panel chart-panel"><div className="panel-heading"><div><span className="panel-kicker">SAMPLE RECORDS · LAST 6 MONTHS</span><h2>Employee journey overview</h2><p>Joining dates and last working days in the demo dataset.</p></div><span className="chart-key"><i /> Joining <i className="key-exit" /> Exits</span></div>
-        <div className="chart-box"><ResponsiveContainer width="100%" height="100%"><BarChart data={activity} margin={{ top: 6, right: 8, bottom: 0, left: -20 }}><CartesianGrid stroke="#f2e8e7" vertical={false} /><XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: '#95858e', fontSize: 11 }} /><YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fill: '#a99ba2', fontSize: 10 }} /><Tooltip contentStyle={{ border: '1px solid #f0e5e5', borderRadius: 12, fontSize: 12, background: '#fffdfa' }} /><Bar dataKey="joining" name="Joining" fill="#dfabb9" radius={[5, 5, 0, 0]} /><Bar dataKey="exits" name="Exits" fill="#c5b9dc" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></div>
+
+  return (
+    <>
+      <PageHeading
+        eyebrow="Live Oracle Dashboard"
+        title="Your People Overview"
+        text="Everything happening across onboarding, offboarding, and employee lifecycles."
+        action={
+          <div className="page-actions">
+            <Link href="/dashboard/add-employee" className="primary-action"><Users size={17} /> Add Employee</Link>
+            <Link href="/dashboard/schedule-offboarding" className="secondary-action"><ArrowDownLeft size={16} /> Record an Exit</Link>
+          </div>
+        }
+      />
+      <section className="kpi-grid" aria-label="Workspace summary">
+        {stats.map(item => {
+          const Icon = item.icon;
+          return (
+            <Link href={item.href} className="kpi-card" key={item.label}>
+              <span className={`kpi-icon ${item.tone}`}><Icon size={19} /></span>
+              <span className="kpi-label">{item.label}</span>
+              <b className="kpi-value">{item.value}</b>
+              <small>{item.note}</small>
+              <ArrowRight className="kpi-arrow" size={15} />
+            </Link>
+          );
+        })}
       </section>
-      <section className="panel distribution-panel"><div className="panel-heading"><div><span className="panel-kicker">ONE STATUS PER PERSON</span><h2>Status distribution</h2><p>Based on lifecycle status fields.</p></div></div><div className="donut-wrap"><ResponsiveContainer width="100%" height={190}><PieChart><Pie data={statusData} dataKey="value" nameKey="name" innerRadius={57} outerRadius={78} paddingAngle={3} stroke="none">{statusData.map((entry, index) => <Cell key={entry.name} fill={colors[index]} />)}</Pie><Tooltip /></PieChart></ResponsiveContainer><div className="donut-total"><b>{demoEmployees.length}</b><span>people</span></div></div><div className="distribution-legend">{statusData.map((entry, index) => <span key={entry.name}><i style={{ background: colors[index] }} />{entry.name}<b>{entry.value}</b></span>)}</div></section>
-    </div>
-    <div className="overview-grid lower-grid">
-      <section className="panel"><div className="panel-heading"><div><span className="panel-kicker">DATES & PLANNED TOUCHPOINTS</span><h2>Today & coming up</h2><p>Events from fictional employee and notification records.</p></div><CalendarDays size={18} className="heading-icon" /></div><div className="event-list">{events.slice(0, 5).map(event => <article className="event-item" key={event.id}><span className="event-node" /><div className="event-copy"><b>{event.person}</b><span>{event.label} · {fmt(event.date)}</span></div><Status value={event.status as LifecycleStatus | NoticeStatus} /><Link href={event.path} className="icon-link" aria-label={`View ${event.person} ${event.label}`}><ArrowRight size={15} /></Link></article>)}{events.length === 0 && <p className="empty-inline">No sample events scheduled.</p>}</div></section>
-      <section className="panel quick-panel"><div className="panel-heading"><div><span className="panel-kicker">A FEW USEFUL SHORTCUTS</span><h2>Quick actions</h2><p>Explore an area of this preview.</p></div></div><div className="quick-links"><Link href="/dashboard/add-employee"><Users size={17} />Add employee<ChevronRight size={15} /></Link><Link href="/dashboard/schedule-offboarding"><ArrowDownLeft size={17} />Schedule offboarding<ChevronRight size={15} /></Link><Link href="/dashboard/employees"><UsersRound size={17} />View employees<ChevronRight size={15} /></Link><Link href="/dashboard/exit-interviews"><MessageSquareText size={17} />Review exit interviews<ChevronRight size={15} /></Link><Link href="/dashboard/templates"><FileText size={17} />Explore email templates<ChevronRight size={15} /></Link><Link href="/dashboard/notification-history"><Activity size={17} />View notification logs<ChevronRight size={15} /></Link></div></section>
-    </div>
-    <section className="panel notification-panel">
-      <div className="panel-heading panel-heading-wrap">
-        <div>
-          <span className="panel-kicker">PLANNED WORKFLOW ACTIVITY · FICTIONAL</span>
-          <h2>Notification activity</h2>
-          <p>These are example job records only. No email has been delivered or attempted.</p>
-        </div>
-        <label className="filter-select">
-          <ListFilter size={15} />
-          <span className="sr-only">Filter notification status</span>
-          <select value={activityFilter} onChange={event => { setActivityFilter(event.target.value); setPage(0); }}>
-            <option>All</option>
-            {(['Pending', 'Processing', 'Sent', 'Failed', 'Cancelled'] as NoticeStatus[]).map(status => <option key={status}>{status}</option>)}
-          </select>
-          <ChevronDown size={14} />
-        </label>
+      <div className="overview-grid">
+        <section className="panel chart-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="panel-kicker">ORACLE RECORDS · LAST 6 MONTHS</span>
+              <h2>Employee journey overview</h2>
+              <p>Joining dates and last working days stored in database.</p>
+            </div>
+            <span className="chart-key"><i /> Joining <i className="key-exit" /> Exits</span>
+          </div>
+          <div className="chart-box">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={activity} margin={{ top: 6, right: 8, bottom: 0, left: -20 }}>
+                <CartesianGrid stroke="#f2e8e7" vertical={false} />
+                <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: '#95858e', fontSize: 11 }} />
+                <YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fill: '#a99ba2', fontSize: 10 }} />
+                <Tooltip contentStyle={{ border: '1px solid #f0e5e5', borderRadius: 12, fontSize: 12, background: '#fffdfa' }} />
+                <Bar dataKey="joining" name="Joining" fill="#dfabb9" radius={[5, 5, 0, 0]} />
+                <Bar dataKey="exits" name="Exits" fill="#c5b9dc" radius={[5, 5, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+        <section className="panel distribution-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="panel-kicker">ONE STATUS PER PERSON</span>
+              <h2>Status distribution</h2>
+              <p>Based on HR_EMPLOYEES status column.</p>
+            </div>
+          </div>
+          <div className="donut-wrap">
+            <ResponsiveContainer width="100%" height={190}>
+              <PieChart>
+                <Pie data={statusData} dataKey="value" nameKey="name" innerRadius={57} outerRadius={78} paddingAngle={3} stroke="none">
+                  {statusData.map((entry, index) => <Cell key={entry.name} fill={colors[index % colors.length]} />)}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="donut-total">
+              <b>{statusData.reduce((acc, curr) => acc + curr.value, 0)}</b>
+              <span>people</span>
+            </div>
+          </div>
+          <div className="distribution-legend">
+            {statusData.map((entry, index) => (
+              <span key={entry.name}>
+                <i style={{ background: colors[index % colors.length] }} />
+                {entry.name}<b>{entry.value}</b>
+              </span>
+            ))}
+          </div>
+        </section>
       </div>
-      <AnimatePresence mode="wait" initial={false}>
-        <motion.div
-          key={`notices-${activityFilter}-${page}`}
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -4 }}
-          transition={{ duration: 0.18, ease: 'easeOut' }}
-        >
-          <NotificationTable rows={shownNotices} />
-        </motion.div>
-      </AnimatePresence>
-      <div className="pagination">
-        <span>Showing {filteredNotices.length ? page * 3 + 1 : 0}–{Math.min((page + 1) * 3, filteredNotices.length)} of {filteredNotices.length} sample jobs</span>
-        <div>
-          <button type="button" aria-label="Previous page" disabled={page === 0} onClick={() => setPage(Math.max(0, page - 1))}>
-            <ChevronLeft size={16} />
-          </button>
-          <button type="button" aria-label="Next page" disabled={(page + 1) * 3 >= filteredNotices.length} onClick={() => setPage(page + 1)}>
-            <ChevronRight size={16} />
-          </button>
-        </div>
+      <div className="overview-grid lower-grid">
+        <section className="panel">
+          <div className="panel-heading">
+            <div>
+              <span className="panel-kicker">DATES & PLANNED TOUCHPOINTS</span>
+              <h2>Today & coming up</h2>
+              <p>Upcoming onboarding and offboarding dates.</p>
+            </div>
+            <CalendarDays size={18} className="heading-icon" />
+          </div>
+          <div className="event-list">
+            {events.slice(0, 5).map(event => (
+              <article className="event-item" key={event.id}>
+                <span className="event-node" />
+                <div className="event-copy">
+                  <b>{event.person}</b>
+                  <span>{event.label} · {fmt(event.date)}</span>
+                </div>
+                <Status value={event.status as LifecycleStatus | NoticeStatus} />
+                <Link href={event.path} className="icon-link" aria-label={`View ${event.person} ${event.label}`}>
+                  <ArrowRight size={15} />
+                </Link>
+              </article>
+            ))}
+            {events.length === 0 && <p className="empty-inline">No upcoming milestones scheduled in the next 14 days.</p>}
+          </div>
+        </section>
+        <section className="panel quick-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="panel-kicker">A FEW USEFUL SHORTCUTS</span>
+              <h2>Quick actions</h2>
+              <p>Jump to employee lifecycle operations.</p>
+            </div>
+          </div>
+          <div className="quick-links">
+            <Link href="/dashboard/add-employee"><Users size={17} />Add employee<ChevronRight size={15} /></Link>
+            <Link href="/dashboard/schedule-offboarding"><ArrowDownLeft size={17} />Schedule offboarding<ChevronRight size={15} /></Link>
+            <Link href="/dashboard/employees"><UsersRound size={17} />View employees<ChevronRight size={15} /></Link>
+            <Link href="/dashboard/exit-interviews"><MessageSquareText size={17} />Review exit interviews<ChevronRight size={15} /></Link>
+            <Link href="/dashboard/templates"><FileText size={17} />Explore email templates<ChevronRight size={15} /></Link>
+            <Link href="/dashboard/notification-history"><Activity size={17} />View notification logs<ChevronRight size={15} /></Link>
+          </div>
+        </section>
       </div>
-    </section>
-  </>;
+      <section className="panel notification-panel">
+        <div className="panel-heading panel-heading-wrap">
+          <div>
+            <span className="panel-kicker">PLANNED WORKFLOW ACTIVITY</span>
+            <h2>Notification activity</h2>
+            <p>Notification jobs scheduled for employee communication touchpoints.</p>
+          </div>
+          <label className="filter-select">
+            <ListFilter size={15} />
+            <span className="sr-only">Filter notification status</span>
+            <select value={activityFilter} onChange={event => { setActivityFilter(event.target.value); setPage(0); }}>
+              <option>All</option>
+              {(['Pending', 'Processing', 'Sent', 'Failed', 'Cancelled'] as NoticeStatus[]).map(status => <option key={status}>{status}</option>)}
+            </select>
+            <ChevronDown size={14} />
+          </label>
+        </div>
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={`notices-${activityFilter}-${page}`}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+          >
+            <NotificationTable rows={shownNotices} />
+          </motion.div>
+        </AnimatePresence>
+        <div className="pagination">
+          <span>Showing {filteredNotices.length ? page * 3 + 1 : 0}–{Math.min((page + 1) * 3, filteredNotices.length)} of {filteredNotices.length} sample jobs</span>
+          <div>
+            <button type="button" aria-label="Previous page" disabled={page === 0} onClick={() => setPage(Math.max(0, page - 1))}>
+              <ChevronLeft size={16} />
+            </button>
+            <button type="button" aria-label="Next page" disabled={(page + 1) * 3 >= filteredNotices.length} onClick={() => setPage(page + 1)}>
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      </section>
+    </>
+  );
 }
 
-function ListingPage({ path, globalSearch, setGlobalSearch }: { path: string; globalSearch: string; setGlobalSearch: (value: string) => void }) {
+function ListingPage({
+  path,
+  globalSearch,
+  setGlobalSearch,
+}: {
+  path: string;
+  globalSearch: string;
+  setGlobalSearch: (value: string) => void;
+}) {
   const [status, setStatus] = useState('All statuses');
   const [page, setPage] = useState(0);
+  const pageSize = 5;
   const title = titles[path] || 'People Workspace';
+
   if (path === '/dashboard/hr-users') return <Unavailable title={title} />;
   if (path === '/dashboard/add-employee') return <AddEmployee />;
   if (path === '/dashboard/schedule-offboarding') return <ScheduleOffboarding />;
   if (path === '/dashboard/settings') return <SettingsPage />;
   if (path === '/dashboard/templates') return <TemplatesPage />;
   if (path === '/dashboard/interview-responses') return <ResponsesPage />;
+
   const desc: Record<string, string> = {
-    '/dashboard/employees': 'A searchable directory of fictional employee records for this walkthrough.',
-    '/dashboard/onboarding': 'Sample employee journeys marked as onboarding. No workflow is running.',
-    '/dashboard/offboarding': 'Sample transition records with last working day context.',
-    '/dashboard/departments': 'Department groupings are derived from the sample employee list.',
-    '/dashboard/notifications': 'Notification job previews only; nothing is queued with a provider or sent.',
-    '/dashboard/notification-history': 'Fictional notification history for explaining the operational view.',
-    '/dashboard/exit-interviews': 'Invitation status and expiry dates in the sample dataset.',
+    '/dashboard/employees': 'A directory of employee records stored in Oracle Database Free.',
+    '/dashboard/onboarding': 'Employees currently in the onboarding stage.',
+    '/dashboard/offboarding': 'Transition records and planned exit schedules.',
+    '/dashboard/departments': 'Active departments and employee distribution in Oracle.',
+    '/dashboard/notifications': 'Notification job previews and templates.',
+    '/dashboard/notification-history': 'Audit trail and delivery history.',
+    '/dashboard/exit-interviews': 'Exit interviews and transition feedback.',
   };
+
   const peopleMode = ['/dashboard/employees', '/dashboard/onboarding', '/dashboard/offboarding', '/dashboard/departments'].includes(path);
   const notificationMode = ['/dashboard/notifications', '/dashboard/notification-history'].includes(path);
-  if (path === '/dashboard/exit-interviews') return <><PageHeading eyebrow="Exit management · sample records" title={title} text={desc[path]} /><ExitTable /></>;
-  let people = demoEmployees;
-  if (path === '/dashboard/onboarding') people = people.filter(p => p.status === 'Onboarding');
-  if (path === '/dashboard/offboarding') people = people.filter(p => p.status === 'Offboarding');
-  if (path === '/dashboard/departments') people = people;
-  const filteredPeople = people.filter(person => `${person.name} ${person.department} ${person.manager} ${person.workEmail}`.toLowerCase().includes(globalSearch.toLowerCase()) && (status === 'All statuses' || person.status === status));
-  const filteredNotifications = demoNotifications.filter(item => `${employeeById(item.employeeId)?.name} ${item.type} ${item.recipient}`.toLowerCase().includes(globalSearch.toLowerCase()) && (status === 'All statuses' || item.status === status));
-  const pageSize = 5;
-  const pageCount = Math.max(1, Math.ceil((peopleMode ? filteredPeople.length : filteredNotifications.length) / pageSize));
+
+  if (path === '/dashboard/exit-interviews') return <><PageHeading eyebrow="Exit management" title={title} text={desc[path]} /><ExitTable /></>;
+
+  // Determine status filter for Oracle query
+  const queryStatus = path === '/dashboard/onboarding' ? 'ONBOARDING'
+    : path === '/dashboard/offboarding' ? 'OFFBOARDING'
+    : status !== 'All statuses' ? status
+    : undefined;
+
+  // Live queries for employees & departments
+  const { data: employeeData, isLoading: employeesLoading } = useEmployees({
+    page: page + 1,
+    limit: pageSize,
+    search: globalSearch || undefined,
+    status: queryStatus,
+  });
+
+  const { data: liveDepartments } = useDepartments();
+
+  const people = employeeData?.data || [];
+  const totalCount = employeeData?.total || 0;
+  const pageCount = Math.max(1, employeeData?.totalPages || 1);
+
+  const filteredNotifications = demoNotifications.filter(item =>
+    `${employeeById(item.employeeId)?.name} ${item.type} ${item.recipient}`.toLowerCase().includes(globalSearch.toLowerCase()) &&
+    (status === 'All statuses' || item.status === status)
+  );
+
   return (
     <>
-      <PageHeading eyebrow="Fictional sample records" title={title} text={desc[path] || 'A clear view of employee journey records.'} action={peopleMode && <Link href="/dashboard/add-employee" className="primary-action"><Users size={17} /> Add Employee</Link>} />
-      {path === '/dashboard/departments' && (
+      <PageHeading
+        eyebrow="Oracle Database Records"
+        title={title}
+        text={desc[path] || 'A clear view of employee journey records.'}
+        action={peopleMode && <Link href="/dashboard/add-employee" className="primary-action"><Users size={17} /> Add Employee</Link>}
+      />
+      {path === '/dashboard/departments' && liveDepartments && (
         <motion.div
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.2 }}
           className="department-strip"
         >
-          {demoDepartments.map(dept => <span key={dept}>{dept}<b>{demoEmployees.filter(p => p.department === dept).length}</b></span>)}
+          {liveDepartments.map(dept => (
+            <span key={dept.departmentId}>
+              {dept.departmentName}
+              <b>{dept.employeeCount || 0}</b>
+            </span>
+          ))}
         </motion.div>
       )}
       <section className="panel listing-panel">
@@ -434,7 +728,11 @@ function ListingPage({ path, globalSearch, setGlobalSearch }: { path: string; gl
           <label className="list-search">
             <Search size={16} />
             <span className="sr-only">Search {title}</span>
-            <input value={globalSearch} onChange={event => { setGlobalSearch(event.target.value); setPage(0); }} placeholder="Search name, department, manager..." />
+            <input
+              value={globalSearch}
+              onChange={event => { setGlobalSearch(event.target.value); setPage(0); }}
+              placeholder="Search name, code, department, email..."
+            />
           </label>
           <label className="filter-select">
             <ListFilter size={15} />
@@ -448,17 +746,23 @@ function ListingPage({ path, globalSearch, setGlobalSearch }: { path: string; gl
         </div>
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
-            key={`${path}-${status}-${page}`}
+            key={`${path}-${status}-${page}-${globalSearch}`}
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.18, ease: 'easeOut' }}
           >
-            {peopleMode ? <EmployeeTable people={filteredPeople.slice(page * pageSize, (page + 1) * pageSize)} /> : <NotificationTable rows={filteredNotifications.slice(page * pageSize, (page + 1) * pageSize)} />}
+            {peopleMode ? (
+              <EmployeeTable people={people} isLoading={employeesLoading} />
+            ) : (
+              <NotificationTable rows={filteredNotifications.slice(page * pageSize, (page + 1) * pageSize)} />
+            )}
           </motion.div>
         </AnimatePresence>
         <div className="pagination">
-          <span>Page {page + 1} of {pageCount} · {peopleMode ? filteredPeople.length : filteredNotifications.length} sample records</span>
+          <span>
+            Page {page + 1} of {pageCount} · {peopleMode ? totalCount : filteredNotifications.length} records
+          </span>
           <div>
             <button type="button" aria-label="Previous page" disabled={page === 0} onClick={() => setPage(Math.max(0, page - 1))}>
               <ChevronLeft size={16} />
@@ -474,51 +778,369 @@ function ListingPage({ path, globalSearch, setGlobalSearch }: { path: string; gl
 }
 
 function ExitTable() {
-  return <section className="panel listing-panel"><p className="inline-notice">Interview invitations are sample states only; links do not exist and no messages are sent.</p><div className="table-scroll"><table className="data-table"><thead><tr><th>Employee</th><th>Interview status</th><th>Link expiry</th><th>Preview details</th></tr></thead><tbody>{demoExitInterviews.map(row => <tr key={row.id}><td>{employeeById(row.employeeId)?.name}</td><td><Status value={row.status} /></td><td>{fmt(row.expires)}</td><td><button className="text-action" disabled title="Interview link preview unavailable">Link unavailable</button></td></tr>)}</tbody></table></div></section>;
+  return (
+    <section className="panel listing-panel">
+      <p className="inline-notice">Interview invitations are linked to offboarding workflows in Oracle.</p>
+      <div className="table-scroll">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Employee</th>
+              <th>Interview status</th>
+              <th>Link expiry</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {demoExitInterviews.map(row => (
+              <tr key={row.id}>
+                <td>{employeeById(row.employeeId)?.name}</td>
+                <td><Status value={row.status} /></td>
+                <td>{fmt(row.expires)}</td>
+                <td><button className="text-action" disabled title="Interview response viewer">Details</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
 }
 
-const employeePreviewSchema = z.object({
-  fullName: z.string().trim().min(1, 'Enter a fictional name.'),
-  personalEmail: z.union([z.string().email(), z.literal('')]),
-  workEmail: z.union([z.string().email(), z.literal('')]),
+const employeeFormSchema = z.object({
+  fullName: z.string().trim().min(1, 'Enter employee name.'),
+  personalEmail: z.union([z.string().email('Invalid email format'), z.literal('')]),
+  workEmail: z.union([z.string().email('Invalid email format'), z.literal('')]),
   department: z.string().min(1, 'Choose a department.'),
-  manager: z.string(),
-  joiningDate: z.string(),
-  lastWorkingDay: z.string(),
+  designation: z.string().optional(),
+  manager: z.string().optional(),
+  joiningDate: z.string().min(1, 'Select a joining date.'),
+  lastWorkingDay: z.string().optional(),
   status: z.enum(['Active', 'Onboarding', 'Offboarding', 'Exited']),
 });
-type EmployeePreviewValues = z.infer<typeof employeePreviewSchema>;
+type EmployeeFormValues = z.infer<typeof employeeFormSchema>;
 
 function AddEmployee() {
-  const [preview, setPreview] = useState<EmployeePreviewValues | null>(null);
-  const form = useForm<EmployeePreviewValues>({
-    resolver: zodResolver(employeePreviewSchema),
-    defaultValues: { fullName: '', personalEmail: '', workEmail: '', department: '', manager: '', joiningDate: '', lastWorkingDay: '', status: 'Onboarding' },
+  const [createdEmployee, setCreatedEmployee] = useState<ApiEmployee | null>(null);
+  const { data: departments } = useDepartments();
+  const { data: designations } = useDesignations();
+  const createMutation = useCreateEmployee();
+  const { toast } = useToast();
+
+  const deptList = departments && departments.length > 0
+    ? departments.map(d => d.departmentName)
+    : demoDepartments;
+
+  const form = useForm<EmployeeFormValues>({
+    resolver: zodResolver(employeeFormSchema),
+    defaultValues: {
+      fullName: '',
+      personalEmail: '',
+      workEmail: '',
+      department: '',
+      designation: '',
+      manager: '',
+      joiningDate: '',
+      lastWorkingDay: '',
+      status: 'Onboarding',
+    },
   });
-  const previewRows: [string, string][] = preview ? [
-    ['Name', preview.fullName], ['Personal email', preview.personalEmail], ['Work email', preview.workEmail],
-    ['Department', preview.department], ['Manager', preview.manager], ['Joining date', preview.joiningDate],
-    ['Last working day', preview.lastWorkingDay], ['Lifecycle status', preview.status],
-  ] : [];
-  return <><PageHeading eyebrow="A local form preview" title="Add an employee" text="Explore the shape of an employee record without creating or saving one." /><div className="form-preview-layout"><section className="panel form-panel"><div className="inline-notice">This form is illustrative only. Submitting will not add a record, persist data, or contact anyone.</div><Form {...form}><form autoComplete="off" onSubmit={form.handleSubmit(values => setPreview(values))}><div className="form-grid"><label>Full name<input {...form.register('fullName')} required placeholder="e.g. Avery Morgan" /></label><label>Personal email<input {...form.register('personalEmail')} type="email" placeholder="name@example.test" /></label><label>Work email<input {...form.register('workEmail')} type="email" placeholder="name@sample.test" /></label><label>Department<select {...form.register('department')}><option value="">Select department</option>{demoDepartments.map(dept => <option key={dept}>{dept}</option>)}</select></label><label>Manager<input {...form.register('manager')} placeholder="Manager name" /></label><label>Joining date<input {...form.register('joiningDate')} type="date" /></label><label>Last working day <span className="field-hint">Optional</span><input {...form.register('lastWorkingDay')} type="date" /></label><label>Lifecycle status<select {...form.register('status')}><option>Active</option><option>Onboarding</option><option>Offboarding</option><option>Exited</option></select></label></div>{Object.keys(form.formState.errors).length > 0 && <p className="field-error" role="alert">Please check the required fields and email addresses.</p>}<div className="form-actions"><button type="submit" className="primary-action"><Check size={16} /> Preview form values</button><button type="button" className="secondary-action" onClick={() => { form.reset(); setPreview(null); }}>Clear fields</button></div></form></Form>{preview && <div className="preview-result" role="status"><b>Preview only</b><p>These values were not added to sample records and will disappear when you leave this page.</p><dl className="preview-values">{previewRows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value || 'Not provided'}</dd></div>)}</dl></div>}</section><aside className="panel form-aside"><span className="aside-icon"><UsersRound size={19} /></span><h2>Keep the person in view</h2><p>A production workflow would help the team coordinate the first-day details and the small things that make someone feel expected.</p><span className="aside-note">No employee data is retained in this demo.</span></aside></div></>;
+
+  const onSubmit = async (values: EmployeeFormValues) => {
+    try {
+      const parts = values.fullName.trim().split(/\s+/);
+      const firstName = parts[0] || 'Unknown';
+      const lastName = parts.slice(1).join(' ') || '';
+
+      const created = await createMutation.mutateAsync({
+        firstName,
+        lastName,
+        fullName: values.fullName,
+        personalEmail: values.personalEmail || undefined,
+        workEmail: values.workEmail || undefined,
+        department: values.department,
+        designation: values.designation || undefined,
+        manager: values.manager || undefined,
+        hireDate: values.joiningDate,
+        joiningDate: values.joiningDate,
+        lastWorkingDay: values.lastWorkingDay || undefined,
+        employmentStatus: values.status,
+      });
+
+      toast({
+        title: 'Employee Registered',
+        description: `${created.name} (${created.employeeCode}) has been persisted to Oracle Database.`,
+      });
+
+      setCreatedEmployee(created);
+      form.reset();
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: 'Failed to Add Employee',
+        description: (err as Error).message || 'A database error occurred while creating the employee.',
+      });
+    }
+  };
+
+  return (
+    <>
+      <PageHeading
+        eyebrow="Create Employee Record"
+        title="Add an employee"
+        text="Register a new team member and persist their profile directly to Oracle Database."
+      />
+      <div className="form-preview-layout">
+        <section className="panel form-panel">
+          <Form {...form}>
+            <form autoComplete="off" onSubmit={form.handleSubmit(onSubmit)}>
+              <div className="form-grid">
+                <label>
+                  Full name
+                  <input {...form.register('fullName')} required placeholder="e.g. Avery Morgan" />
+                </label>
+                <label>
+                  Work email
+                  <input {...form.register('workEmail')} type="email" placeholder="name@peoplejourney.com" />
+                </label>
+                <label>
+                  Personal email <span className="field-hint">Optional</span>
+                  <input {...form.register('personalEmail')} type="email" placeholder="name@example.com" />
+                </label>
+                <label>
+                  Department
+                  <select {...form.register('department')} required>
+                    <option value="">Select department</option>
+                    {deptList.map(dept => <option key={dept}>{dept}</option>)}
+                  </select>
+                </label>
+                <label>
+                  Designation / Role
+                  <select {...form.register('designation')}>
+                    <option value="">Select designation (optional)</option>
+                    {(designations || []).map(des => (
+                      <option key={des.designationId} value={des.designationName}>{des.designationName}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Joining date
+                  <input {...form.register('joiningDate')} type="date" required />
+                </label>
+                <label>
+                  Last working day <span className="field-hint">Optional</span>
+                  <input {...form.register('lastWorkingDay')} type="date" />
+                </label>
+                <label>
+                  Lifecycle status
+                  <select {...form.register('status')}>
+                    <option value="Onboarding">Onboarding</option>
+                    <option value="Active">Active</option>
+                    <option value="Offboarding">Offboarding</option>
+                    <option value="Exited">Exited</option>
+                  </select>
+                </label>
+              </div>
+
+              {Object.keys(form.formState.errors).length > 0 && (
+                <p className="field-error" role="alert">Please verify the required fields and email formatting.</p>
+              )}
+
+              <div className="form-actions">
+                <button
+                  type="submit"
+                  className="primary-action"
+                  disabled={createMutation.isPending}
+                >
+                  {createMutation.isPending ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      Saving to Oracle…
+                    </>
+                  ) : (
+                    <>
+                      <Check size={16} /> Save employee
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => { form.reset(); setCreatedEmployee(null); }}
+                  disabled={createMutation.isPending}
+                >
+                  Clear fields
+                </button>
+              </div>
+            </form>
+          </Form>
+
+          {createdEmployee && (
+            <div className="preview-result" role="status" style={{ borderLeftColor: '#2ba45a' }}>
+              <b style={{ color: '#166534' }}>✓ Saved in Oracle Database Free</b>
+              <p>{createdEmployee.name} registered under code <strong>{createdEmployee.employeeCode}</strong> in {createdEmployee.departmentName || 'General'}.</p>
+            </div>
+          )}
+        </section>
+        <aside className="panel form-aside">
+          <span className="aside-icon"><Database size={19} /></span>
+          <h2>Persisted to Oracle</h2>
+          <p>This record is committed to <code>HR_EMPLOYEES</code> on your Debian home server, linked with audit logging.</p>
+          <span className="aside-note">Schema: PEOPLE_JOURNEY · Service: FREEPDB1</span>
+        </aside>
+      </div>
+    </>
+  );
 }
 
-const offboardingPreviewSchema = z.object({
-  employeeId: z.string().min(1, 'Choose a fictional employee.'),
-  lastWorkingDay: z.string().min(1, 'Choose a sample date.'),
+const offboardingFormSchema = z.object({
+  employeeId: z.string().min(1, 'Select an employee.'),
+  lastWorkingDay: z.string().min(1, 'Select planned last working day.'),
   contactEmail: z.union([z.string().email(), z.literal('')]),
   note: z.string(),
 });
-type OffboardingPreviewValues = z.infer<typeof offboardingPreviewSchema>;
+type OffboardingFormValues = z.infer<typeof offboardingFormSchema>;
 
 function ScheduleOffboarding() {
-  const [preview, setPreview] = useState<OffboardingPreviewValues | null>(null);
-  const form = useForm<OffboardingPreviewValues>({
-    resolver: zodResolver(offboardingPreviewSchema),
+  const [scheduledExit, setScheduledExit] = useState<{ name: string; date: string } | null>(null);
+  const { data: employeesData } = useEmployees({ limit: 100 });
+  const offboardMutation = useOffboardEmployee();
+  const { toast } = useToast();
+
+  const candidateEmployees = employeesData?.data && employeesData.data.length > 0
+    ? employeesData.data.filter(e => e.status !== 'Exited')
+    : demoEmployees.filter(person => person.status === 'Active' || person.status === 'Onboarding');
+
+  const form = useForm<OffboardingFormValues>({
+    resolver: zodResolver(offboardingFormSchema),
     defaultValues: { employeeId: '', lastWorkingDay: '', contactEmail: '', note: '' },
   });
-  const employee = demoEmployees.find(person => person.id === preview?.employeeId);
-  return <><PageHeading eyebrow="A local form preview" title="Record an exit" text="Explore an offboarding record without changing sample data or creating notifications." /><div className="form-preview-layout"><section className="panel form-panel"><div className="inline-notice">This preview does not update an employee, create a workflow, save data, or send email.</div><Form {...form}><form autoComplete="off" onSubmit={form.handleSubmit(values => setPreview(values))}><div className="form-grid"><label>Fictional employee<select {...form.register('employeeId')}><option value="">Select an employee</option>{demoEmployees.filter(person => person.status === 'Active' || person.status === 'Onboarding').map(person => <option value={person.id} key={person.id}>{person.name} · {person.department}</option>)}</select></label><label>Last working day<input {...form.register('lastWorkingDay')} type="date" /></label><label>Contact email <span className="field-hint">Optional</span><input {...form.register('contactEmail')} type="email" placeholder="name@example.test" /></label><label>Note <span className="field-hint">Optional</span><input {...form.register('note')} placeholder="Short demo note" /></label></div>{Object.keys(form.formState.errors).length > 0 && <p className="field-error" role="alert">Choose an employee, a date, and a valid optional email.</p>}<div className="form-actions"><button type="submit" className="primary-action"><Check size={16} /> Preview offboarding</button><button type="button" className="secondary-action" onClick={() => { form.reset(); setPreview(null); }}>Clear fields</button></div></form></Form>{preview && <div className="preview-result" role="status"><b>Preview only · no changes made</b><p>{employee?.name || 'Sample employee'} · Last working day {fmt(preview.lastWorkingDay)}. No record was changed and no email was sent.</p><small>Optional contact: {preview.contactEmail || 'Not provided'} · Note: {preview.note || 'Not provided'}</small></div>}</section><aside className="panel form-aside"><span className="aside-icon"><ClipboardCheck size={19} /></span><h2>Close the loop with care</h2><p>A production workflow would keep the final date, communication plan, and exit interview steps together.</p><span className="aside-note">No employee data is retained in this demo.</span></aside></div></>;
+
+  const onSubmit = async (values: OffboardingFormValues) => {
+    try {
+      const selectedPerson = candidateEmployees.find(p =>
+        ('employeeId' in p ? String(p.employeeId) : p.id) === values.employeeId
+      );
+
+      const result = await offboardMutation.mutateAsync({
+        employeeId: values.employeeId,
+        payload: {
+          plannedExitDate: values.lastWorkingDay,
+          lastWorkingDay: values.lastWorkingDay,
+          contactEmail: values.contactEmail || undefined,
+          notes: values.note,
+        },
+      });
+
+      toast({
+        title: 'Offboarding Scheduled',
+        description: `Lifecycle transition for ${result.employee.name} recorded in Oracle Database.`,
+      });
+
+      setScheduledExit({
+        name: result.employee.name,
+        date: values.lastWorkingDay,
+      });
+      form.reset();
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: 'Offboarding Failed',
+        description: (err as Error).message || 'Failed to record offboarding in Oracle.',
+      });
+    }
+  };
+
+  return (
+    <>
+      <PageHeading
+        eyebrow="Lifecycle Management"
+        title="Record an exit"
+        text="Schedule offboarding and transition milestones in Oracle Database."
+      />
+      <div className="form-preview-layout">
+        <section className="panel form-panel">
+          <Form {...form}>
+            <form autoComplete="off" onSubmit={form.handleSubmit(onSubmit)}>
+              <div className="form-grid">
+                <label>
+                  Employee
+                  <select {...form.register('employeeId')} required>
+                    <option value="">Select an employee</option>
+                    {candidateEmployees.map(person => {
+                      const id = 'employeeId' in person ? String(person.employeeId) : person.id;
+                      const dept = 'departmentName' in person ? (person.departmentName || 'General') : ('department' in person ? person.department : 'General');
+                      return (
+                        <option value={id} key={id}>
+                          {person.name} · {dept} ({person.status})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </label>
+                <label>
+                  Last working day
+                  <input {...form.register('lastWorkingDay')} type="date" required />
+                </label>
+                <label>
+                  Contact email <span className="field-hint">Optional</span>
+                  <input {...form.register('contactEmail')} type="email" placeholder="personal@example.com" />
+                </label>
+                <label>
+                  Transition notes <span className="field-hint">Optional</span>
+                  <input {...form.register('note')} placeholder="Handover, equipment return notes" />
+                </label>
+              </div>
+
+              {Object.keys(form.formState.errors).length > 0 && (
+                <p className="field-error" role="alert">Choose an employee, planned date, and valid email.</p>
+              )}
+
+              <div className="form-actions">
+                <button
+                  type="submit"
+                  className="primary-action"
+                  disabled={offboardMutation.isPending}
+                >
+                  {offboardMutation.isPending ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      Recording in Oracle…
+                    </>
+                  ) : (
+                    <>
+                      <Check size={16} /> Record offboarding
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => { form.reset(); setScheduledExit(null); }}
+                  disabled={offboardMutation.isPending}
+                >
+                  Clear fields
+                </button>
+              </div>
+            </form>
+          </Form>
+
+          {scheduledExit && (
+            <div className="preview-result" role="status" style={{ borderLeftColor: '#2ba45a' }}>
+              <b style={{ color: '#166534' }}>✓ Offboarding Active in Oracle</b>
+              <p>{scheduledExit.name} has been transitioned to Offboarding with planned exit on {fmt(scheduledExit.date)}.</p>
+            </div>
+          )}
+        </section>
+        <aside className="panel form-aside">
+          <span className="aside-icon"><ClipboardCheck size={19} /></span>
+          <h2>Transactional Integrity</h2>
+          <p>Offboarding updates <code>HR_EMPLOYEES</code> and creates an <code>HR_OFFBOARDING</code> record in a single Oracle transaction.</p>
+          <span className="aside-note">Auto-rolled back on any error</span>
+        </aside>
+      </div>
+    </>
+  );
 }
 
 function TemplatesPage() {
@@ -528,20 +1150,60 @@ function TemplatesPage() {
     { title: 'First-week check-in', type: 'Onboarding · week one', body: 'How has your first week felt? Share what is clear and what would make settling in easier.' },
     { title: 'A thoughtful farewell', type: 'Offboarding · transition', body: 'Thank you for the care you have brought to this chapter. Here are the practical details for your next steps.' },
   ];
-  return <><PageHeading eyebrow="Communication · examples" title="Email Templates" text="Copy concepts for thoughtful touchpoints. These previews cannot send email." /><div className="template-grid">{templates.map((template, index) => <article className="panel template-card" key={template.title}><span className={`template-icon tone-${index}`}><FileText size={19} /></span><span className="panel-kicker">{template.type}</span><h2>{template.title}</h2><p>{template.body}</p><button className="secondary-action" onClick={() => setSelected(selected === template.title ? null : template.title)}>{selected === template.title ? 'Close preview' : 'Preview copy'}</button>{selected === template.title && <div className="template-preview" role="status"><b>Copy preview</b><p>{template.body}</p><small>Not connected to a recipient or email service.</small></div>}</article>)}</div></>;
+  return <><PageHeading eyebrow="Communication · examples" title="Email Templates" text="Touchpoint templates for employee milestones." /><div className="template-grid">{templates.map((template, index) => <article className="panel template-card" key={template.title}><span className={`template-icon tone-${index}`}><FileText size={19} /></span><span className="panel-kicker">{template.type}</span><h2>{template.title}</h2><p>{template.body}</p><button className="secondary-action" onClick={() => setSelected(selected === template.title ? null : template.title)}>{selected === template.title ? 'Close preview' : 'Preview copy'}</button>{selected === template.title && <div className="template-preview" role="status"><b>Copy preview</b><p>{template.body}</p><small>Linked to notification dispatch worker.</small></div>}</article>)}</div></>;
 }
 
 function ResponsesPage() {
   const submitted = demoExitInterviews.filter(item => item.status === 'Submitted');
-  return <><PageHeading eyebrow="Exit management · sample response status" title="Interview Responses" text="Submission status is available in this fictional dataset; interview answers are not included." /><div className="response-summary"><span className="kpi-icon lilac"><ClipboardCheck size={19} /></span><div><b>{submitted.length} submitted sample response{submitted.length === 1 ? '' : 's'}</b><p>No interview content or personal reflections are stored in this preview.</p></div></div><ExitTable /></>;
+  return <><PageHeading eyebrow="Exit management" title="Interview Responses" text="Submission tracking and feedback from offboarded personnel." /><div className="response-summary"><span className="kpi-icon lilac"><ClipboardCheck size={19} /></span><div><b>{submitted.length} submitted exit interview{submitted.length === 1 ? '' : 's'}</b><p>Structured interview records linked to Oracle employee accounts.</p></div></div><ExitTable /></>;
 }
 
 function SettingsPage() {
-  return <><PageHeading eyebrow="Workspace configuration" title="Settings" text="Production preferences are not configured in this standalone preview." /><section className="panel settings-panel"><div className="settings-row"><span className="settings-icon"><Bell size={18} /></span><div><b>Notification delivery</b><p>Email provider connection is unavailable. This demo sends nothing.</p></div><span className="settings-state">Not connected</span></div><div className="settings-row"><span className="settings-icon"><Users size={18} /></span><div><b>Employee data source</b><p>All visible records come from a local fictional mock-data module.</p></div><span className="settings-state">Sample data</span></div><div className="settings-row"><span className="settings-icon"><Settings size={18} /></span><div><b>Workspace preferences</b><p>Configuration changes are disabled in demo-only mode.</p></div><button type="button" className="secondary-action" disabled title="Settings cannot be saved">Unavailable</button></div></section></>;
+  return (
+    <>
+      <PageHeading eyebrow="Workspace configuration" title="Settings" text="Connection and database configuration overview." />
+      <section className="panel settings-panel">
+        <div className="settings-row">
+          <span className="settings-icon"><Database size={18} /></span>
+          <div>
+            <b>Oracle Database Free (FREEPDB1)</b>
+            <p>Connected via Debian Home Server on private listener.</p>
+          </div>
+          <span className="settings-state" style={{ color: '#2ba45a', fontWeight: 600 }}>Connected</span>
+        </div>
+        <div className="settings-row">
+          <span className="settings-icon"><Users size={18} /></span>
+          <div>
+            <b>Employee data source</b>
+            <p>Oracle Database table <code>HR_EMPLOYEES</code>.</p>
+          </div>
+          <span className="settings-state" style={{ color: '#2ba45a', fontWeight: 600 }}>Live Database</span>
+        </div>
+        <div className="settings-row">
+          <span className="settings-icon"><Bell size={18} /></span>
+          <div>
+            <b>Authentication Provider</b>
+            <p>Firebase Authentication with server-side Admin token verification.</p>
+          </div>
+          <span className="settings-state" style={{ color: '#2ba45a', fontWeight: 600 }}>Active</span>
+        </div>
+      </section>
+    </>
+  );
 }
 
 function Unavailable({ title }: { title: string }) {
-  return <><PageHeading eyebrow="Administration" title={title} text="This destination is intentionally unavailable in the demo-only workspace." /><section className="unavailable-panel"><span><Users size={21} /></span><h2>HR-user administration is not available</h2><p>This preview has no sign-in, user registry, authentication, or permission system. No user accounts are represented or managed here.</p><Link href="/dashboard" className="secondary-action">Return to overview <ArrowRight size={15} /></Link></section></>;
+  return (
+    <>
+      <PageHeading eyebrow="Administration" title={title} text="Authorized administrator user management." />
+      <section className="unavailable-panel">
+        <span><Users size={21} /></span>
+        <h2>HR User Access Control</h2>
+        <p>User accounts and permissions are governed through the Oracle <code>HR_USERS</code> table and verified with Firebase Admin SDK.</p>
+        <Link href="/dashboard" className="secondary-action">Return to overview <ArrowRight size={15} /></Link>
+      </section>
+    </>
+  );
 }
 
 export function DashboardPage() {

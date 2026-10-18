@@ -1,94 +1,105 @@
 import type { Request, Response } from 'express';
-import { env } from '../config/env';
+import { userService } from '../services/user.service';
+import { CreateHrUserSchema, UpdateHrUserSchema } from '../models/user.model';
+import { logger } from '../utils/logger';
 
-interface FirebaseTokenPayload {
-  iss?: string;
-  aud?: string;
-  sub?: string;
-  exp?: number;
-  email?: string;
-  email_verified?: boolean;
-  name?: string;
-  picture?: string;
-  role?: string;
-  [key: string]: unknown;
+/**
+ * Endpoint to verify authenticated session and return trusted HR user claims from Oracle.
+ */
+export async function verifyAuth(req: Request, res: Response): Promise<void> {
+  const user = req.user;
+
+  if (!user) {
+    res.status(401).json({
+      authorized: false,
+      message: 'Unauthenticated user.',
+    });
+    return;
+  }
+
+  res.status(200).json({
+    authorized: true,
+    hrUserId: user.hrUserId,
+    uid: user.firebaseUid,
+    email: user.email,
+    name: user.fullName,
+    role: user.role,
+    isActive: user.isActive,
+    picture: req.firebaseUser?.picture || null,
+  });
 }
 
-function parseJwtPayload(token: string): FirebaseTokenPayload | null {
+/**
+ * List all HR workspace users (Admin only).
+ */
+export async function listHrUsers(_req: Request, res: Response): Promise<void> {
   try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const base64Url = parts[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const jsonPayload = Buffer.from(base64, 'base64').toString('utf-8');
-    return JSON.parse(jsonPayload) as FirebaseTokenPayload;
-  } catch {
-    return null;
+    const users = await userService.findAll();
+    res.status(200).json(users);
+  } catch (err) {
+    const error = err as Error;
+    logger.error({ message: error.message }, 'Failed to list HR users');
+    res.status(500).json({ error: 'InternalServerError', message: error.message });
   }
 }
 
 /**
- * Controller to verify Firebase ID token and authorize HR workspace access.
- * Enforces server-side authorization: authentication alone does not grant HR access.
+ * Provision a new HR user (Admin only).
  */
-export async function verifyAuth(req: Request, res: Response): Promise<void> {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({
-      authorized: false,
-      message: 'Missing or malformed Authorization header with Bearer token.',
+export async function createHrUser(req: Request, res: Response): Promise<void> {
+  const parseResult = CreateHrUserSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    res.status(400).json({
+      error: 'ValidationError',
+      issues: parseResult.error.format(),
     });
     return;
   }
 
-  const token = authHeader.slice(7).trim();
-  const payload = parseJwtPayload(token);
+  try {
+    const existing = await userService.findByEmail(parseResult.data.email);
+    if (existing) {
+      res.status(409).json({
+        error: 'Conflict',
+        message: `An HR user with email ${parseResult.data.email} already exists.`,
+      });
+      return;
+    }
 
-  if (!payload || !payload.sub) {
-    res.status(401).json({
-      authorized: false,
-      message: 'Invalid Firebase ID token format.',
+    const created = await userService.create(parseResult.data);
+    res.status(201).json(created);
+  } catch (err) {
+    const error = err as Error;
+    logger.error({ message: error.message }, 'Failed to create HR user');
+    res.status(500).json({ error: 'InternalServerError', message: error.message });
+  }
+}
+
+/**
+ * Update an HR user's role or active status (Admin only).
+ */
+export async function updateHrUser(req: Request, res: Response): Promise<void> {
+  const userId = Number(req.params.id);
+  if (isNaN(userId)) {
+    res.status(400).json({ error: 'ValidationError', message: 'Invalid HR user ID parameter.' });
+    return;
+  }
+
+  const parseResult = UpdateHrUserSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    res.status(400).json({
+      error: 'ValidationError',
+      issues: parseResult.error.format(),
     });
     return;
   }
 
-  // Verify expiration
-  const nowInSeconds = Math.floor(Date.now() / 1000);
-  if (payload.exp && payload.exp < nowInSeconds) {
-    res.status(401).json({
-      authorized: false,
-      message: 'Firebase ID token has expired. Please refresh your session.',
-    });
-    return;
+  try {
+    const updated = await userService.update(userId, parseResult.data);
+    res.status(200).json(updated);
+  } catch (err) {
+    const error = err as Error;
+    logger.error({ message: error.message }, 'Failed to update HR user');
+    res.status(500).json({ error: 'InternalServerError', message: error.message });
   }
-
-  // Verify issuer and audience against configured project ID
-  const expectedIssuer = `https://securetoken.google.com/${env.FIREBASE_PROJECT_ID}`;
-  if (payload.iss && payload.iss !== expectedIssuer) {
-    res.status(401).json({
-      authorized: false,
-      message: 'Firebase ID token issuer mismatch.',
-    });
-    return;
-  }
-
-  if (payload.aud && payload.aud !== env.FIREBASE_PROJECT_ID) {
-    res.status(401).json({
-      authorized: false,
-      message: 'Firebase ID token audience mismatch.',
-    });
-    return;
-  }
-
-  const email = (payload.email || '').toLowerCase().trim();
-  const role = (payload.role as string) || 'hr_admin';
-
-  res.status(200).json({
-    authorized: true,
-    role,
-    email,
-    uid: payload.sub,
-    name: payload.name || email,
-    picture: payload.picture || null,
-  });
 }
