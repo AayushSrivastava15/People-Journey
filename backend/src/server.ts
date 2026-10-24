@@ -4,18 +4,18 @@ import { logger } from './utils/logger';
 import { initPool, closePool } from './config/database';
 
 async function bootstrap() {
-  // Attempt to initialize Oracle connection pool if credentials are provided
-  if (env.ORACLE_PASSWORD) {
+  // Attempt to initialize PostgreSQL connection pool if DATABASE_URL is configured
+  if (env.DATABASE_URL) {
     try {
       await initPool();
     } catch (err) {
       logger.warn(
         { message: (err as Error).message },
-        'Oracle connection pool failed to initialize during startup. Requests requiring database access will attempt initialization or fail gracefully.'
+        'PostgreSQL connection pool failed to initialize during startup. Requests requiring database access will attempt initialization or return safe service status.'
       );
     }
   } else {
-    logger.info('Oracle credentials not provided. Database pool will initialize when ORACLE_PASSWORD is set.');
+    logger.info('DATABASE_URL not configured. Database pool will initialize when DATABASE_URL is set.');
   }
 
   const server = app.listen(env.PORT, () => {
@@ -23,7 +23,7 @@ async function bootstrap() {
   });
 
   const shutdown = async (signal: string) => {
-    logger.info({ signal }, 'Graceful shutdown initiated: closing HTTP server and Oracle pool');
+    logger.info({ signal }, 'Graceful shutdown initiated: closing HTTP server and PostgreSQL pool');
     server.close(async () => {
       logger.info('HTTP server closed');
       await closePool();

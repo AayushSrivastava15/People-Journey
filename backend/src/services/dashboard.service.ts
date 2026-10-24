@@ -1,21 +1,59 @@
 import { executeSql } from '../config/database';
 import type { DashboardStats } from '../models/dashboard.model';
+import { userService } from './user.service';
+
+export interface PersonalDashboardData {
+  user: {
+    id: string;
+    email: string;
+    displayName: string | null;
+    photoUrl: string | null;
+    role: string;
+    accountStatus: string;
+    createdAt?: string;
+  };
+  employeeProfile: {
+    employeeId: number;
+    employeeCode: string;
+    departmentName: string | null;
+    designationName: string | null;
+    status: string;
+    hireDate: string;
+    exitDate: string | null;
+  } | null;
+  notifications: Array<{
+    id: number;
+    title: string;
+    message: string;
+    type: string;
+    isRead: boolean;
+    createdAt: string;
+  }>;
+  checklist: Array<{
+    id: string;
+    title: string;
+    description: string;
+    completed: boolean;
+  }>;
+}
 
 export const dashboardService = {
   /**
-   * Calculate live KPI metrics and aggregates from Oracle Database.
+   * Calculate live KPI metrics and aggregates from PostgreSQL for personal HR Workspace.
+   * Scoped strictly to the authenticated user's workspace.
    */
-  async getStats(): Promise<DashboardStats> {
+  async getStats(ownerUserId: string): Promise<DashboardStats> {
     // 1. Status distribution
     const statusSql = `
-      SELECT EMPLOYMENT_STATUS, COUNT(*) AS CNT
-      FROM HR_EMPLOYEES
-      GROUP BY EMPLOYMENT_STATUS
+      SELECT employment_status, COUNT(*)::int AS cnt
+      FROM hr_employees
+      WHERE owner_user_id = $1
+      GROUP BY employment_status
     `;
-    const statusRes = await executeSql<{ EMPLOYMENT_STATUS: string; CNT: number }>(statusSql);
+    const statusRes = await executeSql<{ employment_status: string; cnt: number }>(statusSql, [ownerUserId]);
     const statusMap = new Map<string, number>();
     for (const row of statusRes.rows || []) {
-      statusMap.set(row.EMPLOYMENT_STATUS.toUpperCase(), Number(row.CNT));
+      statusMap.set(row.employment_status.toUpperCase(), Number(row.cnt));
     }
 
     const activeCount = statusMap.get('ACTIVE') || 0;
@@ -33,51 +71,55 @@ export const dashboardService = {
 
     // 2. Joining this month
     const joiningMonthSql = `
-      SELECT COUNT(*) AS CNT
-      FROM HR_EMPLOYEES
-      WHERE HIRE_DATE >= TRUNC(SYSDATE, 'MM') 
-        AND HIRE_DATE < ADD_MONTHS(TRUNC(SYSDATE, 'MM'), 1)
+      SELECT COUNT(*)::int AS cnt
+      FROM hr_employees
+      WHERE owner_user_id = $1
+        AND hire_date >= DATE_TRUNC('month', CURRENT_TIMESTAMP)
+        AND hire_date < DATE_TRUNC('month', CURRENT_TIMESTAMP) + INTERVAL '1 month'
     `;
-    const joiningMonthRes = await executeSql<{ CNT: number }>(joiningMonthSql);
-    const joiningThisMonth = Number(joiningMonthRes.rows?.[0]?.CNT || 0);
+    const joiningMonthRes = await executeSql<{ cnt: number }>(joiningMonthSql, [ownerUserId]);
+    const joiningThisMonth = Number(joiningMonthRes.rows?.[0]?.cnt || 0);
 
     // 3. Upcoming joiners (next 7 days)
     const upcomingJoinersSql = `
-      SELECT COUNT(*) AS CNT
-      FROM HR_EMPLOYEES
-      WHERE EMPLOYMENT_STATUS = 'ONBOARDING'
-        AND HIRE_DATE >= TRUNC(SYSDATE)
-        AND HIRE_DATE <= TRUNC(SYSDATE) + 7
+      SELECT COUNT(*)::int AS cnt
+      FROM hr_employees
+      WHERE owner_user_id = $1
+        AND employment_status = 'ONBOARDING'
+        AND hire_date >= CURRENT_DATE
+        AND hire_date <= CURRENT_DATE + INTERVAL '7 days'
     `;
-    const upcomingJoinersRes = await executeSql<{ CNT: number }>(upcomingJoinersSql);
-    const upcomingJoiners = Number(upcomingJoinersRes.rows?.[0]?.CNT || 0);
+    const upcomingJoinersRes = await executeSql<{ cnt: number }>(upcomingJoinersSql, [ownerUserId]);
+    const upcomingJoiners = Number(upcomingJoinersRes.rows?.[0]?.cnt || 0);
 
     // 4. Upcoming exits (next 7 days)
     const upcomingExitsSql = `
-      SELECT COUNT(*) AS CNT
-      FROM HR_EMPLOYEES
-      WHERE EMPLOYMENT_STATUS = 'OFFBOARDING'
-        AND EXIT_DATE >= TRUNC(SYSDATE)
-        AND EXIT_DATE <= TRUNC(SYSDATE) + 7
+      SELECT COUNT(*)::int AS cnt
+      FROM hr_employees
+      WHERE owner_user_id = $1
+        AND employment_status = 'OFFBOARDING'
+        AND exit_date >= CURRENT_DATE
+        AND exit_date <= CURRENT_DATE + INTERVAL '7 days'
     `;
-    const upcomingExitsRes = await executeSql<{ CNT: number }>(upcomingExitsSql);
-    const upcomingExits = Number(upcomingExitsRes.rows?.[0]?.CNT || 0);
+    const upcomingExitsRes = await executeSql<{ cnt: number }>(upcomingExitsSql, [ownerUserId]);
+    const upcomingExits = Number(upcomingExitsRes.rows?.[0]?.cnt || 0);
 
     // 5. Department breakdown
     const deptSql = `
       SELECT 
-        COALESCE(d.DEPARTMENT_NAME, 'Unassigned') AS DEPT_NAME,
-        COUNT(e.EMPLOYEE_ID) AS CNT
-      FROM HR_EMPLOYEES e
-      LEFT JOIN HR_DEPARTMENTS d ON e.DEPARTMENT_ID = d.DEPARTMENT_ID
-      WHERE e.EMPLOYMENT_STATUS != 'EXITED'
-      GROUP BY d.DEPARTMENT_NAME
-      ORDER BY CNT DESC
+        COALESCE(d.department_name, 'Unassigned') AS dept_name,
+        COUNT(e.employee_id)::int AS cnt
+      FROM hr_employees e
+      LEFT JOIN hr_departments d ON e.department_id = d.department_id
+      WHERE e.owner_user_id = $1
+        AND e.employment_status != 'EXITED'
+      GROUP BY d.department_name
+      ORDER BY cnt DESC
     `;
-    const deptRes = await executeSql<{ DEPT_NAME: string; CNT: number }>(deptSql);
+    const deptRes = await executeSql<{ dept_name: string; cnt: number }>(deptSql, [ownerUserId]);
     const departmentBreakdown = (deptRes.rows || []).map(r => ({
-      name: r.DEPT_NAME,
-      value: Number(r.CNT),
+      name: r.dept_name,
+      value: Number(r.cnt),
     }));
 
     // 6. Monthly activity (last 6 months)
@@ -92,31 +134,33 @@ export const dashboardService = {
 
     const hiresByMonthSql = `
       SELECT 
-        TO_CHAR(HIRE_DATE, 'YYYY-MM') AS MONTH_KEY,
-        COUNT(*) AS CNT
-      FROM HR_EMPLOYEES
-      WHERE HIRE_DATE >= ADD_MONTHS(TRUNC(SYSDATE, 'MM'), -5)
-      GROUP BY TO_CHAR(HIRE_DATE, 'YYYY-MM')
+        TO_CHAR(hire_date, 'YYYY-MM') AS month_key,
+        COUNT(*)::int AS cnt
+      FROM hr_employees
+      WHERE owner_user_id = $1
+        AND hire_date >= DATE_TRUNC('month', CURRENT_TIMESTAMP) - INTERVAL '5 months'
+      GROUP BY TO_CHAR(hire_date, 'YYYY-MM')
     `;
-    const hiresByMonthRes = await executeSql<{ MONTH_KEY: string; CNT: number }>(hiresByMonthSql);
+    const hiresByMonthRes = await executeSql<{ month_key: string; cnt: number }>(hiresByMonthSql, [ownerUserId]);
     const hiresMap = new Map<string, number>();
     for (const r of hiresByMonthRes.rows || []) {
-      hiresMap.set(r.MONTH_KEY, Number(r.CNT));
+      hiresMap.set(r.month_key, Number(r.cnt));
     }
 
     const exitsByMonthSql = `
       SELECT 
-        TO_CHAR(EXIT_DATE, 'YYYY-MM') AS MONTH_KEY,
-        COUNT(*) AS CNT
-      FROM HR_EMPLOYEES
-      WHERE EXIT_DATE IS NOT NULL 
-        AND EXIT_DATE >= ADD_MONTHS(TRUNC(SYSDATE, 'MM'), -5)
-      GROUP BY TO_CHAR(EXIT_DATE, 'YYYY-MM')
+        TO_CHAR(exit_date, 'YYYY-MM') AS month_key,
+        COUNT(*)::int AS cnt
+      FROM hr_employees
+      WHERE owner_user_id = $1
+        AND exit_date IS NOT NULL 
+        AND exit_date >= DATE_TRUNC('month', CURRENT_TIMESTAMP) - INTERVAL '5 months'
+      GROUP BY TO_CHAR(exit_date, 'YYYY-MM')
     `;
-    const exitsByMonthRes = await executeSql<{ MONTH_KEY: string; CNT: number }>(exitsByMonthSql);
+    const exitsByMonthRes = await executeSql<{ month_key: string; cnt: number }>(exitsByMonthSql, [ownerUserId]);
     const exitsMap = new Map<string, number>();
     for (const r of exitsByMonthRes.rows || []) {
-      exitsMap.set(r.MONTH_KEY, Number(r.CNT));
+      exitsMap.set(r.month_key, Number(r.cnt));
     }
 
     const monthlyActivity = monthKeys.map(m => ({
@@ -128,47 +172,49 @@ export const dashboardService = {
     // 7. Upcoming events (next 14 days)
     const eventsSql = `
       SELECT 
-        TO_CHAR(EMPLOYEE_ID) AS ID,
-        TRIM(FIRST_NAME || ' ' || NVL(LAST_NAME, '')) AS PERSON,
-        'Joining date' AS LABEL,
-        TO_CHAR(HIRE_DATE, 'YYYY-MM-DD') AS EVENT_DATE,
-        'Onboarding' AS STATUS,
-        '/dashboard/onboarding' AS PATH
-      FROM HR_EMPLOYEES
-      WHERE EMPLOYMENT_STATUS = 'ONBOARDING'
-        AND HIRE_DATE >= TRUNC(SYSDATE)
-        AND HIRE_DATE <= TRUNC(SYSDATE) + 14
+        e.employee_id::text AS id,
+        TRIM(e.first_name || ' ' || COALESCE(e.last_name, '')) AS person,
+        'Joining date' AS label,
+        TO_CHAR(e.hire_date, 'YYYY-MM-DD') AS event_date,
+        'Onboarding' AS status,
+        '/dashboard/onboarding' AS path
+      FROM hr_employees e
+      WHERE e.owner_user_id = $1
+        AND e.employment_status = 'ONBOARDING'
+        AND e.hire_date >= CURRENT_DATE
+        AND e.hire_date <= CURRENT_DATE + INTERVAL '14 days'
       UNION ALL
       SELECT 
-        TO_CHAR(EMPLOYEE_ID) AS ID,
-        TRIM(FIRST_NAME || ' ' || NVL(LAST_NAME, '')) AS PERSON,
-        'Last working day' AS LABEL,
-        TO_CHAR(EXIT_DATE, 'YYYY-MM-DD') AS EVENT_DATE,
-        'Offboarding' AS STATUS,
-        '/dashboard/offboarding' AS PATH
-      FROM HR_EMPLOYEES
-      WHERE EMPLOYMENT_STATUS = 'OFFBOARDING'
-        AND EXIT_DATE >= TRUNC(SYSDATE)
-        AND EXIT_DATE <= TRUNC(SYSDATE) + 14
-      ORDER BY EVENT_DATE ASC
-      FETCH FIRST 6 ROWS ONLY
+        e.employee_id::text AS id,
+        TRIM(e.first_name || ' ' || COALESCE(e.last_name, '')) AS person,
+        'Last working day' AS label,
+        TO_CHAR(e.exit_date, 'YYYY-MM-DD') AS event_date,
+        'Offboarding' AS status,
+        '/dashboard/offboarding' AS path
+      FROM hr_employees e
+      WHERE e.owner_user_id = $1
+        AND e.employment_status = 'OFFBOARDING'
+        AND e.exit_date >= CURRENT_DATE
+        AND e.exit_date <= CURRENT_DATE + INTERVAL '14 days'
+      ORDER BY event_date ASC
+      LIMIT 6
     `;
     const eventsRes = await executeSql<{
-      ID: string;
-      PERSON: string;
-      LABEL: string;
-      EVENT_DATE: string;
-      STATUS: string;
-      PATH: string;
-    }>(eventsSql);
+      id: string;
+      person: string;
+      label: string;
+      event_date: string;
+      status: string;
+      path: string;
+    }>(eventsSql, [ownerUserId]);
 
     const upcomingEvents = (eventsRes.rows || []).map(e => ({
-      id: e.ID,
-      person: e.PERSON,
-      label: e.LABEL,
-      date: e.EVENT_DATE,
-      status: e.STATUS,
-      path: e.PATH,
+      id: e.id,
+      person: e.person,
+      label: e.label,
+      date: e.event_date,
+      status: e.status,
+      path: e.path,
     }));
 
     return {
@@ -184,6 +230,127 @@ export const dashboardService = {
       departmentBreakdown,
       monthlyActivity,
       upcomingEvents,
+    };
+  },
+
+  /**
+   * Retrieve personal dashboard data scoped specifically to the authenticated user.
+   * Isolates records to only what this user owns or is authorized to see.
+   */
+  async getPersonalDashboard(userId: string, email: string): Promise<PersonalDashboardData> {
+    const user = await userService.findById(userId);
+    if (!user) {
+      throw new Error('User not found.');
+    }
+
+    // Look for employee record matching user_id or email
+    const empSql = `
+      SELECT 
+        e.employee_id,
+        e.employee_code,
+        e.employment_status,
+        TO_CHAR(e.hire_date, 'YYYY-MM-DD') AS hire_date,
+        TO_CHAR(e.exit_date, 'YYYY-MM-DD') AS exit_date,
+        d.department_name,
+        des.designation_name
+      FROM hr_employees e
+      LEFT JOIN hr_departments d ON e.department_id = d.department_id
+      LEFT JOIN hr_designations des ON e.designation_id = des.designation_id
+      WHERE e.user_id = $1 OR LOWER(e.work_email) = LOWER($2) OR LOWER(e.personal_email) = LOWER($2)
+      LIMIT 1
+    `;
+    const empRes = await executeSql<{
+      employee_id: number;
+      employee_code: string;
+      employment_status: string;
+      hire_date: string;
+      exit_date: string | null;
+      department_name: string | null;
+      designation_name: string | null;
+    }>(empSql, [userId, email]);
+
+    const empRow = empRes.rows?.[0];
+    const employeeProfile = empRow
+      ? {
+          employeeId: empRow.employee_id,
+          employeeCode: empRow.employee_code,
+          departmentName: empRow.department_name,
+          designationName: empRow.designation_name,
+          status: empRow.employment_status,
+          hireDate: empRow.hire_date,
+          exitDate: empRow.exit_date,
+        }
+      : null;
+
+    // Retrieve user notifications
+    const notifSql = `
+      SELECT id, title, message, type, is_read, created_at
+      FROM user_notifications
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      LIMIT 10
+    `;
+    const notifRes = await executeSql<{
+      id: number;
+      title: string;
+      message: string;
+      type: string;
+      is_read: boolean;
+      created_at: Date;
+    }>(notifSql, [userId]);
+
+    const notifications = (notifRes.rows || []).map(n => ({
+      id: n.id,
+      title: n.title,
+      message: n.message,
+      type: n.type,
+      isRead: n.is_read,
+      createdAt: new Date(n.created_at).toISOString(),
+    }));
+
+    // Standard personal onboarding & journey checklist
+    const checklist = [
+      {
+        id: 'chk-1',
+        title: 'Account Registered',
+        description: 'Google Authentication identity linked with PostgreSQL profile',
+        completed: true,
+      },
+      {
+        id: 'chk-2',
+        title: 'Complete Profile Information',
+        description: 'Verify your display name, notification preferences, and contact details',
+        completed: Boolean(user.displayName),
+      },
+      {
+        id: 'chk-3',
+        title: 'Employee Record Linkage',
+        description: employeeProfile
+          ? `Linked to employee code ${employeeProfile.employeeCode} (${employeeProfile.status})`
+          : 'HR Administrator profile link pending',
+        completed: Boolean(employeeProfile),
+      },
+      {
+        id: 'chk-4',
+        title: 'Workspace Review',
+        description: 'Explore the employee journey milestones and touchpoints',
+        completed: true,
+      },
+    ];
+
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        displayName: user.displayName ?? null,
+        photoUrl: user.photoUrl ?? null,
+        role: user.role,
+        accountStatus: user.accountStatus,
+        createdAt: user.createdAt,
+      },
+      employeeProfile,
+      notifications,
+      checklist,
     };
   },
 };

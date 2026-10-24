@@ -49,7 +49,7 @@ function GoogleIcon() {
 
 export function LoginPage() {
   const [, setLocation] = useLocation();
-  const { user, loading, isAuthorized, authorizationChecking, verifyAuthorization } = useAuth();
+  const { user, loading, isAuthorized, authorizationChecking, verifyAuthorization, signInWithGoogle: contextSignInWithGoogle } = useAuth();
   const shouldReduceMotion = useReducedMotion();
 
   const [mode, setMode] = useState<AuthMode>("signin");
@@ -87,8 +87,7 @@ export function LoginPage() {
     setSuccessMessage(null);
 
     try {
-      const signedInUser = await signInWithGoogle();
-      await verifyAuthorization(signedInUser);
+      await contextSignInWithGoogle();
       setLocation("/dashboard");
     } catch (err: unknown) {
       setErrorMessage(mapAuthError(err));
@@ -221,19 +220,19 @@ export function LoginPage() {
           <LockKeyhole size={21} strokeWidth={1.6} />
         </div>
 
-        <span className="eyebrow">A little more human, by design</span>
+        <span className="eyebrow">Personal HR Workspace · Work Management</span>
 
         <h1 className="display-font" id="login-title">
           {mode === "signin" && (
             <>
               Welcome back<br />
-              <em>to People Journey.</em>
+              <em>to your HR workspace.</em>
             </>
           )}
           {mode === "register" && (
             <>
-              Request workspace access<br />
-              <em>for your HR team.</em>
+              Create your workspace<br />
+              <em>for HR management.</em>
             </>
           )}
           {mode === "forgot" && (
@@ -245,9 +244,9 @@ export function LoginPage() {
         </h1>
 
         <p>
-          {mode === "signin" && "Sign in with your authorized credentials to access employee journeys, onboarding, and workspace records."}
-          {mode === "register" && "Create an HR account. All new accounts must be authorized by your People Operations administrator."}
-          {mode === "forgot" && "Enter your work email address below and we’ll send you password recovery instructions."}
+          {mode === "signin" && "Sign in with Google or your credentials to access your personal HR work-management workspace."}
+          {mode === "register" && "Create your personal HR workspace. Open to all email domains with zero administrator approval required."}
+          {mode === "forgot" && "Enter your email address below and we’ll send you password recovery instructions."}
         </p>
 
         {/* Error message banner */}

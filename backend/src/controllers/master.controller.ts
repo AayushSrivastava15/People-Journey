@@ -3,14 +3,20 @@ import { masterService } from '../services/master.service';
 import { CreateDepartmentSchema, CreateDesignationSchema } from '../models/master.model';
 import { logger } from '../utils/logger';
 
-export async function getDepartments(_req: Request, res: Response): Promise<void> {
+export async function getDepartments(req: Request, res: Response): Promise<void> {
   try {
-    const departments = await masterService.getDepartments();
+    const departments = await masterService.getDepartments(req.user?.id);
     res.status(200).json(departments);
   } catch (err) {
     const error = err as Error;
     logger.error({ message: error.message }, 'Failed to get departments');
-    res.status(500).json({ error: 'InternalServerError', message: error.message });
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_SERVER_ERROR',
+        message: error.message,
+      },
+    });
   }
 }
 
@@ -18,34 +24,56 @@ export async function createDepartment(req: Request, res: Response): Promise<voi
   const parseResult = CreateDepartmentSchema.safeParse(req.body);
   if (!parseResult.success) {
     res.status(400).json({
-      error: 'ValidationError',
-      issues: parseResult.error.format(),
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid department data.',
+        issues: parseResult.error.format(),
+      },
     });
     return;
   }
 
   try {
-    const created = await masterService.createDepartment(parseResult.data, req.user?.hrUserId);
+    const created = await masterService.createDepartment(parseResult.data, req.user?.id);
     res.status(201).json(created);
   } catch (err) {
     const error = err as Error;
-    if (error.message.includes('ORA-00001')) {
-      res.status(409).json({ error: 'Conflict', message: 'Department name already exists.' });
+    if (error.message.includes('already exists') || (error as { code?: string }).code === '23505') {
+      res.status(409).json({
+        success: false,
+        error: {
+          code: 'CONFLICT',
+          message: 'Department name already exists.',
+        },
+      });
       return;
     }
     logger.error({ message: error.message }, 'Failed to create department');
-    res.status(500).json({ error: 'InternalServerError', message: error.message });
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_SERVER_ERROR',
+        message: error.message,
+      },
+    });
   }
 }
 
-export async function getDesignations(_req: Request, res: Response): Promise<void> {
+export async function getDesignations(req: Request, res: Response): Promise<void> {
   try {
-    const designations = await masterService.getDesignations();
+    const designations = await masterService.getDesignations(req.user?.id);
     res.status(200).json(designations);
   } catch (err) {
     const error = err as Error;
     logger.error({ message: error.message }, 'Failed to get designations');
-    res.status(500).json({ error: 'InternalServerError', message: error.message });
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_SERVER_ERROR',
+        message: error.message,
+      },
+    });
   }
 }
 
@@ -53,22 +81,38 @@ export async function createDesignation(req: Request, res: Response): Promise<vo
   const parseResult = CreateDesignationSchema.safeParse(req.body);
   if (!parseResult.success) {
     res.status(400).json({
-      error: 'ValidationError',
-      issues: parseResult.error.format(),
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid designation data.',
+        issues: parseResult.error.format(),
+      },
     });
     return;
   }
 
   try {
-    const created = await masterService.createDesignation(parseResult.data, req.user?.hrUserId);
+    const created = await masterService.createDesignation(parseResult.data, req.user?.id);
     res.status(201).json(created);
   } catch (err) {
     const error = err as Error;
-    if (error.message.includes('ORA-00001')) {
-      res.status(409).json({ error: 'Conflict', message: 'Designation name already exists.' });
+    if (error.message.includes('already exists') || (error as { code?: string }).code === '23505') {
+      res.status(409).json({
+        success: false,
+        error: {
+          code: 'CONFLICT',
+          message: 'Designation name already exists.',
+        },
+      });
       return;
     }
     logger.error({ message: error.message }, 'Failed to create designation');
-    res.status(500).json({ error: 'InternalServerError', message: error.message });
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_SERVER_ERROR',
+        message: error.message,
+      },
+    });
   }
 }

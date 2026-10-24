@@ -1,15 +1,16 @@
 import type { Request, Response, NextFunction } from 'express';
 import { getFirebaseAuth } from '../config/firebase';
 import { userService } from '../services/user.service';
-import type { HrUser, HrRole } from '../models/user.model';
-import { env } from '../config/env';
+import { auditService } from '../services/audit.service';
+import type { AppUser, AppRole } from '../models/user.model';
 import { logger } from '../utils/logger';
 
 // Extend Express Request type
 declare global {
   namespace Express {
     interface Request {
-      user?: HrUser;
+      user?: AppUser;
+      appUser?: AppUser;
       firebaseUser?: {
         uid: string;
         email?: string;
@@ -22,8 +23,11 @@ declare global {
 }
 
 /**
- * Middleware to authenticate requests via Firebase ID Token and authorize
- * against the trusted Oracle HR_USERS table.
+ * Middleware to authenticate requests via Firebase ID Token and synchronize
+ * with the PostgreSQL app_users table.
+ *
+ * Implements automatic registration for first-time Google sign-ins, assigning
+ * the default 'user' role with personal-dashboard permissions.
  */
 export async function authenticateToken(
   req: Request,
@@ -33,9 +37,12 @@ export async function authenticateToken(
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     res.status(401).json({
+      success: false,
       authorized: false,
-      error: 'Unauthorized',
-      message: 'Missing or malformed Authorization header with Bearer token.',
+      error: {
+        code: 'UNAUTHORIZED',
+        message: 'Missing or malformed Authorization header with Bearer token.',
+      },
     });
     return;
   }
@@ -43,9 +50,12 @@ export async function authenticateToken(
   const token = authHeader.slice(7).trim();
   if (!token) {
     res.status(401).json({
+      success: false,
       authorized: false,
-      error: 'Unauthorized',
-      message: 'Bearer token is empty.',
+      error: {
+        code: 'UNAUTHORIZED',
+        message: 'Bearer token is empty.',
+      },
     });
     return;
   }
@@ -58,9 +68,12 @@ export async function authenticateToken(
     const error = err as Error;
     logger.warn({ message: error.message }, 'Firebase token verification failed');
     res.status(401).json({
+      success: false,
       authorized: false,
-      error: 'Unauthorized',
-      message: 'Invalid, expired, or revoked Firebase ID token. Please re-authenticate.',
+      error: {
+        code: 'INVALID_TOKEN',
+        message: 'Invalid, expired, or revoked Firebase ID token. Please sign in again.',
+      },
     });
     return;
   }
@@ -73,97 +86,67 @@ export async function authenticateToken(
   };
 
   const email = (decodedToken.email || '').toLowerCase().trim();
+  const displayName = decodedToken.name || (email ? email.split('@')[0] : 'User');
+  const photoUrl = decodedToken.picture || null;
 
   try {
-    // 1. Look up user by verified Firebase UID in Oracle
+    // 1. Look up or automatically register user in PostgreSQL
     let user = await userService.findByFirebaseUid(decodedToken.uid);
 
-    // 2. If not found by UID, check if pre-provisioned by email
-    if (!user && email) {
-      user = await userService.findByEmail(email);
-      if (user) {
-        logger.info({ email, hrUserId: user.hrUserId }, 'Linking existing HR user to verified Firebase UID');
-        await userService.linkFirebaseUid(user.hrUserId, decodedToken.uid);
-        user = await userService.findById(user.hrUserId);
-      }
-    }
-
-    // 3. Initial bootstrapping check:
-    // If HR_USERS table is empty and user email is allowed, securely provision initial hr_admin
-    if (!user && email) {
-      const totalUsers = await userService.count();
-      if (totalUsers === 0 && env.HR_ALLOWED_EMAILS.includes(email)) {
-        logger.info({ email }, 'Bootstrapping initial HR Administrator account in Oracle');
-        user = await userService.create({
-          firebaseUid: decodedToken.uid,
-          email,
-          fullName: decodedToken.name || email.split('@')[0],
-          role: 'hr_admin',
-        });
-      }
-    }
-
-    // 4. Reject unregistered accounts
     if (!user) {
+      logger.info({ uid: decodedToken.uid, email }, 'Auto-registering first-time Google sign-in user in PostgreSQL');
+      user = await userService.syncGoogleUser({
+        firebaseUid: decodedToken.uid,
+        email: email || `${decodedToken.uid}@anonymous.local`,
+        displayName,
+        photoUrl: photoUrl || undefined,
+      });
+
+      // Audit trail for new account registration
+      await auditService.log({
+        userId: user.id,
+        actionType: 'USER_REGISTERED',
+        entityType: 'USER',
+        entityId: user.id,
+        details: { email: user.email, authProvider: 'google.com' },
+      });
+    } else {
+      // Periodic login sync
+      user = await userService.syncGoogleUser({
+        firebaseUid: decodedToken.uid,
+        email: email || user.email,
+        displayName: displayName || user.displayName || undefined,
+        photoUrl: photoUrl || user.photoUrl || undefined,
+      });
+    }
+
+    // 2. Reject deactivated or suspended accounts
+    if (user.accountStatus !== 'active') {
       res.status(403).json({
+        success: false,
         authorized: false,
-        error: 'Forbidden',
-        message: 'Your account is authenticated with Firebase but has not been authorized in the HR Portal user registry.',
+        error: {
+          code: 'ACCOUNT_DEACTIVATED',
+          message: 'Your account has been deactivated or suspended. Please contact your system administrator.',
+        },
       });
       return;
     }
 
-    // 5. Reject deactivated accounts
-    if (!user.isActive) {
-      res.status(403).json({
-        authorized: false,
-        error: 'Forbidden',
-        message: 'Your HR workspace account has been deactivated. Please contact your system administrator.',
-      });
-      return;
-    }
-
-    // 6. Attach trusted Oracle user record to request
+    // 3. Attach trusted PostgreSQL user profile to request
     req.user = user;
+    req.appUser = user;
     next();
   } catch (err) {
     const error = err as Error;
-    logger.error({ message: error.message }, 'Error resolving HR user in database during authentication');
-    res.status(500).json({
-      error: 'InternalServerError',
-      message: 'A database error occurred while verifying user authorization.',
+    logger.error({ message: error.message }, 'Database error resolving application user profile');
+    res.status(503).json({
+      success: false,
+      error: {
+        code: 'DATABASE_UNAVAILABLE',
+        message: 'A temporary database failure occurred while verifying user authorization. Please try again.',
+      },
     });
   }
 }
 
-/**
- * Middleware factory to enforce specific HR roles.
- */
-export function requireRole(allowedRoles: HrRole[]) {
-  return (req: Request, res: Response, next: NextFunction): void => {
-    if (!req.user) {
-      res.status(401).json({
-        authorized: false,
-        error: 'Unauthorized',
-        message: 'Authentication required.',
-      });
-      return;
-    }
-
-    if (!allowedRoles.includes(req.user.role)) {
-      res.status(403).json({
-        authorized: false,
-        error: 'Forbidden',
-        message: `Action requires one of the following roles: ${allowedRoles.join(', ')}. Current role: ${req.user.role}.`,
-      });
-      return;
-    }
-
-    next();
-  };
-}
-
-/**
- * Convenience middleware to require hr_admin role.
- */
-export const requireAdmin = requireRole(['hr_admin']);

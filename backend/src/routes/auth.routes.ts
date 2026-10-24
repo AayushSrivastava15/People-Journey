@@ -1,21 +1,25 @@
 import { Router, type IRouter } from 'express';
 import {
-  verifyAuth,
-  listHrUsers,
-  createHrUser,
-  updateHrUser,
+  getSession,
+  googleLogin,
+  logout,
+  getCurrentUserProfile,
+  updateCurrentUserProfile,
 } from '../controllers/auth.controller';
-import { authenticateToken, requireAdmin } from '../middleware/auth.middleware';
+import { authenticateToken } from '../middleware/auth.middleware';
 
 const router: IRouter = Router();
 
-// Session verification
-router.get('/verify', authenticateToken, verifyAuth);
-router.post('/verify', authenticateToken, verifyAuth);
+// Session and Google authentication endpoints
+router.get('/session', authenticateToken, getSession);
+router.get('/verify', authenticateToken, getSession); // compatibility alias
+router.post('/verify', authenticateToken, getSession); // compatibility alias
+router.post('/google', googleLogin);
+router.post('/logout', logout);
 
-// HR User administration (hr_admin only)
-router.get('/users', authenticateToken, requireAdmin, listHrUsers);
-router.post('/users', authenticateToken, requireAdmin, createHrUser);
-router.patch('/users/:id', authenticateToken, requireAdmin, updateHrUser);
+// Current user profile endpoints
+router.get('/me', authenticateToken, getCurrentUserProfile);
+router.patch('/me', authenticateToken, updateCurrentUserProfile);
 
 export default router;
+

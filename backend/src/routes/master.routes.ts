@@ -9,10 +9,13 @@ import { authenticateToken } from '../middleware/auth.middleware';
 
 const router: IRouter = Router();
 
+// Departments
 router.get('/departments', authenticateToken, getDepartments);
 router.post('/departments', authenticateToken, createDepartment);
 
+// Designations
 router.get('/designations', authenticateToken, getDesignations);
 router.post('/designations', authenticateToken, createDesignation);
 
 export default router;
+

@@ -27,22 +27,14 @@ export const env = {
   CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:3000',
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
 
-  // Oracle Database configuration
-  ORACLE_USER: process.env.ORACLE_USER || 'PEOPLE_JOURNEY',
-  ORACLE_PASSWORD: process.env.ORACLE_PASSWORD || '',
-  ORACLE_CONNECT_STRING: process.env.ORACLE_CONNECT_STRING || 'localhost:1521/FREEPDB1',
-  ORACLE_POOL_MIN: Number(process.env.ORACLE_POOL_MIN) || 1,
-  ORACLE_POOL_MAX: Number(process.env.ORACLE_POOL_MAX) || 10,
-  ORACLE_POOL_INCREMENT: Number(process.env.ORACLE_POOL_INCREMENT) || 1,
+  // PostgreSQL Database configuration (Supabase)
+  DATABASE_URL: process.env.DATABASE_URL || '',
+  DIRECT_URL: process.env.DIRECT_URL || '',
+  DATABASE_POOL_MIN: Number(process.env.DATABASE_POOL_MIN) || 1,
+  DATABASE_POOL_MAX: Number(process.env.DATABASE_POOL_MAX) || 10,
 
   // Firebase Admin configuration
   FIREBASE_PROJECT_ID: process.env.FIREBASE_PROJECT_ID || 'peoplejourney-4d586',
   FIREBASE_SERVICE_ACCOUNT_PATH: process.env.FIREBASE_SERVICE_ACCOUNT_PATH || '',
   FIREBASE_SERVICE_ACCOUNT_JSON: process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '',
-
-  // Fallback HR emails for dev bootstrapping
-  HR_ALLOWED_EMAILS: (process.env.HR_ALLOWED_EMAILS || 'hr@peoplejourney.com,admin@peoplejourney.com')
-    .split(',')
-    .map(e => e.trim().toLowerCase())
-    .filter(Boolean),
 };

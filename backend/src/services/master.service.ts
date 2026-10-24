@@ -1,23 +1,24 @@
-import oracledb from 'oracledb';
 import { executeSql } from '../config/database';
 import type { Department, Designation, CreateDepartmentInput, CreateDesignationInput } from '../models/master.model';
 import { auditService } from './audit.service';
 import { logger } from '../utils/logger';
 
 interface RawDepartmentRow {
-  DEPARTMENT_ID: number;
-  DEPARTMENT_NAME: string;
-  DESCRIPTION: string | null;
-  IS_ACTIVE: string;
-  EMPLOYEE_COUNT?: number;
-  CREATED_AT?: Date | string;
+  department_id: number;
+  department_name: string;
+  description: string | null;
+  is_active: boolean;
+  employee_count?: number | string;
+  created_at?: Date | string;
+  owner_user_id?: string;
 }
 
 interface RawDesignationRow {
-  DESIGNATION_ID: number;
-  DESIGNATION_NAME: string;
-  DESCRIPTION: string | null;
-  CREATED_AT?: Date | string;
+  designation_id: number;
+  designation_name: string;
+  description: string | null;
+  created_at?: Date | string;
+  owner_user_id?: string;
 }
 
 const DEFAULT_DEPARTMENTS = [
@@ -39,69 +40,73 @@ const DEFAULT_DESIGNATIONS = [
 
 export const masterService = {
   /**
-   * Automatically seed initial departments and designations if tables are empty.
+   * Seed initial departments and designations if tables are empty.
    */
   async ensureSeededDefaults(): Promise<void> {
     try {
-      const deptCount = await executeSql<{ CNT: number }>('SELECT COUNT(*) AS CNT FROM HR_DEPARTMENTS');
-      if (Number(deptCount.rows?.[0]?.CNT || 0) === 0) {
-        logger.info('Seeding default HR departments into Oracle...');
+      const deptCountRes = await executeSql<{ cnt: string }>('SELECT COUNT(*) AS cnt FROM hr_departments');
+      if (parseInt(deptCountRes.rows?.[0]?.cnt || '0', 10) === 0) {
+        logger.info('Seeding default HR departments into PostgreSQL...');
         for (const d of DEFAULT_DEPARTMENTS) {
           await executeSql(
-            `INSERT INTO HR_DEPARTMENTS (DEPARTMENT_NAME, DESCRIPTION, IS_ACTIVE)
-             VALUES (:name, :description, 'Y')`,
-            { name: d.name, description: d.desc }
+            `INSERT INTO hr_departments (department_name, description, is_active, owner_user_id)
+             VALUES ($1, $2, TRUE, NULL)
+             ON CONFLICT (department_name) DO NOTHING`,
+            [d.name, d.desc]
           );
         }
       }
 
-      const desigCount = await executeSql<{ CNT: number }>('SELECT COUNT(*) AS CNT FROM HR_DESIGNATIONS');
-      if (Number(desigCount.rows?.[0]?.CNT || 0) === 0) {
-        logger.info('Seeding default HR designations into Oracle...');
+      const desigCountRes = await executeSql<{ cnt: string }>('SELECT COUNT(*) AS cnt FROM hr_designations');
+      if (parseInt(desigCountRes.rows?.[0]?.cnt || '0', 10) === 0) {
+        logger.info('Seeding default HR designations into PostgreSQL...');
         for (const des of DEFAULT_DESIGNATIONS) {
           await executeSql(
-            `INSERT INTO HR_DESIGNATIONS (DESIGNATION_NAME, DESCRIPTION)
-             VALUES (:name, :description)`,
-            { name: des.name, description: des.desc }
+            `INSERT INTO hr_designations (designation_name, description, owner_user_id)
+             VALUES ($1, $2, NULL)
+             ON CONFLICT (designation_name) DO NOTHING`,
+            [des.name, des.desc]
           );
         }
       }
     } catch (err) {
-      logger.error({ err }, 'Error during default master data seeding');
+      logger.error({ err }, 'Error during default master data seeding in PostgreSQL');
     }
   },
 
   /**
-   * Get all active departments with employee counts.
+   * Get all active departments with employee counts scoped to the user workspace.
    */
-  async getDepartments(): Promise<Department[]> {
+  async getDepartments(ownerUserId?: string): Promise<Department[]> {
     await this.ensureSeededDefaults();
 
     const sql = `
       SELECT 
-        d.DEPARTMENT_ID,
-        d.DEPARTMENT_NAME,
-        d.DESCRIPTION,
-        d.IS_ACTIVE,
-        d.CREATED_AT,
-        COUNT(e.EMPLOYEE_ID) AS EMPLOYEE_COUNT
-      FROM HR_DEPARTMENTS d
-      LEFT JOIN HR_EMPLOYEES e 
-        ON d.DEPARTMENT_ID = e.DEPARTMENT_ID 
-        AND e.EMPLOYMENT_STATUS != 'EXITED'
-      WHERE d.IS_ACTIVE = 'Y'
-      GROUP BY d.DEPARTMENT_ID, d.DEPARTMENT_NAME, d.DESCRIPTION, d.IS_ACTIVE, d.CREATED_AT
-      ORDER BY d.DEPARTMENT_NAME ASC
+        d.department_id,
+        d.department_name,
+        d.description,
+        d.is_active,
+        d.created_at,
+        COUNT(e.employee_id)::int AS employee_count
+      FROM hr_departments d
+      LEFT JOIN hr_employees e 
+        ON d.department_id = e.department_id 
+        AND e.employment_status != 'EXITED'
+        AND ($1::uuid IS NULL OR e.owner_user_id = $1::uuid)
+      WHERE d.is_active = TRUE
+        AND ($1::uuid IS NULL OR d.owner_user_id IS NULL OR d.owner_user_id = $1::uuid)
+      GROUP BY d.department_id, d.department_name, d.description, d.is_active, d.created_at
+      ORDER BY d.department_name ASC
     `;
 
-    const result = await executeSql<RawDepartmentRow>(sql);
+    const result = await executeSql<RawDepartmentRow>(sql, [ownerUserId || null]);
     return (result.rows || []).map(row => ({
-      departmentId: Number(row.DEPARTMENT_ID),
-      departmentName: row.DEPARTMENT_NAME,
-      description: row.DESCRIPTION,
-      isActive: row.IS_ACTIVE === 'Y',
-      employeeCount: Number(row.EMPLOYEE_COUNT || 0),
-      createdAt: row.CREATED_AT ? new Date(row.CREATED_AT).toISOString() : undefined,
+      departmentId: Number(row.department_id),
+      departmentName: row.department_name,
+      description: row.description,
+      isActive: Boolean(row.is_active),
+      employeeCount: Number(row.employee_count || 0),
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : undefined,
     }));
   },
 
@@ -110,47 +115,56 @@ export const masterService = {
    */
   async findDepartmentById(id: number): Promise<Department | null> {
     const result = await executeSql<RawDepartmentRow>(
-      `SELECT DEPARTMENT_ID, DEPARTMENT_NAME, DESCRIPTION, IS_ACTIVE, CREATED_AT
-       FROM HR_DEPARTMENTS
-       WHERE DEPARTMENT_ID = :id`,
-      { id }
+      `SELECT department_id, department_name, description, is_active, created_at
+       FROM hr_departments
+       WHERE department_id = $1`,
+      [id]
     );
     const row = result.rows?.[0];
     if (!row) return null;
     return {
-      departmentId: Number(row.DEPARTMENT_ID),
-      departmentName: row.DEPARTMENT_NAME,
-      description: row.DESCRIPTION,
-      isActive: row.IS_ACTIVE === 'Y',
-      createdAt: row.CREATED_AT ? new Date(row.CREATED_AT).toISOString() : undefined,
+      departmentId: Number(row.department_id),
+      departmentName: row.department_name,
+      description: row.description,
+      isActive: Boolean(row.is_active),
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : undefined,
     };
   },
 
   /**
-   * Create a new department.
+   * Create a new department for the user workspace.
    */
-  async createDepartment(input: CreateDepartmentInput, hrUserId?: number): Promise<Department> {
-    const binds = {
-      name: input.departmentName,
-      description: input.description || null,
-      out_id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
+  async createDepartment(input: CreateDepartmentInput, ownerUserId?: string): Promise<Department> {
+    const sql = `
+      INSERT INTO hr_departments (department_name, description, is_active, owner_user_id)
+      VALUES ($1, $2, TRUE, $3)
+      RETURNING department_id, department_name, description, is_active, created_at;
+    `;
+
+    const result = await executeSql<RawDepartmentRow>(sql, [
+      input.departmentName.trim(),
+      input.description?.trim() || null,
+      ownerUserId || null,
+    ]);
+
+    const row = result.rows?.[0];
+    if (!row) {
+      throw new Error('Failed to create department in PostgreSQL.');
+    }
+
+    const dept: Department = {
+      departmentId: Number(row.department_id),
+      departmentName: row.department_name,
+      description: row.description,
+      isActive: Boolean(row.is_active),
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : undefined,
     };
 
-    const result = await executeSql(
-      `INSERT INTO HR_DEPARTMENTS (DEPARTMENT_NAME, DESCRIPTION, IS_ACTIVE)
-       VALUES (:name, :description, 'Y')
-       RETURNING DEPARTMENT_ID INTO :out_id`,
-      binds
-    );
-
-    const outId = (result.outBinds as { out_id: number[] })?.out_id?.[0];
-    const dept = (await this.findDepartmentById(outId))!;
-
     await auditService.log({
-      hrUserId,
+      userId: ownerUserId,
       actionType: 'CREATE_DEPARTMENT',
       entityType: 'HR_DEPARTMENTS',
-      entityId: dept.departmentId,
+      entityId: String(dept.departmentId),
       details: { departmentName: dept.departmentName },
     });
 
@@ -158,22 +172,24 @@ export const masterService = {
   },
 
   /**
-   * Get all designations.
+   * Get all designations accessible in workspace (global defaults + user created).
    */
-  async getDesignations(): Promise<Designation[]> {
+  async getDesignations(ownerUserId?: string): Promise<Designation[]> {
     await this.ensureSeededDefaults();
 
     const result = await executeSql<RawDesignationRow>(
-      `SELECT DESIGNATION_ID, DESIGNATION_NAME, DESCRIPTION, CREATED_AT
-       FROM HR_DESIGNATIONS
-       ORDER BY DESIGNATION_NAME ASC`
+      `SELECT designation_id, designation_name, description, created_at
+       FROM hr_designations
+       WHERE ($1::uuid IS NULL OR owner_user_id IS NULL OR owner_user_id = $1::uuid)
+       ORDER BY designation_name ASC`,
+      [ownerUserId || null]
     );
 
     return (result.rows || []).map(row => ({
-      designationId: Number(row.DESIGNATION_ID),
-      designationName: row.DESIGNATION_NAME,
-      description: row.DESCRIPTION,
-      createdAt: row.CREATED_AT ? new Date(row.CREATED_AT).toISOString() : undefined,
+      designationId: Number(row.designation_id),
+      designationName: row.designation_name,
+      description: row.description,
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : undefined,
     }));
   },
 
@@ -182,46 +198,54 @@ export const masterService = {
    */
   async findDesignationById(id: number): Promise<Designation | null> {
     const result = await executeSql<RawDesignationRow>(
-      `SELECT DESIGNATION_ID, DESIGNATION_NAME, DESCRIPTION, CREATED_AT
-       FROM HR_DESIGNATIONS
-       WHERE DESIGNATION_ID = :id`,
-      { id }
+      `SELECT designation_id, designation_name, description, created_at
+       FROM hr_designations
+       WHERE designation_id = $1`,
+      [id]
     );
     const row = result.rows?.[0];
     if (!row) return null;
     return {
-      designationId: Number(row.DESIGNATION_ID),
-      designationName: row.DESIGNATION_NAME,
-      description: row.DESCRIPTION,
-      createdAt: row.CREATED_AT ? new Date(row.CREATED_AT).toISOString() : undefined,
+      designationId: Number(row.designation_id),
+      designationName: row.designation_name,
+      description: row.description,
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : undefined,
     };
   },
 
   /**
-   * Create a new designation.
+   * Create a new designation for user workspace.
    */
-  async createDesignation(input: CreateDesignationInput, hrUserId?: number): Promise<Designation> {
-    const binds = {
-      name: input.designationName,
-      description: input.description || null,
-      out_id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
+  async createDesignation(input: CreateDesignationInput, ownerUserId?: string): Promise<Designation> {
+    const sql = `
+      INSERT INTO hr_designations (designation_name, description, owner_user_id)
+      VALUES ($1, $2, $3)
+      RETURNING designation_id, designation_name, description, created_at;
+    `;
+
+    const result = await executeSql<RawDesignationRow>(sql, [
+      input.designationName.trim(),
+      input.description?.trim() || null,
+      ownerUserId || null,
+    ]);
+
+    const row = result.rows?.[0];
+    if (!row) {
+      throw new Error('Failed to create designation in PostgreSQL.');
+    }
+
+    const desig: Designation = {
+      designationId: Number(row.designation_id),
+      designationName: row.designation_name,
+      description: row.description,
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : undefined,
     };
 
-    const result = await executeSql(
-      `INSERT INTO HR_DESIGNATIONS (DESIGNATION_NAME, DESCRIPTION)
-       VALUES (:name, :description)
-       RETURNING DESIGNATION_ID INTO :out_id`,
-      binds
-    );
-
-    const outId = (result.outBinds as { out_id: number[] })?.out_id?.[0];
-    const desig = (await this.findDesignationById(outId))!;
-
     await auditService.log({
-      hrUserId,
+      userId: ownerUserId,
       actionType: 'CREATE_DESIGNATION',
       entityType: 'HR_DESIGNATIONS',
-      entityId: desig.designationId,
+      entityId: String(desig.designationId),
       details: { designationName: desig.designationName },
     });
 

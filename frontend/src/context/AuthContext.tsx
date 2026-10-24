@@ -13,17 +13,28 @@ import {
 } from "firebase/auth";
 
 import { auth, authPersistenceReady } from "../lib/firebase";
-import { logout } from "../services/authService";
+import {
+  logout,
+  signInWithGoogle as authSignInWithGoogle,
+  handleRedirectResult,
+  syncUserWithBackend,
+} from "../services/authService";
+import type { AppUser, AppRole } from "../types/api";
 
 export interface AuthContextValue {
   user: User | null;
+  appUser: AppUser | null;
   loading: boolean;
   isAuthorized: boolean | null;
   authorizationChecking: boolean;
-  authRole: string | null;
+  authRole: AppRole | null;
   authError: string | null;
+  isHr: boolean;
+  isAdmin: boolean;
+  signInWithGoogle: () => Promise<User>;
   getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
   verifyAuthorization: (targetUser?: User | null) => Promise<boolean>;
+  refreshSession: () => Promise<boolean>;
   signOut: () => Promise<void>;
 }
 
@@ -35,16 +46,18 @@ interface AuthProviderProps {
 
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
+  const [appUser, setAppUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
   const [authorizationChecking, setAuthorizationChecking] = useState(false);
-  const [authRole, setAuthRole] = useState<string | null>(null);
+  const [authRole, setAuthRole] = useState<AppRole | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
 
   const verifyAuthorization = useCallback(async (targetUser?: User | null): Promise<boolean> => {
     const currentUser = targetUser !== undefined ? targetUser : auth.currentUser;
 
     if (!currentUser) {
+      setAppUser(null);
       setIsAuthorized(null);
       setAuthRole(null);
       setAuthorizationChecking(false);
@@ -56,35 +69,28 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     try {
       const token = await currentUser.getIdToken();
-      const tokenResult = await currentUser.getIdTokenResult();
-      const role = (tokenResult.claims.role as string) || "hr_admin";
+      // Synchronize with PostgreSQL via Express backend
+      const profile = await syncUserWithBackend(token);
 
-      // Best-effort session sync with backend
-      const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
-      try {
-        await fetch(`${apiBase.replace(/\/$/, "")}/auth/verify`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-        });
-      } catch {
-        // Backend offline or unreachable is non-blocking
-      }
-
-      // Public portal: Any valid authenticated account is granted workspace access
+      setAppUser(profile);
       setIsAuthorized(true);
-      setAuthRole(role);
+      setAuthRole(profile.role);
       setAuthorizationChecking(false);
       return true;
     } catch (error) {
-      console.error("Authorization check failed:", error);
-      // For any authenticated user, grant access even if offline
-      setIsAuthorized(true);
-      setAuthRole("hr_admin");
+      const message = (error as Error).message || "Session verification with server failed.";
+      console.error("Authorization check failed:", message);
+      setAuthError(message);
+
+      // Do NOT grant fake HR admin privileges. Mark as unauthorized or report temporary outage.
+      if (message.includes("deactivated")) {
+        setIsAuthorized(false);
+      } else {
+        // Backend temporarily unavailable: allow user to remain logged into Firebase but mark profile pending
+        setIsAuthorized(false);
+      }
       setAuthorizationChecking(false);
-      return true;
+      return false;
     }
   }, []);
 
@@ -93,43 +99,68 @@ export function AuthProvider({ children }: AuthProviderProps) {
       await logout();
     } finally {
       setUser(null);
+      setAppUser(null);
       setIsAuthorized(null);
       setAuthRole(null);
+      setAuthError(null);
       setAuthorizationChecking(false);
     }
   }, []);
+
+  const handleSignInWithGoogle = useCallback(async () => {
+    setAuthorizationChecking(true);
+    setAuthError(null);
+    try {
+      const signedInUser = await authSignInWithGoogle();
+      setUser(signedInUser);
+      await verifyAuthorization(signedInUser);
+      return signedInUser;
+    } catch (error) {
+      setAuthorizationChecking(false);
+      throw error;
+    }
+  }, [verifyAuthorization]);
 
   const getIdToken = useCallback(async (forceRefresh = false): Promise<string | null> => {
     if (!auth.currentUser) return null;
     return auth.currentUser.getIdToken(forceRefresh);
   }, []);
 
+  const refreshSession = useCallback(async (): Promise<boolean> => {
+    return verifyAuthorization(auth.currentUser);
+  }, [verifyAuthorization]);
+
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
     let active = true;
 
     authPersistenceReady
-      .then(() => {
+      .then(async () => {
         if (!active) return;
+
+        // Check for redirect return result first
+        await handleRedirectResult();
 
         unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
           if (!active) return;
           setUser(currentUser);
-          setLoading(false);
 
           if (currentUser) {
             await verifyAuthorization(currentUser);
           } else {
+            setAppUser(null);
             setIsAuthorized(null);
             setAuthRole(null);
             setAuthorizationChecking(false);
           }
+          setLoading(false);
         });
       })
       .catch((error) => {
         console.error("Firebase session initialization failed:", error);
         if (active) {
           setUser(null);
+          setAppUser(null);
           setIsAuthorized(null);
           setLoading(false);
           setAuthorizationChecking(false);
@@ -142,17 +173,25 @@ export function AuthProvider({ children }: AuthProviderProps) {
     };
   }, [verifyAuthorization]);
 
+  const isHr = false;
+  const isAdmin = false;
+
   return (
     <AuthContext.Provider
       value={{
         user,
+        appUser,
         loading,
         isAuthorized,
         authorizationChecking,
         authRole,
         authError,
+        isHr,
+        isAdmin,
+        signInWithGoogle: handleSignInWithGoogle,
         getIdToken,
         verifyAuthorization,
+        refreshSession,
         signOut: handleSignOut,
       }}
     >

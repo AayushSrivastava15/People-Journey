@@ -21,7 +21,8 @@ export const EmployeeSchema = z.object({
   exitDate: z.string().nullable().optional(),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
-  createdBy: z.number().nullable().optional(),
+  createdBy: z.string().nullable().optional(),
+  ownerUserId: z.string().uuid().optional(),
 });
 export type Employee = z.infer<typeof EmployeeSchema>;
 
@@ -46,7 +47,8 @@ export const CreateEmployeeSchema = z.object({
   exitDate: z.string().optional().nullable(),
   lastWorkingDay: z.string().optional().nullable(), // Helper alias
 });
-export type CreateEmployeeInput = z.infer<typeof CreateEmployeeSchema>;
+export type CreateEmployeeInput = z.input<typeof CreateEmployeeSchema>;
+
 
 export const UpdateEmployeeSchema = z.object({
   firstName: z.string().trim().min(1).max(100).optional(),

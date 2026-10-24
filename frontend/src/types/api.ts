@@ -1,5 +1,24 @@
 export type LifecycleStatus = 'Active' | 'Onboarding' | 'Offboarding' | 'Exited';
 export type NoticeStatus = 'Pending' | 'Processing' | 'Sent' | 'Failed' | 'Cancelled';
+export type AppRole = 'user';
+
+export interface AppUser {
+  id: string;
+  uid?: string;
+  firebaseUid: string;
+  email: string;
+  name?: string;
+  displayName: string | null;
+  picture?: string | null;
+  photoUrl?: string | null;
+  role: AppRole;
+  accountStatus: 'active' | 'deactivated' | 'suspended';
+  isActive?: boolean;
+  preferences?: Record<string, unknown>;
+  createdAt?: string;
+  updatedAt?: string;
+  lastLoginAt?: string | null;
+}
 
 export interface Employee {
   employeeId: number;
@@ -19,7 +38,8 @@ export interface Employee {
   exitDate: string | null;
   createdAt?: string;
   updatedAt?: string;
-  createdBy?: number | null;
+  createdBy?: string | null;
+  ownerUserId?: string;
 }
 
 export interface PaginatedResponse<T> {
@@ -64,6 +84,41 @@ export interface DashboardStats {
     status: string;
     path: string;
   }[];
+}
+
+export interface PersonalDashboardData {
+  user: {
+    id: string;
+    email: string;
+    displayName: string | null;
+    photoUrl: string | null;
+    role: string;
+    accountStatus: string;
+    createdAt?: string;
+  };
+  employeeProfile: {
+    employeeId: number;
+    employeeCode: string;
+    departmentName: string | null;
+    designationName: string | null;
+    status: string;
+    hireDate: string;
+    exitDate: string | null;
+  } | null;
+  notifications: Array<{
+    id: number;
+    title: string;
+    message: string;
+    type: string;
+    isRead: boolean;
+    createdAt: string;
+  }>;
+  checklist: Array<{
+    id: string;
+    title: string;
+    description: string;
+    completed: boolean;
+  }>;
 }
 
 export interface CreateEmployeePayload {

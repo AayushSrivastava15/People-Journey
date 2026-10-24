@@ -6,16 +6,59 @@ import type {
   Department,
   Designation,
   DashboardStats,
+  PersonalDashboardData,
+  AppUser,
   CreateEmployeePayload,
   OffboardEmployeePayload,
 } from '../types/api';
 
 export const QUERY_KEYS = {
   dashboardStats: ['dashboard', 'stats'] as const,
+  personalDashboard: ['dashboard', 'me'] as const,
+  userProfile: ['users', 'me'] as const,
+  users: ['auth', 'users'] as const,
   employees: (params?: Record<string, unknown>) => ['employees', params || {}] as const,
   departments: ['departments'] as const,
   designations: ['designations'] as const,
 };
+
+export function usePersonalDashboard() {
+  return useQuery({
+    queryKey: QUERY_KEYS.personalDashboard,
+    queryFn: async () => {
+      const res = await apiClient<{ success: boolean; data: PersonalDashboardData }>('/dashboard/me');
+      return res.data;
+    },
+    staleTime: 15000,
+  });
+}
+
+export function useUserProfile() {
+  return useQuery({
+    queryKey: QUERY_KEYS.userProfile,
+    queryFn: async () => {
+      const res = await apiClient<{ success: boolean; data: AppUser }>('/users/me');
+      return res.data;
+    },
+    staleTime: 30000,
+  });
+}
+
+export function useUpdateUserProfile() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: { displayName?: string; photoUrl?: string; preferences?: Record<string, unknown> }) =>
+      apiClient<{ success: boolean; data: AppUser }>('/users/me', {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.userProfile });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.personalDashboard });
+    },
+  });
+}
 
 export function useDashboardStats() {
   return useQuery({
@@ -106,3 +149,4 @@ export function useOffboardEmployee() {
     },
   });
 }
+

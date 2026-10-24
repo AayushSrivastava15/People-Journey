@@ -1,4 +1,3 @@
-import oracledb from 'oracledb';
 import { executeSql, withTransaction } from '../config/database';
 import type {
   Employee,
@@ -13,22 +12,23 @@ import { masterService } from './master.service';
 import { logger } from '../utils/logger';
 
 interface RawEmployeeRow {
-  EMPLOYEE_ID: number;
-  EMPLOYEE_CODE: string;
-  FIRST_NAME: string;
-  LAST_NAME: string | null;
-  WORK_EMAIL: string | null;
-  PHONE: string | null;
-  DEPARTMENT_ID: number | null;
-  DESIGNATION_ID: number | null;
-  DEPARTMENT_NAME: string | null;
-  DESIGNATION_NAME: string | null;
-  EMPLOYMENT_STATUS: EmploymentStatus;
-  HIRE_DATE: Date | string;
-  EXIT_DATE: Date | string | null;
-  CREATED_AT?: Date | string;
-  UPDATED_AT?: Date | string;
-  CREATED_BY?: number | null;
+  employee_id: number;
+  employee_code: string;
+  first_name: string;
+  last_name: string | null;
+  work_email: string | null;
+  phone: string | null;
+  department_id: number | null;
+  designation_id: number | null;
+  department_name: string | null;
+  designation_name: string | null;
+  employment_status: EmploymentStatus;
+  hire_date: Date | string;
+  exit_date: Date | string | null;
+  created_at?: Date | string;
+  updated_at?: Date | string;
+  created_by?: string | null;
+  owner_user_id?: string;
 }
 
 function normalizeStatusForFrontend(status: string): 'Active' | 'Onboarding' | 'Offboarding' | 'Exited' {
@@ -50,37 +50,38 @@ function formatDateOnly(val: Date | string | null | undefined): string {
 }
 
 function mapRowToEmployee(row: RawEmployeeRow): Employee {
-  const firstName = row.FIRST_NAME || '';
-  const lastName = row.LAST_NAME || '';
+  const firstName = row.first_name || '';
+  const lastName = row.last_name || '';
   const fullName = `${firstName} ${lastName}`.trim() || firstName;
 
   return {
-    employeeId: Number(row.EMPLOYEE_ID),
-    employeeCode: row.EMPLOYEE_CODE,
+    employeeId: Number(row.employee_id),
+    employeeCode: row.employee_code,
     firstName,
-    lastName: row.LAST_NAME,
+    lastName: row.last_name,
     name: fullName,
-    workEmail: row.WORK_EMAIL,
-    phone: row.PHONE,
-    departmentId: row.DEPARTMENT_ID ? Number(row.DEPARTMENT_ID) : null,
-    designationId: row.DESIGNATION_ID ? Number(row.DESIGNATION_ID) : null,
-    departmentName: row.DEPARTMENT_NAME,
-    designationName: row.DESIGNATION_NAME,
-    employmentStatus: row.EMPLOYMENT_STATUS,
-    status: normalizeStatusForFrontend(row.EMPLOYMENT_STATUS),
-    hireDate: formatDateOnly(row.HIRE_DATE),
-    exitDate: row.EXIT_DATE ? formatDateOnly(row.EXIT_DATE) : null,
-    createdAt: row.CREATED_AT ? new Date(row.CREATED_AT).toISOString() : undefined,
-    updatedAt: row.UPDATED_AT ? new Date(row.UPDATED_AT).toISOString() : undefined,
-    createdBy: row.CREATED_BY ? Number(row.CREATED_BY) : null,
+    workEmail: row.work_email,
+    phone: row.phone,
+    departmentId: row.department_id ? Number(row.department_id) : null,
+    designationId: row.designation_id ? Number(row.designation_id) : null,
+    departmentName: row.department_name,
+    designationName: row.designation_name,
+    employmentStatus: row.employment_status,
+    status: normalizeStatusForFrontend(row.employment_status),
+    hireDate: formatDateOnly(row.hire_date),
+    exitDate: row.exit_date ? formatDateOnly(row.exit_date) : null,
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : undefined,
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
+    createdBy: row.created_by ? String(row.created_by) : null,
+    ownerUserId: row.owner_user_id,
   };
 }
 
 export const employeeService = {
   /**
-   * List employees with filtering, searching, sorting, and pagination.
+   * List employees with filtering, searching, sorting, and pagination scoped to owner's workspace.
    */
-  async listEmployees(params: EmployeeQueryParams): Promise<{
+  async listEmployees(params: EmployeeQueryParams, ownerUserId: string): Promise<{
     data: Employee[];
     total: number;
     page: number;
@@ -91,86 +92,91 @@ export const employeeService = {
     const limit = Math.max(1, Math.min(100, params.limit));
     const offset = (page - 1) * limit;
 
-    const whereClauses: string[] = ['1=1'];
-    const binds: oracledb.BindParameters = {};
+    const whereClauses: string[] = ['e.owner_user_id = $1'];
+    const queryParams: unknown[] = [ownerUserId];
+    let paramIndex = 2;
 
     if (params.search) {
       whereClauses.push(
-        `(LOWER(e.EMPLOYEE_CODE) LIKE :search OR 
-          LOWER(e.FIRST_NAME) LIKE :search OR 
-          LOWER(e.LAST_NAME) LIKE :search OR 
-          LOWER(e.WORK_EMAIL) LIKE :search OR
-          LOWER(d.DEPARTMENT_NAME) LIKE :search)`
+        `(LOWER(e.employee_code) LIKE $${paramIndex} OR 
+          LOWER(e.first_name) LIKE $${paramIndex} OR 
+          LOWER(COALESCE(e.last_name, '')) LIKE $${paramIndex} OR 
+          LOWER(COALESCE(e.work_email, '')) LIKE $${paramIndex} OR
+          LOWER(COALESCE(d.department_name, '')) LIKE $${paramIndex})`
       );
-      (binds as Record<string, unknown>).search = `%${params.search.toLowerCase()}%`;
+      queryParams.push(`%${params.search.toLowerCase()}%`);
+      paramIndex++;
     }
 
     if (params.status && params.status !== 'All' && params.status !== 'All statuses') {
-      whereClauses.push(`UPPER(e.EMPLOYMENT_STATUS) = :status`);
-      (binds as Record<string, unknown>).status = params.status.toUpperCase();
+      whereClauses.push(`UPPER(e.employment_status) = $${paramIndex}`);
+      queryParams.push(params.status.toUpperCase());
+      paramIndex++;
     }
 
     if (params.departmentId) {
-      whereClauses.push(`e.DEPARTMENT_ID = :departmentId`);
-      (binds as Record<string, unknown>).departmentId = params.departmentId;
+      whereClauses.push(`e.department_id = $${paramIndex}`);
+      queryParams.push(params.departmentId);
+      paramIndex++;
     }
 
     if (params.designationId) {
-      whereClauses.push(`e.DESIGNATION_ID = :designationId`);
-      (binds as Record<string, unknown>).designationId = params.designationId;
+      whereClauses.push(`e.designation_id = $${paramIndex}`);
+      queryParams.push(params.designationId);
+      paramIndex++;
     }
 
     const whereSql = whereClauses.join(' AND ');
 
     // 1. Total count query
     const countSql = `
-      SELECT COUNT(*) AS TOTAL
-      FROM HR_EMPLOYEES e
-      LEFT JOIN HR_DEPARTMENTS d ON e.DEPARTMENT_ID = d.DEPARTMENT_ID
+      SELECT COUNT(*)::int AS total
+      FROM hr_employees e
+      LEFT JOIN hr_departments d ON e.department_id = d.department_id
       WHERE ${whereSql}
     `;
-    const countResult = await executeSql<{ TOTAL: number }>(countSql, binds);
-    const total = Number(countResult.rows?.[0]?.TOTAL || 0);
+    const countResult = await executeSql<{ total: number }>(countSql, queryParams);
+    const total = Number(countResult.rows?.[0]?.total || 0);
 
     // 2. Data query
-    const sortColumn = ['CREATED_AT', 'FIRST_NAME', 'HIRE_DATE', 'EMPLOYEE_CODE'].includes(params.sortBy)
-      ? `e.${params.sortBy}`
-      : 'e.CREATED_AT';
+    const columnMap: Record<string, string> = {
+      CREATED_AT: 'e.created_at',
+      FIRST_NAME: 'e.first_name',
+      HIRE_DATE: 'e.hire_date',
+      EMPLOYEE_CODE: 'e.employee_code',
+    };
+    const sortColumn = columnMap[params.sortBy] || 'e.created_at';
     const sortOrder = params.sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
     const dataSql = `
       SELECT 
-        e.EMPLOYEE_ID,
-        e.EMPLOYEE_CODE,
-        e.FIRST_NAME,
-        e.LAST_NAME,
-        e.WORK_EMAIL,
-        e.PHONE,
-        e.DEPARTMENT_ID,
-        e.DESIGNATION_ID,
-        e.EMPLOYMENT_STATUS,
-        e.HIRE_DATE,
-        e.EXIT_DATE,
-        e.CREATED_AT,
-        e.UPDATED_AT,
-        e.CREATED_BY,
-        d.DEPARTMENT_NAME,
-        des.DESIGNATION_NAME
-      FROM HR_EMPLOYEES e
-      LEFT JOIN HR_DEPARTMENTS d ON e.DEPARTMENT_ID = d.DEPARTMENT_ID
-      LEFT JOIN HR_DESIGNATIONS des ON e.DESIGNATION_ID = des.DESIGNATION_ID
+        e.employee_id,
+        e.employee_code,
+        e.first_name,
+        e.last_name,
+        e.work_email,
+        e.phone,
+        e.department_id,
+        e.designation_id,
+        e.employment_status,
+        e.hire_date,
+        e.exit_date,
+        e.created_at,
+        e.updated_at,
+        e.created_by,
+        e.owner_user_id,
+        d.department_name,
+        des.designation_name
+      FROM hr_employees e
+      LEFT JOIN hr_departments d ON e.department_id = d.department_id
+      LEFT JOIN hr_designations des ON e.designation_id = des.designation_id
       WHERE ${whereSql}
       ORDER BY ${sortColumn} ${sortOrder}
-      OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
+      LIMIT $${paramIndex++} OFFSET $${paramIndex++}
     `;
 
-    const dataBinds: oracledb.BindParameters = {
-      ...(binds as Record<string, unknown>),
-      offset,
-      limit,
-    };
-
-    const dataResult = await executeSql<RawEmployeeRow>(dataSql, dataBinds);
+    const dataParams = [...queryParams, limit, offset];
+    const dataResult = await executeSql<RawEmployeeRow>(dataSql, dataParams);
     const data = (dataResult.rows || []).map(mapRowToEmployee);
 
     return {
@@ -183,51 +189,62 @@ export const employeeService = {
   },
 
   /**
-   * Fetch single employee by ID.
+   * Fetch single employee by ID, scoped to owner's workspace if ownerUserId provided.
    */
-  async getEmployeeById(employeeId: number): Promise<Employee | null> {
-    const sql = `
+  async getEmployeeById(employeeId: number, ownerUserId?: string): Promise<Employee | null> {
+    let sql = `
       SELECT 
-        e.EMPLOYEE_ID,
-        e.EMPLOYEE_CODE,
-        e.FIRST_NAME,
-        e.LAST_NAME,
-        e.WORK_EMAIL,
-        e.PHONE,
-        e.DEPARTMENT_ID,
-        e.DESIGNATION_ID,
-        e.EMPLOYMENT_STATUS,
-        e.HIRE_DATE,
-        e.EXIT_DATE,
-        e.CREATED_AT,
-        e.UPDATED_AT,
-        e.CREATED_BY,
-        d.DEPARTMENT_NAME,
-        des.DESIGNATION_NAME
-      FROM HR_EMPLOYEES e
-      LEFT JOIN HR_DEPARTMENTS d ON e.DEPARTMENT_ID = d.DEPARTMENT_ID
-      LEFT JOIN HR_DESIGNATIONS des ON e.DESIGNATION_ID = des.DESIGNATION_ID
-      WHERE e.EMPLOYEE_ID = :employeeId
+        e.employee_id,
+        e.employee_code,
+        e.first_name,
+        e.last_name,
+        e.work_email,
+        e.phone,
+        e.department_id,
+        e.designation_id,
+        e.employment_status,
+        e.hire_date,
+        e.exit_date,
+        e.created_at,
+        e.updated_at,
+        e.created_by,
+        e.owner_user_id,
+        d.department_name,
+        des.designation_name
+      FROM hr_employees e
+      LEFT JOIN hr_departments d ON e.department_id = d.department_id
+      LEFT JOIN hr_designations des ON e.designation_id = des.designation_id
+      WHERE e.employee_id = $1
     `;
+    const params: unknown[] = [employeeId];
 
-    const result = await executeSql<RawEmployeeRow>(sql, { employeeId });
+    if (ownerUserId) {
+      sql += ' AND e.owner_user_id = $2';
+      params.push(ownerUserId);
+    }
+
+    const result = await executeSql<RawEmployeeRow>(sql, params);
     const row = result.rows?.[0];
     return row ? mapRowToEmployee(row) : null;
   },
 
   /**
-   * Create a new employee record.
+   * Create a new employee record in PostgreSQL personal workspace.
    */
-  async createEmployee(data: CreateEmployeeInput, hrUserId?: number): Promise<Employee> {
+  async createEmployee(data: CreateEmployeeInput, ownerUserId: string): Promise<Employee> {
+    if (!ownerUserId) {
+      throw new Error('Owner user ID is required to create an employee record.');
+    }
+
     // 1. Resolve departmentId if string department was given
     let departmentId = data.departmentId || null;
     if (!departmentId && data.department) {
-      const depts = await masterService.getDepartments();
+      const depts = await masterService.getDepartments(ownerUserId);
       const match = depts.find(d => d.departmentName.toLowerCase() === data.department?.toLowerCase());
       if (match) {
         departmentId = match.departmentId;
       } else {
-        const createdDept = await masterService.createDepartment({ departmentName: data.department }, hrUserId);
+        const createdDept = await masterService.createDepartment({ departmentName: data.department }, ownerUserId);
         departmentId = createdDept.departmentId;
       }
     }
@@ -235,12 +252,12 @@ export const employeeService = {
     // 2. Resolve designationId if string designation was given
     let designationId = data.designationId || null;
     if (!designationId && data.designation) {
-      const desigs = await masterService.getDesignations();
+      const desigs = await masterService.getDesignations(ownerUserId);
       const match = desigs.find(d => d.designationName.toLowerCase() === data.designation?.toLowerCase());
       if (match) {
         designationId = match.designationId;
       } else {
-        const createdDesig = await masterService.createDesignation({ designationName: data.designation }, hrUserId);
+        const createdDesig = await masterService.createDesignation({ designationName: data.designation }, ownerUserId);
         designationId = createdDesig.designationId;
       }
     }
@@ -266,153 +283,144 @@ export const employeeService = {
 
     // 6. Normalize status
     const status = (data.employmentStatus || 'ONBOARDING').toUpperCase();
-
     const email = data.workEmail || data.personalEmail || null;
 
-    const binds = {
-      code: employeeCode,
-      firstName,
-      lastName: lastName || null,
-      email,
-      phone: data.phone || null,
-      departmentId,
-      designationId,
-      status,
-      hireDate: hireDateStr.slice(0, 10),
-      exitDate: exitDateStr ? exitDateStr.slice(0, 10) : null,
-      createdBy: hrUserId || null,
-      out_id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
-    };
-
     const sql = `
-      INSERT INTO HR_EMPLOYEES (
-        EMPLOYEE_CODE,
-        FIRST_NAME,
-        LAST_NAME,
-        WORK_EMAIL,
-        PHONE,
-        DEPARTMENT_ID,
-        DESIGNATION_ID,
-        EMPLOYMENT_STATUS,
-        HIRE_DATE,
-        EXIT_DATE,
-        CREATED_BY
-      ) VALUES (
-        :code,
-        :firstName,
-        :lastName,
-        :email,
-        :phone,
-        :departmentId,
-        :designationId,
-        :status,
-        TO_DATE(:hireDate, 'YYYY-MM-DD'),
-        CASE WHEN :exitDate IS NOT NULL THEN TO_DATE(:exitDate, 'YYYY-MM-DD') ELSE NULL END,
-        :createdBy
-      )
-      RETURNING EMPLOYEE_ID INTO :out_id
+      INSERT INTO hr_employees (
+        owner_user_id,
+        employee_code,
+        first_name,
+        last_name,
+        work_email,
+        phone,
+        department_id,
+        designation_id,
+        employment_status,
+        hire_date,
+        exit_date,
+        created_by
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING employee_id;
     `;
 
     try {
-      const result = await executeSql(sql, binds);
-      const outId = (result.outBinds as { out_id: number[] })?.out_id?.[0];
+      const result = await executeSql<{ employee_id: number }>(sql, [
+        ownerUserId,
+        employeeCode,
+        firstName,
+        lastName || null,
+        email,
+        data.phone || null,
+        departmentId,
+        designationId,
+        status,
+        hireDateStr.slice(0, 10),
+        exitDateStr ? exitDateStr.slice(0, 10) : null,
+        ownerUserId,
+      ]);
 
-      const created = (await this.getEmployeeById(outId))!;
+      const outId = result.rows?.[0]?.employee_id;
+      if (!outId) {
+        throw new Error('Failed to retrieve generated employee_id from insert.');
+      }
+
+      const created = (await this.getEmployeeById(outId, ownerUserId))!;
 
       await auditService.log({
-        hrUserId,
+        userId: ownerUserId,
         actionType: 'CREATE_EMPLOYEE',
         entityType: 'HR_EMPLOYEES',
-        entityId: created.employeeId,
+        entityId: String(created.employeeId),
         details: { employeeCode: created.employeeCode, name: created.name, status: created.employmentStatus },
       });
 
-      logger.info({ employeeId: created.employeeId, employeeCode: created.employeeCode }, 'Created employee in Oracle');
+      logger.info({ employeeId: created.employeeId, employeeCode: created.employeeCode, ownerUserId }, 'Created employee in personal workspace');
       return created;
     } catch (err) {
-      const error = err as Error;
-      if (error.message.includes('ORA-00001')) {
-        throw new Error(`Employee code "${employeeCode}" already exists. Please choose a unique code.`);
+      const error = err as Error & { code?: string };
+      if (error.code === '23505' || error.message.includes('unique constraint') || error.message.includes('already exists')) {
+        throw new Error(`Employee code "${employeeCode}" already exists in your workspace. Please choose a unique code.`);
       }
       throw error;
     }
   },
 
   /**
-   * Update permitted employee fields.
+   * Update permitted employee fields scoped to owner's workspace.
    */
-  async updateEmployee(employeeId: number, data: UpdateEmployeeInput, hrUserId?: number): Promise<Employee> {
-    const existing = await this.getEmployeeById(employeeId);
+  async updateEmployee(employeeId: number, data: UpdateEmployeeInput, ownerUserId: string): Promise<Employee> {
+    const existing = await this.getEmployeeById(employeeId, ownerUserId);
     if (!existing) {
-      throw new Error(`Employee with ID ${employeeId} not found.`);
+      throw new Error(`Employee with ID ${employeeId} not found in your workspace.`);
     }
 
-    const updates: string[] = ['UPDATED_AT = CURRENT_TIMESTAMP'];
-    const binds: oracledb.BindParameters = { employeeId };
+    const updates: string[] = ['updated_at = CURRENT_TIMESTAMP'];
+    const params: unknown[] = [employeeId, ownerUserId];
+    let paramIndex = 3;
 
     if (data.firstName !== undefined) {
-      updates.push('FIRST_NAME = :firstName');
-      (binds as Record<string, unknown>).firstName = data.firstName;
+      updates.push(`first_name = $${paramIndex++}`);
+      params.push(data.firstName);
     }
 
     if (data.lastName !== undefined) {
-      updates.push('LAST_NAME = :lastName');
-      (binds as Record<string, unknown>).lastName = data.lastName;
+      updates.push(`last_name = $${paramIndex++}`);
+      params.push(data.lastName);
     }
 
     if (data.workEmail !== undefined) {
-      updates.push('WORK_EMAIL = :workEmail');
-      (binds as Record<string, unknown>).workEmail = data.workEmail || null;
+      updates.push(`work_email = $${paramIndex++}`);
+      params.push(data.workEmail || null);
     }
 
     if (data.phone !== undefined) {
-      updates.push('PHONE = :phone');
-      (binds as Record<string, unknown>).phone = data.phone || null;
+      updates.push(`phone = $${paramIndex++}`);
+      params.push(data.phone || null);
     }
 
     if (data.departmentId !== undefined) {
-      updates.push('DEPARTMENT_ID = :departmentId');
-      (binds as Record<string, unknown>).departmentId = data.departmentId;
+      updates.push(`department_id = $${paramIndex++}`);
+      params.push(data.departmentId);
     }
 
     if (data.designationId !== undefined) {
-      updates.push('DESIGNATION_ID = :designationId');
-      (binds as Record<string, unknown>).designationId = data.designationId;
+      updates.push(`designation_id = $${paramIndex++}`);
+      params.push(data.designationId);
     }
 
     if (data.employmentStatus !== undefined) {
-      updates.push('EMPLOYMENT_STATUS = :status');
-      (binds as Record<string, unknown>).status = data.employmentStatus.toUpperCase();
+      updates.push(`employment_status = $${paramIndex++}`);
+      params.push(data.employmentStatus.toUpperCase());
     }
 
     if (data.hireDate !== undefined) {
-      updates.push("HIRE_DATE = TO_DATE(:hireDate, 'YYYY-MM-DD')");
-      (binds as Record<string, unknown>).hireDate = data.hireDate.slice(0, 10);
+      updates.push(`hire_date = $${paramIndex++}`);
+      params.push(data.hireDate.slice(0, 10));
     }
 
     if (data.exitDate !== undefined) {
       if (data.exitDate) {
-        updates.push("EXIT_DATE = TO_DATE(:exitDate, 'YYYY-MM-DD')");
-        (binds as Record<string, unknown>).exitDate = data.exitDate.slice(0, 10);
+        updates.push(`exit_date = $${paramIndex++}`);
+        params.push(data.exitDate.slice(0, 10));
       } else {
-        updates.push('EXIT_DATE = NULL');
+        updates.push('exit_date = NULL');
       }
     }
 
     const sql = `
-      UPDATE HR_EMPLOYEES
+      UPDATE hr_employees
       SET ${updates.join(', ')}
-      WHERE EMPLOYEE_ID = :employeeId
+      WHERE employee_id = $1 AND owner_user_id = $2
     `;
 
-    await executeSql(sql, binds);
-    const updated = (await this.getEmployeeById(employeeId))!;
+    await executeSql(sql, params);
+    const updated = (await this.getEmployeeById(employeeId, ownerUserId))!;
 
     await auditService.log({
-      hrUserId,
+      userId: ownerUserId,
       actionType: 'UPDATE_EMPLOYEE',
       entityType: 'HR_EMPLOYEES',
-      entityId: employeeId,
+      entityId: String(employeeId),
       details: { updatedFields: Object.keys(data) },
     });
 
@@ -420,12 +428,12 @@ export const employeeService = {
   },
 
   /**
-   * Transactional offboarding workflow:
-   * 1. Inserts offboarding record into HR_OFFBOARDING
-   * 2. Sets HR_EMPLOYEES.EMPLOYMENT_STATUS = 'OFFBOARDING' and EXIT_DATE = plannedExitDate
-   * 3. Logs action in HR_AUDIT_LOGS
+   * Transactional offboarding workflow scoped to owner's workspace:
+   * 1. Inserts offboarding record into hr_offboarding with owner_user_id
+   * 2. Sets hr_employees.employment_status = 'OFFBOARDING' and exit_date = plannedExitDate
+   * 3. Logs action in hr_audit_logs
    */
-  async offboardEmployee(employeeId: number, data: OffboardEmployeeInput, hrUserId?: number): Promise<{
+  async offboardEmployee(employeeId: number, data: OffboardEmployeeInput, ownerUserId: string): Promise<{
     employee: Employee;
     offboardingId: number;
   }> {
@@ -436,102 +444,95 @@ export const employeeService = {
 
     const noticeDate = data.noticeDate ? data.noticeDate.slice(0, 10) : new Date().toISOString().slice(0, 10);
 
-    const offboardingId = await withTransaction(async (conn) => {
-      // 1. Verify employee exists and can be offboarded
-      const empRes = await conn.execute<RawEmployeeRow>(
-        `SELECT EMPLOYEE_ID, EMPLOYEE_CODE, EMPLOYMENT_STATUS, FIRST_NAME, LAST_NAME
-         FROM HR_EMPLOYEES
-         WHERE EMPLOYEE_ID = :employeeId`,
-        { employeeId }
+    const offboardingId = await withTransaction(async (client) => {
+      // 1. Verify employee exists in owner workspace and can be offboarded
+      const empRes = await client.query<RawEmployeeRow>(
+        `SELECT employee_id, employee_code, employment_status, first_name, last_name
+         FROM hr_employees
+         WHERE employee_id = $1 AND owner_user_id = $2`,
+        [employeeId, ownerUserId]
       );
       const emp = empRes.rows?.[0];
       if (!emp) {
-        throw new Error(`Employee with ID ${employeeId} not found.`);
+        throw new Error(`Employee with ID ${employeeId} not found in your workspace.`);
       }
 
-      if (emp.EMPLOYMENT_STATUS === 'EXITED') {
+      if (emp.employment_status === 'EXITED') {
         throw new Error('Cannot schedule offboarding for an employee who has already exited.');
       }
 
-      // Check for existing pending offboarding
-      const existingOffboardRes = await conn.execute<{ OFFBOARDING_ID: number }>(
-        `SELECT OFFBOARDING_ID
-         FROM HR_OFFBOARDING
-         WHERE EMPLOYEE_ID = :employeeId AND CLEARANCE_STATUS != 'COMPLETED'`,
-        { employeeId }
+      // Check for existing pending offboarding in owner workspace
+      const existingOffboardRes = await client.query<{ offboarding_id: number }>(
+        `SELECT offboarding_id
+         FROM hr_offboarding
+         WHERE employee_id = $1 AND owner_user_id = $2 AND clearance_status != 'COMPLETED'`,
+        [employeeId, ownerUserId]
       );
       if ((existingOffboardRes.rows || []).length > 0) {
-        throw new Error('An active offboarding workflow already exists for this employee.');
+        throw new Error('An active offboarding workflow already exists for this employee in your workspace.');
       }
 
-      // 2. Insert into HR_OFFBOARDING
-      const offboardBinds = {
-        employeeId,
-        noticeDate,
-        plannedExitDate: plannedExitDate.slice(0, 10),
-        reason: data.exitReason || 'Scheduled transition',
-        notes: data.notes || null,
-        createdBy: hrUserId || null,
-        out_id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
-      };
-
+      // 2. Insert into hr_offboarding with owner_user_id
       const offboardSql = `
-        INSERT INTO HR_OFFBOARDING (
-          EMPLOYEE_ID,
-          NOTICE_DATE,
-          PLANNED_EXIT_DATE,
-          EXIT_REASON,
-          CLEARANCE_STATUS,
-          NOTES,
-          CREATED_BY
-        ) VALUES (
-          :employeeId,
-          TO_DATE(:noticeDate, 'YYYY-MM-DD'),
-          TO_DATE(:plannedExitDate, 'YYYY-MM-DD'),
-          :reason,
-          'PENDING',
-          :notes,
-          :createdBy
-        )
-        RETURNING OFFBOARDING_ID INTO :out_id
+        INSERT INTO hr_offboarding (
+          owner_user_id,
+          employee_id,
+          notice_date,
+          planned_exit_date,
+          exit_reason,
+          clearance_status,
+          notes,
+          contact_email,
+          created_by
+        ) VALUES ($1, $2, $3, $4, $5, 'PENDING', $6, $7, $8)
+        RETURNING offboarding_id;
       `;
 
-      const offboardResult = await conn.execute(offboardSql, offboardBinds);
-      const generatedId = (offboardResult.outBinds as { out_id: number[] })?.out_id?.[0];
+      const offboardResult = await client.query<{ offboarding_id: number }>(offboardSql, [
+        ownerUserId,
+        employeeId,
+        noticeDate,
+        plannedExitDate.slice(0, 10),
+        data.exitReason || 'Scheduled transition',
+        data.notes || null,
+        data.contactEmail || null,
+        ownerUserId,
+      ]);
+      const generatedId = offboardResult.rows?.[0]?.offboarding_id;
 
       // 3. Update employee lifecycle status and exit date
-      await conn.execute(
-        `UPDATE HR_EMPLOYEES
+      await client.query(
+        `UPDATE hr_employees
          SET 
-           EMPLOYMENT_STATUS = 'OFFBOARDING',
-           EXIT_DATE = TO_DATE(:plannedExitDate, 'YYYY-MM-DD'),
-           UPDATED_AT = CURRENT_TIMESTAMP
-         WHERE EMPLOYEE_ID = :employeeId`,
-        { plannedExitDate: plannedExitDate.slice(0, 10), employeeId }
+           employment_status = 'OFFBOARDING',
+           exit_date = $1,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE employee_id = $2 AND owner_user_id = $3`,
+        [plannedExitDate.slice(0, 10), employeeId, ownerUserId]
       );
 
       // 4. Record audit log
       await auditService.log(
         {
-          hrUserId,
+          userId: ownerUserId,
           actionType: 'OFFBOARD_EMPLOYEE',
           entityType: 'HR_OFFBOARDING',
-          entityId: generatedId,
+          entityId: String(generatedId),
           details: {
             employeeId,
             plannedExitDate,
             reason: data.exitReason,
           },
         },
-        conn
+        client
       );
 
-      logger.info({ employeeId, offboardingId: generatedId, plannedExitDate }, 'Offboarding initiated in Oracle transaction');
+      logger.info({ employeeId, offboardingId: generatedId, plannedExitDate, ownerUserId }, 'Offboarding initiated in personal workspace');
       return generatedId;
     });
 
     // 5. Fetch updated employee record after transaction has successfully committed
-    const updated = (await this.getEmployeeById(employeeId))!;
+    const updated = (await this.getEmployeeById(employeeId, ownerUserId))!;
     return { employee: updated, offboardingId };
   },
 };

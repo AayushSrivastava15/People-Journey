@@ -3,8 +3,8 @@
 A human-centric employee lifecycle management workspace for onboarding, offboarding, milestone communications, and exit interviews.
 
 Built with a clean separation of concerns:
-- **`frontend/`**: Standalone React 19 + TypeScript web application powered by Vite, Tailwind CSS, shadcn/ui, Motion, Firebase Authentication, and TanStack Query.
-- **`backend/`**: Express 5 + TypeScript REST API integrated with **Oracle Database Free** (Thin mode connection pool) and **Firebase Admin SDK** for enterprise HR role-based access control.
+- **`frontend/`**: Standalone React 19 + TypeScript web application powered by Vite, Tailwind CSS, shadcn/ui, Motion, Firebase Authentication (Google Sign-In), and TanStack Query.
+- **`backend/`**: Express 5 + TypeScript REST API integrated with **Supabase PostgreSQL** (transaction pooler on port 6543) and **Firebase Admin SDK** for single-role personal workspace HR management and strict data isolation.
 - **`docs/`**: Architectural specifications, OpenAPI contract definitions, and roadmap documentation.
 
 ---
@@ -16,19 +16,19 @@ People-Journey-HR-Portal/
 ├── frontend/
 │   ├── public/                 # Static assets (favicons, robots.txt)
 │   ├── src/
-│   │   ├── api/                # Client API integration
+│   │   ├── api/                # Client API integration & React Query hooks
 │   │   ├── assets/             # Brand graphics & icons
 │   │   ├── components/
-│   │   │   ├── layout/         # Shell & error boundaries
+│   │   │   ├── layout/         # Shell, ProtectedRoute, ErrorBoundary
 │   │   │   └── ui/             # shadcn/ui components (55 primitives)
-│   │   ├── context/            # Application state contexts
+│   │   ├── context/            # Firebase & PostgreSQL synchronized AuthContext
 │   │   ├── data/               # Lifecycle & employee demo data
 │   │   ├── hooks/              # Custom React hooks (use-toast, use-mobile)
-│   │   ├── pages/              # Landing page, dashboard, login placeholder
-│   │   ├── services/           # Business-facing client services
+│   │   ├── pages/              # Landing page, personal & HR dashboards, login
+│   │   ├── services/           # Firebase client authentication services
 │   │   ├── types/              # Domain TypeScript types
 │   │   ├── utils/              # Helper utilities (cn class merge)
-│   │   ├── App.tsx             # Root application router
+│   │   ├── App.tsx             # Root application router with role guards
 │   │   ├── index.css           # Design tokens, typography & Tailwind setup
 │   │   └── main.tsx            # React DOM mounting
 │   ├── .env.example            # Frontend environment template
@@ -37,26 +37,30 @@ People-Journey-HR-Portal/
 │   ├── index.html              # HTML entry point
 │   ├── package.json            # Frontend package manifest
 │   ├── tsconfig.json           # Frontend TypeScript configuration
-│   └── vite.config.ts          # Clean Vite configuration
+│   └── vite.config.ts          # Vite 7 configuration
 │
 ├── backend/
 │   ├── src/
-│   │   ├── config/             # Environment & PostgreSQL connection
-│   │   ├── controllers/        # Request handlers
-│   │   ├── middleware/         # Logging & error handling
+│   │   ├── config/             # Supabase PostgreSQL pool, env validation, Firebase Admin
+│   │   ├── controllers/        # Request handlers (auth, employees, master, dashboard, health)
+│   │   ├── middleware/         # Firebase auth verification, role guards, Pino logging, error handling
+│   │   ├── migrations/         # Repeatable PostgreSQL schema migrations (001_initial_schema.sql)
 │   │   ├── models/             # Zod validation schemas
 │   │   ├── routes/             # REST route definitions
-│   │   ├── services/           # Business logic layer
+│   │   ├── services/           # Business logic layer (audit, dashboard, employee, master, user)
 │   │   ├── utils/              # Pino logger
 │   │   ├── app.ts              # Express application setup
 │   │   └── server.ts           # Server bootstrap
+│   ├── scripts/
+│   │   ├── migrate.ts          # Session-pooler migration runner (port 5432)
+│   │   └── provision-admin.ts  # CLI utility to provision HR administrators in PostgreSQL
 │   ├── tests/
-│   │   ├── unit/               # Unit tests
-│   │   └── integration/        # Integration tests
+│   │   ├── unit/               # Unit tests (auth, schemas, health, pool helpers)
+│   │   └── integration/        # Integration tests (PostgreSQL transactions, audit logging)
 │   ├── .env.example            # Backend environment template
 │   ├── .gitignore              # Backend gitignore
 │   ├── package.json            # Backend package manifest
-│   ├── README.md               # Backend architecture & Spring Boot roadmap
+│   ├── README.md               # Backend architecture & Supabase setup instructions
 │   └── tsconfig.json           # Backend TypeScript configuration
 │
 ├── docs/
@@ -76,14 +80,25 @@ People-Journey-HR-Portal/
 
 ### 1. Install Dependencies
 
-You can install all dependencies from the root:
 ```bash
 npm install
-# or
-pnpm install
 ```
 
-### 2. Run the Frontend (People Journey Web App)
+### 2. Configure Database & Environment
+
+In `backend/.env`:
+```ini
+DATABASE_URL=postgresql://postgres.qvoebbqpnqzjktnwaoke:[YOUR-PASSWORD]@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true
+DIRECT_URL=postgresql://postgres.qvoebbqpnqzjktnwaoke:[YOUR-PASSWORD]@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres
+FIREBASE_PROJECT_ID=peoplejourney-4d586
+```
+
+Apply database migrations:
+```bash
+npm run db:migrate --prefix backend
+```
+
+### 3. Run the Frontend (People Journey Web App)
 
 ```bash
 npm run dev
@@ -92,14 +107,14 @@ npm run dev:frontend
 ```
 The application will start on **`http://localhost:3000`**.
 
-### 3. Run the Backend API Server
+### 4. Run the Backend API Server
 
 ```bash
 npm run dev:backend
 ```
-The API server will listen on **`http://localhost:5000`** (Health check endpoint: `http://localhost:5000/api/healthz`).
+The API server will listen on **`http://localhost:5000`** (Health check: `http://localhost:5000/api/healthz`).
 
-### 4. Build for Production
+### 5. Build for Production
 
 ```bash
 # Build both frontend and backend
@@ -112,31 +127,28 @@ npm run build:frontend
 npm run build:backend
 ```
 
-### 5. Typecheck
+### 6. Typecheck & Tests
 
 ```bash
+# Run TypeScript compilation checks
 npm run typecheck
+
+# Run backend test suite
+npm run test --prefix backend
 ```
 
 ---
 
-## Design System & Palette
+## Database & Authentication Architecture
 
-- **Main Background**: `#FFFBF7` (Soft cream)
-- **Secondary Background**: `#FFF4E8`
-- **Primary Accent**: `#EFB7C8` (Blush pink)
-- **Soft Peach**: `#FFE2D0`
-- **Lavender**: `#EAE4FA`
-- **Primary Text**: `#443942` (Charcoal brown)
-- **Secondary Text**: `#81747D`
-- **Typography**: `DM Sans` (Headings & UI) and `DM Serif Display` (Editorial accents)
+- **Primary Database**: **Supabase PostgreSQL** (`ap-northeast-1`, AWS Tokyo).
+  - Normal runtime queries utilize `DATABASE_URL` (Transaction pooler, Port 6543).
+  - DDL Migrations utilize `DIRECT_URL` (Session pooler, Port 5432).
+  - Tables: `app_users`, `hr_departments`, `hr_designations`, `hr_employees`, `hr_offboarding`, `hr_audit_logs`, `user_notifications`, `schema_migrations`.
+- **Identity Provider**: **Firebase Authentication** with genuine Google Sign-In.
+  - Backend verifies ID tokens using Firebase Admin SDK.
+  - Open registration: any person with a valid Google account can sign in without domain restriction or approval.
+  - First-time Google logins automatically register into `app_users` with the default role `user`.
+  - Every authenticated user receives full feature permissions within their own isolated workspace.
+  - Server-enforced per-user data isolation: all employee and offboarding queries are strictly scoped to the authenticated owner's `app_users.id`. Users cannot view or modify other users' records.
 
----
-
-## Backend & Database Architecture
-
-The backend is built with **Node.js, Express 5, and TypeScript**, connecting directly via `oracledb` Thin mode to **Oracle Database Free (`FREEPDB1`)** hosted on a private Debian Home Server (`100.94.73.89:1521`).
-- Application Schema: `PEOPLE_JOURNEY`
-- 7 Core Tables: `HR_DEPARTMENTS`, `HR_DESIGNATIONS`, `HR_USERS`, `HR_EMPLOYEES`, `HR_ONBOARDING`, `HR_OFFBOARDING`, `HR_AUDIT_LOGS`
-- Real-time audit trails and transactional lifecycle operations (onboarding, offboarding).
-- Full details and operational instructions are available in [`backend/README.md`](backend/README.md).

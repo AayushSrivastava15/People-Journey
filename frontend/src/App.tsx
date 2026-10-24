@@ -23,7 +23,7 @@ function DashboardRoute() {
   );
 }
 
-function ProtectedDashboardRoute() {
+function ProtectedWorkspaceRoute() {
   return (
     <ProtectedRoute>
       <DashboardRoute />
@@ -37,20 +37,19 @@ function Router() {
       <Switch>
         <Route path="/" component={LandingPage} />
         <Route path="/login" component={LoginPage} />
-        <Route path="/dashboard" component={ProtectedDashboardRoute} />
-        <Route path="/dashboard/employees" component={ProtectedDashboardRoute} />
-        <Route path="/dashboard/add-employee" component={ProtectedDashboardRoute} />
-        <Route path="/dashboard/schedule-offboarding" component={ProtectedDashboardRoute} />
-        <Route path="/dashboard/onboarding" component={ProtectedDashboardRoute} />
-        <Route path="/dashboard/offboarding" component={ProtectedDashboardRoute} />
-        <Route path="/dashboard/departments" component={ProtectedDashboardRoute} />
-        <Route path="/dashboard/notifications" component={ProtectedDashboardRoute} />
-        <Route path="/dashboard/templates" component={ProtectedDashboardRoute} />
-        <Route path="/dashboard/notification-history" component={ProtectedDashboardRoute} />
-        <Route path="/dashboard/exit-interviews" component={ProtectedDashboardRoute} />
-        <Route path="/dashboard/interview-responses" component={ProtectedDashboardRoute} />
-        <Route path="/dashboard/hr-users" component={ProtectedDashboardRoute} />
-        <Route path="/dashboard/settings" component={ProtectedDashboardRoute} />
+        <Route path="/dashboard" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/settings" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/employees" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/add-employee" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/schedule-offboarding" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/onboarding" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/offboarding" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/departments" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/notifications" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/templates" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/notification-history" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/exit-interviews" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/interview-responses" component={ProtectedWorkspaceRoute} />
         <Route component={NotFound} />
       </Switch>
     </RoutedErrorBoundary>

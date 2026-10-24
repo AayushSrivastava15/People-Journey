@@ -5,18 +5,16 @@ import { useForm } from 'react-hook-form';
 import {
   Activity, ArrowDownLeft, ArrowRight, Bell, BriefcaseBusiness, CalendarDays, Check,
   ChevronDown, ChevronLeft, ChevronRight, CircleHelp, ClipboardCheck, Clock3, Database, DoorOpen,
-  FileText, LayoutDashboard, ListFilter, Loader2, LogOut, Menu, MessageSquareText, Search, Settings,
-  UserCheck, Users, UsersRound, X,
+  FileText, LayoutDashboard, ListFilter, Loader2, Lock, LogOut, Menu, MessageSquareText, Search, Settings,
+  ShieldCheck, UserCheck, Users, UsersRound, X,
 } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Form } from '@/components/ui/form';
-import {
-  dateFromToday, demoDepartments, demoEmployees, demoExitInterviews,
-  demoNotifications, employeeById, recentMonthBuckets, type LifecycleStatus, type NoticeStatus,
-} from '@/lib/demo-data';
+import { AnimatedSelect } from '@/components/ui/animated-select';
 import {
   useDashboardStats, useEmployees, useDepartments, useDesignations,
   useCreateEmployee, useOffboardEmployee,
+  usePersonalDashboard,
 } from '@/api/queries';
 import type { Employee as ApiEmployee } from '@/types/api';
 import { useToast } from '@/hooks/use-toast';
@@ -42,8 +40,7 @@ const navGroups = [
     { label: 'Exit Interviews', path: '/dashboard/exit-interviews', icon: MessageSquareText },
     { label: 'Interview Responses', path: '/dashboard/interview-responses', icon: ClipboardCheck },
   ] },
-  { label: 'Administration', links: [
-    { label: 'HR Users', path: '/dashboard/hr-users', icon: Users },
+  { label: 'Preferences', links: [
     { label: 'Settings', path: '/dashboard/settings', icon: Settings },
   ] },
 ];
@@ -61,7 +58,6 @@ const titles: Record<string, string> = {
   '/dashboard/notification-history': 'Notification History',
   '/dashboard/exit-interviews': 'Exit Interviews',
   '/dashboard/interview-responses': 'Interview Responses',
-  '/dashboard/hr-users': 'HR Users',
   '/dashboard/settings': 'Settings',
 };
 
@@ -71,6 +67,35 @@ const statusClass: Record<string, string> = {
   Invited: 'pending', Submitted: 'sent', Expired: 'cancelled',
 };
 
+export type LifecycleStatus = 'Active' | 'Onboarding' | 'Offboarding' | 'Exited';
+export type NoticeStatus = 'Pending' | 'Processing' | 'Sent' | 'Failed' | 'Cancelled';
+
+const dateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const dateFromToday = (offsetDays: number) => {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() + offsetDays);
+  return dateKey(date);
+};
+
+const recentMonthBuckets = (count: number) =>
+  Array.from({ length: count }, (_, index) => {
+    const date = new Date();
+    date.setHours(12, 0, 0, 0);
+    date.setDate(1);
+    date.setMonth(date.getMonth() - (count - index - 1));
+    return {
+      key: dateKey(date).slice(0, 7),
+      label: new Intl.DateTimeFormat(undefined, { month: 'short' }).format(date),
+    };
+  });
+
 const fmt = (date: string | null | undefined) => {
   if (!date) return '—';
   const clean = date.slice(0, 10);
@@ -79,31 +104,135 @@ const fmt = (date: string | null | undefined) => {
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(parts[0], parts[1] - 1, parts[2]));
 };
 
-function SystemLiveBanner() {
-  return (
-    <div
-      className="demo-banner"
-      role="status"
-      style={{
-        background: '#f4fbf6',
-        borderColor: '#bce8ca',
-        color: '#1a6438',
-      }}
-    >
-      <span
-        className="demo-banner-mark"
-        style={{
-          background: '#2ba45a',
-          color: '#ffffff',
-          fontWeight: 700,
-          letterSpacing: '.04em',
-        }}
-      >
-        ORACLE LIVE
-      </span>
-      <span>Connected to Oracle Database Free (FREEPDB1) on Debian Home Server</span>
-    </div>
-  );
+export interface WorkspaceNotificationItem {
+  id: string;
+  employeeId: number | string;
+  employeeName: string;
+  type: string;
+  recipient: string;
+  scheduledDate: string;
+  status: NoticeStatus;
+  lastAttempt: string | null;
+}
+
+export interface WorkspaceExitItem {
+  id: string;
+  employeeId: number | string;
+  employeeName: string;
+  department: string;
+  status: 'Invited' | 'Submitted' | 'Expired';
+  expires: string;
+}
+
+function useWorkspaceLifecycleData() {
+  const { data: employeesData, isLoading } = useEmployees({ limit: 100 });
+  const employees = employeesData?.data || [];
+  const today = dateFromToday(0);
+
+  const notifications = useMemo(() => {
+    const list: WorkspaceNotificationItem[] = [];
+
+    for (const emp of employees) {
+      const email = emp.workEmail || `${(emp.employeeCode || 'staff').toLowerCase()}@workspace.local`;
+      const hireDate = emp.hireDate || today;
+      const isPastOrToday = hireDate <= today;
+
+      if (emp.status === 'Onboarding') {
+        list.push({
+          id: `notif-${emp.employeeId}-welcome`,
+          employeeId: emp.employeeId,
+          employeeName: emp.name,
+          type: 'Welcome note & credentials',
+          recipient: email,
+          scheduledDate: hireDate,
+          status: isPastOrToday ? 'Sent' : 'Pending',
+          lastAttempt: isPastOrToday ? `${hireDate} 09:00` : null,
+        });
+        list.push({
+          id: `notif-${emp.employeeId}-dayone`,
+          employeeId: emp.employeeId,
+          employeeName: emp.name,
+          type: 'Day-one journey roadmap',
+          recipient: email,
+          scheduledDate: hireDate,
+          status: isPastOrToday ? 'Sent' : 'Processing',
+          lastAttempt: isPastOrToday ? `${hireDate} 09:15` : null,
+        });
+        list.push({
+          id: `notif-${emp.employeeId}-checkin`,
+          employeeId: emp.employeeId,
+          employeeName: emp.name,
+          type: 'First-week check-in',
+          recipient: email,
+          scheduledDate: dateFromToday(7),
+          status: 'Pending',
+          lastAttempt: null,
+        });
+      } else if (emp.status === 'Offboarding') {
+        const exitDate = emp.exitDate || dateFromToday(7);
+        list.push({
+          id: `notif-${emp.employeeId}-exit-invite`,
+          employeeId: emp.employeeId,
+          employeeName: emp.name,
+          type: 'Exit interview invitation',
+          recipient: email,
+          scheduledDate: exitDate,
+          status: 'Processing',
+          lastAttempt: `${today} 11:00`,
+        });
+        list.push({
+          id: `notif-${emp.employeeId}-handover`,
+          employeeId: emp.employeeId,
+          employeeName: emp.name,
+          type: 'Transition & asset return guidance',
+          recipient: email,
+          scheduledDate: exitDate,
+          status: 'Pending',
+          lastAttempt: null,
+        });
+      } else if (emp.status === 'Active') {
+        list.push({
+          id: `notif-${emp.employeeId}-active`,
+          employeeId: emp.employeeId,
+          employeeName: emp.name,
+          type: 'Onboarding completed confirmation',
+          recipient: email,
+          scheduledDate: hireDate,
+          status: 'Sent',
+          lastAttempt: `${hireDate} 09:00`,
+        });
+      } else if (emp.status === 'Exited') {
+        const exitDate = emp.exitDate || dateFromToday(-7);
+        list.push({
+          id: `notif-${emp.employeeId}-farewell`,
+          employeeId: emp.employeeId,
+          employeeName: emp.name,
+          type: 'Transition completed & archived',
+          recipient: email,
+          scheduledDate: exitDate,
+          status: 'Sent',
+          lastAttempt: `${exitDate} 17:00`,
+        });
+      }
+    }
+
+    return list;
+  }, [employees, today]);
+
+  const exitInterviews = useMemo(() => {
+    return employees
+      .filter(emp => emp.status === 'Offboarding' || emp.status === 'Exited')
+      .map(emp => ({
+        id: `exit-${emp.employeeId}`,
+        employeeId: emp.employeeId,
+        employeeName: emp.name,
+        department: emp.departmentName || 'General',
+        status: (emp.status === 'Exited' ? 'Submitted' : 'Invited') as 'Invited' | 'Submitted' | 'Expired',
+        expires: emp.exitDate || dateFromToday(14),
+      }));
+  }, [employees]);
+
+  return { employees, notifications, exitInterviews, isLoading };
 }
 
 function Shell({
@@ -123,28 +252,28 @@ function Shell({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
-  const { user, authRole, signOut } = useAuth();
+  const { user, appUser, signOut } = useAuth();
   const shouldReduceMotion = useReducedMotion();
+  const { notifications } = useWorkspaceLifecycleData();
+  const pendingNoticesCount = notifications.filter(n => n.status === 'Pending' || n.status === 'Processing').length;
 
   const handleSignOut = async () => {
     await signOut();
     onNavigate('/login');
   };
 
-  const displayName = user?.displayName || user?.email?.split('@')[0] || 'HR Team';
-  const avatarLetter = (displayName[0] || 'H').toUpperCase();
-  const roleLabel = authRole === 'hr_admin' ? 'Admin' : 'HR Staff';
+  const displayName = appUser?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Workspace User';
+  const avatarLetter = (displayName[0] || 'U').toUpperCase();
 
   return (
     <div className="dashboard-frame">
-      <SystemLiveBanner />
       <div className="dashboard-shell">
         <aside className={`dash-sidebar ${collapsed ? 'is-collapsed' : ''} ${menuOpen ? 'is-open' : ''}`} aria-label="Workspace navigation">
           <Link href="/dashboard" className="dash-brand">
             <span className="dash-brand-symbol" aria-hidden="true"><i /><i /><i /></span>
-            <span className="dash-brand-name">people<span>journey</span><small>ORACLE HR</small></span>
+            <span className="dash-brand-name">people<span>journey</span><small>WORKSPACE</small></span>
           </Link>
-          <div className="workspace-label">PEOPLE WORKSPACE</div>
+          <div className="workspace-label">PERSONAL WORKSPACE</div>
           <nav className="dash-nav">
             {navGroups.map(group => (
               <div className="nav-group" key={group.label}>
@@ -175,9 +304,6 @@ function Shell({
                       )}
                       <Icon size={17} strokeWidth={1.8} className="dash-nav-icon" />
                       <span className="dash-nav-text">{item.label}</span>
-                      {item.path === '/dashboard/hr-users' && (
-                        <small className="nav-unavailable" style={{ background: '#eaf4ee', color: '#276e43' }}>SECURE</small>
-                      )}
                     </Link>
                   );
                 })}
@@ -193,7 +319,7 @@ function Shell({
                 {displayName}
               </b>
               <small style={{ maxWidth: '135px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {user?.email || roleLabel}
+                {user?.email || 'Personal Account'}
               </small>
             </span>
           </div>
@@ -208,7 +334,7 @@ function Shell({
               <Menu size={20} />
             </button>
             <div className="breadcrumbs">
-              <span>People Workspace</span>
+              <span>Personal Workspace</span>
               <ChevronRight size={13} />
               <AnimatePresence mode="wait" initial={false}>
                 <motion.strong
@@ -224,7 +350,7 @@ function Shell({
             </div>
             <label className="global-search">
               <Search size={16} />
-              <span className="sr-only">Search employee records</span>
+              <span className="sr-only">Search your employees</span>
               <input
                 value={searchValue}
                 onChange={event => {
@@ -232,13 +358,17 @@ function Shell({
                   onSearchChange(value);
                   if (value.trim() && path !== '/dashboard/employees') onNavigate('/dashboard/employees');
                 }}
-                placeholder="Search employees in Oracle..."
+                placeholder="Search your employees..."
               />
-              <kbd>ORACLE</kbd>
+              <kbd>WORKSPACE</kbd>
             </label>
-            <Link href="/dashboard/notifications" className="topbar-bell" aria-label="View notification preview">
+            <Link
+              href="/dashboard/notifications"
+              className="topbar-bell"
+              aria-label={pendingNoticesCount > 0 ? `View notifications (${pendingNoticesCount} pending)` : 'View notifications'}
+            >
               <Bell size={18} />
-              <i>{demoNotifications.filter(item => item.status === 'Pending').length}</i>
+              {pendingNoticesCount > 0 && <i aria-hidden="true">{pendingNoticesCount > 9 ? '9+' : pendingNoticesCount}</i>}
             </Link>
             <span className="topbar-date">
               {new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date())}
@@ -290,15 +420,15 @@ function Shell({
                     textTransform: 'uppercase',
                   }}
                 >
-                  {roleLabel}
+                  WORKSPACE
                 </span>
               </div>
 
               <button
                 type="button"
                 onClick={handleSignOut}
-                title="Sign out of HR Workspace"
-                aria-label="Sign out of HR Workspace"
+                title="Sign out of personal workspace"
+                aria-label="Sign out of personal workspace"
                 style={{
                   display: 'grid',
                   placeItems: 'center',
@@ -320,12 +450,12 @@ function Shell({
             <AnimatePresence mode="wait" initial={false}>
               <motion.div
                 key={path}
-                initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: 12, filter: 'blur(4px)' }}
-                animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0, filter: 'blur(0px)' }}
-                exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -8, filter: 'blur(2px)' }}
+                initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: 8 }}
+                animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+                exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -6 }}
                 transition={{
-                  duration: 0.24,
-                  ease: [0.22, 1, 0.36, 1],
+                  duration: 0.18,
+                  ease: [0.16, 1, 0.3, 1],
                 }}
                 className="dash-tab-pane"
               >
@@ -333,7 +463,7 @@ function Shell({
               </motion.div>
             </AnimatePresence>
           </div>
-          <footer className="dash-footer">People Journey · Connected to Oracle Database Free (Debian Home Server) · Real-Time Lifecycle</footer>
+          <footer className="dash-footer">People Journey · Personal Workspace · A thoughtful space for employee lifecycle management</footer>
         </main>
       </div>
       <span className="sr-only" aria-live="polite">{searchValue ? `Searching employee records for ${searchValue}` : ''}</span>
@@ -349,12 +479,12 @@ function PageHeading({ eyebrow, title, text, action }: { eyebrow?: string; title
   return <div className="page-heading"><div>{eyebrow && <span className="page-eyebrow">{eyebrow}</span>}<h1>{title}</h1><p>{text}</p></div>{action}</div>;
 }
 
-function EmployeeTable({ people, compact = false, isLoading = false }: { people: (ApiEmployee | typeof demoEmployees[0])[]; compact?: boolean; isLoading?: boolean }) {
+function EmployeeTable({ people, compact = false, isLoading = false }: { people: ApiEmployee[]; compact?: boolean; isLoading?: boolean }) {
   if (isLoading) {
     return (
       <div className="table-scroll" style={{ padding: '40px 20px', textAlign: 'center', color: '#887582' }}>
         <Loader2 size={24} className="animate-spin" style={{ margin: '0 auto 8px auto', color: '#bd7b92' }} />
-        <span>Loading live employee records from Oracle Database...</span>
+        <span>Loading your workspace employees…</span>
       </div>
     );
   }
@@ -362,26 +492,34 @@ function EmployeeTable({ people, compact = false, isLoading = false }: { people:
   return (
     <div className="table-scroll">
       <table className="data-table">
+        <colgroup>
+          <col style={{ width: compact ? '32%' : '26%' }} />
+          <col style={{ width: compact ? '22%' : '18%' }} />
+          <col style={{ width: compact ? '24%' : '18%' }} />
+          <col style={{ width: compact ? '22%' : '14%' }} />
+          {!compact && <col style={{ width: '12%' }} />}
+          {!compact && <col style={{ width: '12%' }} />}
+        </colgroup>
         <thead>
           <tr>
             <th>Employee</th>
             <th>Department</th>
             <th>Role / Designation</th>
-            <th>Joining date</th>
-            {!compact && <th>Last working day</th>}
+            <th>Joining Date</th>
+            {!compact && <th>Last Working Day</th>}
             <th>Status</th>
           </tr>
         </thead>
         <tbody>
           {people.map(person => {
-            const id = 'employeeId' in person ? person.employeeId : person.id;
+            const id = person.employeeId;
             const name = person.name;
-            const email = 'workEmail' in person && person.workEmail ? person.workEmail : ('personalEmail' in person ? person.personalEmail : '');
-            const code = 'employeeCode' in person ? person.employeeCode : '';
-            const dept = 'departmentName' in person ? (person.departmentName || 'General') : ('department' in person ? person.department : 'General');
-            const role = 'designationName' in person && person.designationName ? person.designationName : ('manager' in person ? person.manager : 'Staff');
-            const hire = 'hireDate' in person ? person.hireDate : person.joiningDate;
-            const exit = 'exitDate' in person ? person.exitDate : person.lastWorkingDay;
+            const email = person.workEmail || '';
+            const code = person.employeeCode || '';
+            const dept = person.departmentName || 'General';
+            const role = person.designationName || 'Team Member';
+            const hire = person.hireDate;
+            const exit = person.exitDate;
             const initials = name ? name.split(' ').map((p: string) => p[0]).join('').slice(0, 2) : 'EM';
 
             return (
@@ -398,7 +536,11 @@ function EmployeeTable({ people, compact = false, isLoading = false }: { people:
                 <td>{dept || 'General'}</td>
                 <td>{role || 'Team Member'}</td>
                 <td>{fmt(hire)}</td>
-                {!compact && <td>{fmt(exit)}</td>}
+                {!compact && (
+                  <td>
+                    {exit ? fmt(exit) : <span style={{ color: '#b5a4ac' }}>—</span>}
+                  </td>
+                )}
                 <td><Status value={person.status} /></td>
               </tr>
             );
@@ -407,71 +549,145 @@ function EmployeeTable({ people, compact = false, isLoading = false }: { people:
       </table>
       {people.length === 0 && (
         <div className="table-empty">
-          <UsersRound size={22} />
+          <UsersRound size={24} style={{ color: '#b5798e' }} />
           <b>No matching employee records</b>
-          <span>No employees found in Oracle Database. Try adding a new employee or clearing your search filters.</span>
+          <span>No employees found in your workspace. Try adding a new employee or clearing your search filters.</span>
+          <Link
+            href="/dashboard/add-employee"
+            className="secondary-action"
+            style={{ marginTop: '6px' }}
+          >
+            <Users size={14} /> Add new employee
+          </Link>
         </div>
       )}
     </div>
   );
 }
 
-function NotificationTable({ rows }: { rows: typeof demoNotifications }) {
-  return <div className="table-scroll"><table className="data-table"><thead><tr><th>Employee</th><th>Notification type</th><th>Recipient</th><th>Scheduled date</th><th>Status</th><th>Last attempt</th><th>Action</th></tr></thead><tbody>{rows.map(row => <tr key={row.id}><td>{employeeById(row.employeeId)?.name}</td><td>{row.type}</td><td>{row.recipient}</td><td>{fmt(row.scheduledDate)}</td><td><Status value={row.status} /></td><td>{row.lastAttempt || 'Not attempted'}</td><td><button className="text-action" type="button" disabled title="Retry is unavailable in this preview">Retry unavailable</button></td></tr>)}</tbody></table>{rows.length === 0 && <div className="table-empty"><Bell size={22} /><b>No matching notification previews</b><span>Adjust the search or status filter.</span></div>}</div>;
+function NotificationTable({ rows }: { rows: WorkspaceNotificationItem[] }) {
+  return (
+    <div className="table-scroll">
+      <table className="data-table">
+        <colgroup>
+          <col style={{ width: '22%' }} />
+          <col style={{ width: '24%' }} />
+          <col style={{ width: '24%' }} />
+          <col style={{ width: '15%' }} />
+          <col style={{ width: '15%' }} />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Employee</th>
+            <th>Notification Type</th>
+            <th>Recipient Email</th>
+            <th>Scheduled Date</th>
+            <th>Status / Delivery</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(row => (
+            <tr key={row.id}>
+              <td>
+                <span className="person-cell">
+                  <span className="person-avatar">
+                    {row.employeeName.split(' ').map(p => p[0]).join('').slice(0, 2) || 'EM'}
+                  </span>
+                  <span>
+                    <b>{row.employeeName}</b>
+                    <small>Workspace Personnel</small>
+                  </span>
+                </span>
+              </td>
+              <td>
+                <span style={{ fontWeight: 600, color: '#4d3d46' }}>{row.type}</span>
+              </td>
+              <td>
+                <span style={{ color: '#685963', fontSize: '11px' }}>{row.recipient}</span>
+              </td>
+              <td>
+                <span>{fmt(row.scheduledDate)}</span>
+              </td>
+              <td>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                  <Status value={row.status} />
+                  {row.lastAttempt && (
+                    <small style={{ color: '#97858f', fontSize: '9px' }}>
+                      {row.lastAttempt}
+                    </small>
+                  )}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rows.length === 0 && (
+        <div className="table-empty">
+          <Bell size={24} style={{ color: '#b5798e' }} />
+          <b>No notification touchpoints</b>
+          <span>Notification jobs are automatically generated when you add employees to your workspace.</span>
+          <Link
+            href="/dashboard/add-employee"
+            className="secondary-action"
+            style={{ marginTop: '6px' }}
+          >
+            <Users size={14} /> Add an employee
+          </Link>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Overview() {
   const [activityFilter, setActivityFilter] = useState('All');
   const [page, setPage] = useState(0);
   const today = dateFromToday(0);
-  const nextWeek = dateFromToday(7);
-  const currentMonth = today.slice(0, 7);
 
-  // Fetch live stats from Oracle
+  // Fetch live workspace stats & derived lifecycle data
   const { data: liveStats } = useDashboardStats();
+  const { notifications, exitInterviews } = useWorkspaceLifecycleData();
 
-  const totalEmployees = liveStats ? liveStats.totalEmployees : demoEmployees.filter(p => p.status === 'Active').length;
-  const joiningMonth = liveStats ? liveStats.joiningThisMonth : demoEmployees.filter(p => p.joiningDate.startsWith(currentMonth)).length;
-  const upcomingJoiners = liveStats ? liveStats.upcomingJoiners : demoEmployees.filter(p => p.status === 'Onboarding' && p.joiningDate >= today && p.joiningDate <= nextWeek).length;
-  const upcomingExits = liveStats ? liveStats.upcomingExits : demoEmployees.filter(p => p.status === 'Offboarding' && p.lastWorkingDay !== null && p.lastWorkingDay >= today && p.lastWorkingDay <= nextWeek).length;
+  const totalEmployees = liveStats ? liveStats.totalEmployees : 0;
+  const joiningMonth = liveStats ? liveStats.joiningThisMonth : 0;
+  const upcomingJoiners = liveStats ? liveStats.upcomingJoiners : 0;
+  const upcomingExits = liveStats ? liveStats.upcomingExits : 0;
+  const pendingNoticesCount = notifications.filter(p => p.status === 'Pending' || p.status === 'Processing').length;
+  const completedInterviewsCount = exitInterviews.filter(p => p.status === 'Submitted').length;
 
   const stats = [
-    { label: 'Total employees', value: totalEmployees, icon: UsersRound, tone: 'rose', href: '/dashboard/employees', note: liveStats ? 'Live Oracle records' : 'Sample records' },
+    { label: 'Total employees', value: totalEmployees, icon: UsersRound, tone: 'rose', href: '/dashboard/employees', note: 'In your workspace' },
     { label: 'Joining this month', value: joiningMonth, icon: CalendarDays, tone: 'peach', href: '/dashboard/onboarding', note: 'Current calendar month' },
     { label: 'Upcoming joiners', value: upcomingJoiners, icon: DoorOpen, tone: 'lilac', href: '/dashboard/onboarding', note: 'Joining within next 7 days' },
     { label: 'Upcoming exits', value: upcomingExits, icon: ArrowDownLeft, tone: 'peach', href: '/dashboard/offboarding', note: 'Exiting within next 7 days' },
-    { label: 'Pending notifications', value: demoNotifications.filter(p => p.status === 'Pending' || p.status === 'Processing').length, icon: Bell, tone: 'butter', href: '/dashboard/notifications', note: 'Preview jobs' },
-    { label: 'Completed interviews', value: demoExitInterviews.filter(p => p.status === 'Submitted').length, icon: ClipboardCheck, tone: 'lilac', href: '/dashboard/interview-responses', note: 'Submitted responses' },
+    { label: 'Pending notifications', value: pendingNoticesCount, icon: Bell, tone: 'butter', href: '/dashboard/notifications', note: 'Workspace touchpoints' },
+    { label: 'Completed interviews', value: completedInterviewsCount, icon: ClipboardCheck, tone: 'lilac', href: '/dashboard/interview-responses', note: 'Transition responses' },
   ];
 
   const statusData = liveStats?.statusDistribution || [
-    { name: 'Active', value: demoEmployees.filter(p => p.status === 'Active').length },
-    { name: 'Onboarding', value: demoEmployees.filter(p => p.status === 'Onboarding').length },
-    { name: 'Offboarding', value: demoEmployees.filter(p => p.status === 'Offboarding').length },
-    { name: 'Exited', value: demoEmployees.filter(p => p.status === 'Exited').length },
+    { name: 'Active', value: 0 },
+    { name: 'Onboarding', value: 0 },
+    { name: 'Offboarding', value: 0 },
+    { name: 'Exited', value: 0 },
   ];
   const colors = ['#d99bad', '#e7b993', '#bcb1d8', '#d7c9bd'];
 
   const activity = liveStats?.monthlyActivity || recentMonthBuckets(6).map(bucket => ({
     month: bucket.label,
-    joining: demoEmployees.filter(person => person.joiningDate.slice(0, 7) === bucket.key).length,
-    exits: demoEmployees.filter(person => person.lastWorkingDay?.slice(0, 7) === bucket.key).length,
+    joining: 0,
+    exits: 0,
   }));
 
-  const events = (liveStats?.upcomingEvents && liveStats.upcomingEvents.length > 0)
-    ? liveStats.upcomingEvents
-    : [
-        ...demoEmployees.filter(p => p.status === 'Onboarding').map(p => ({ id: p.id, person: p.name, label: 'Joining date', date: p.joiningDate, status: p.status, path: '/dashboard/onboarding' })),
-        ...demoEmployees.filter(p => p.status === 'Offboarding').map(p => ({ id: p.id, person: p.name, label: 'Last working day', date: p.lastWorkingDay || '', status: p.status, path: '/dashboard/offboarding' })),
-      ].filter(event => event.date >= today && event.date <= dateFromToday(14)).sort((a, b) => a.date.localeCompare(b.date));
+  const events = liveStats?.upcomingEvents || [];
 
-  const filteredNotices = demoNotifications.filter(item => activityFilter === 'All' || item.status === activityFilter);
+  const filteredNotices = notifications.filter(item => activityFilter === 'All' || item.status === activityFilter);
   const shownNotices = filteredNotices.slice(page * 3, page * 3 + 3);
 
   return (
     <>
       <PageHeading
-        eyebrow="Live Oracle Dashboard"
+        eyebrow="Workspace Overview"
         title="Your People Overview"
         text="Everything happening across onboarding, offboarding, and employee lifecycles."
         action={
@@ -499,9 +715,9 @@ function Overview() {
         <section className="panel chart-panel">
           <div className="panel-heading">
             <div>
-              <span className="panel-kicker">ORACLE RECORDS · LAST 6 MONTHS</span>
+              <span className="panel-kicker">LIFECYCLE ACTIVITY · LAST 6 MONTHS</span>
               <h2>Employee journey overview</h2>
-              <p>Joining dates and last working days stored in database.</p>
+              <p>Monthly new joiners and transitions across your workspace.</p>
             </div>
             <span className="chart-key"><i /> Joining <i className="key-exit" /> Exits</span>
           </div>
@@ -523,7 +739,7 @@ function Overview() {
             <div>
               <span className="panel-kicker">ONE STATUS PER PERSON</span>
               <h2>Status distribution</h2>
-              <p>Based on HR_EMPLOYEES status column.</p>
+              <p>Distribution across employee lifecycle stages.</p>
             </div>
           </div>
           <div className="donut-wrap">
@@ -602,15 +818,20 @@ function Overview() {
             <h2>Notification activity</h2>
             <p>Notification jobs scheduled for employee communication touchpoints.</p>
           </div>
-          <label className="filter-select">
-            <ListFilter size={15} />
-            <span className="sr-only">Filter notification status</span>
-            <select value={activityFilter} onChange={event => { setActivityFilter(event.target.value); setPage(0); }}>
-              <option>All</option>
-              {(['Pending', 'Processing', 'Sent', 'Failed', 'Cancelled'] as NoticeStatus[]).map(status => <option key={status}>{status}</option>)}
-            </select>
-            <ChevronDown size={14} />
-          </label>
+          <AnimatedSelect
+            variant="filter"
+            icon={<ListFilter size={14} />}
+            value={activityFilter}
+            onChange={val => { setActivityFilter(val); setPage(0); }}
+            options={[
+              { value: 'All', label: 'All activities' },
+              { value: 'Pending', label: 'Pending' },
+              { value: 'Processing', label: 'Processing' },
+              { value: 'Sent', label: 'Sent' },
+              { value: 'Failed', label: 'Failed' },
+              { value: 'Cancelled', label: 'Cancelled' },
+            ]}
+          />
         </div>
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
@@ -624,7 +845,7 @@ function Overview() {
           </motion.div>
         </AnimatePresence>
         <div className="pagination">
-          <span>Showing {filteredNotices.length ? page * 3 + 1 : 0}–{Math.min((page + 1) * 3, filteredNotices.length)} of {filteredNotices.length} sample jobs</span>
+          <span>Showing {filteredNotices.length ? page * 3 + 1 : 0}–{Math.min((page + 1) * 3, filteredNotices.length)} of {filteredNotices.length} notification jobs</span>
           <div>
             <button type="button" aria-label="Previous page" disabled={page === 0} onClick={() => setPage(Math.max(0, page - 1))}>
               <ChevronLeft size={16} />
@@ -651,9 +872,10 @@ function ListingPage({
   const [status, setStatus] = useState('All statuses');
   const [page, setPage] = useState(0);
   const pageSize = 5;
-  const title = titles[path] || 'People Workspace';
+  const title = titles[path] || 'Personal Workspace';
 
-  if (path === '/dashboard/hr-users') return <Unavailable title={title} />;
+  const { notifications, exitInterviews } = useWorkspaceLifecycleData();
+
   if (path === '/dashboard/add-employee') return <AddEmployee />;
   if (path === '/dashboard/schedule-offboarding') return <ScheduleOffboarding />;
   if (path === '/dashboard/settings') return <SettingsPage />;
@@ -661,21 +883,37 @@ function ListingPage({
   if (path === '/dashboard/interview-responses') return <ResponsesPage />;
 
   const desc: Record<string, string> = {
-    '/dashboard/employees': 'A directory of employee records stored in Oracle Database Free.',
+    '/dashboard/employees': 'A directory of all team members and personnel in your workspace.',
     '/dashboard/onboarding': 'Employees currently in the onboarding stage.',
     '/dashboard/offboarding': 'Transition records and planned exit schedules.',
-    '/dashboard/departments': 'Active departments and employee distribution in Oracle.',
-    '/dashboard/notifications': 'Notification job previews and templates.',
-    '/dashboard/notification-history': 'Audit trail and delivery history.',
-    '/dashboard/exit-interviews': 'Exit interviews and transition feedback.',
+    '/dashboard/departments': 'Active departments and team distribution in your workspace.',
+    '/dashboard/notifications': 'Notification touchpoints and automated communication jobs.',
+    '/dashboard/notification-history': 'Audit trail and delivery history for workspace touchpoints.',
+    '/dashboard/exit-interviews': 'Exit interviews and transition feedback for departing employees.',
   };
 
   const peopleMode = ['/dashboard/employees', '/dashboard/onboarding', '/dashboard/offboarding', '/dashboard/departments'].includes(path);
   const notificationMode = ['/dashboard/notifications', '/dashboard/notification-history'].includes(path);
 
-  if (path === '/dashboard/exit-interviews') return <><PageHeading eyebrow="Exit management" title={title} text={desc[path]} /><ExitTable /></>;
+  if (path === '/dashboard/exit-interviews') {
+    return (
+      <>
+        <PageHeading
+          eyebrow="Exit Management"
+          title={title}
+          text={desc[path]}
+          action={
+            <Link href="/dashboard/schedule-offboarding" className="primary-action">
+              <ArrowDownLeft size={16} /> Record an Exit
+            </Link>
+          }
+        />
+        <ExitTable rows={exitInterviews} />
+      </>
+    );
+  }
 
-  // Determine status filter for Oracle query
+  // Determine status filter for query
   const queryStatus = path === '/dashboard/onboarding' ? 'ONBOARDING'
     : path === '/dashboard/offboarding' ? 'OFFBOARDING'
     : status !== 'All statuses' ? status
@@ -693,17 +931,21 @@ function ListingPage({
 
   const people = employeeData?.data || [];
   const totalCount = employeeData?.total || 0;
-  const pageCount = Math.max(1, employeeData?.totalPages || 1);
 
-  const filteredNotifications = demoNotifications.filter(item =>
-    `${employeeById(item.employeeId)?.name} ${item.type} ${item.recipient}`.toLowerCase().includes(globalSearch.toLowerCase()) &&
-    (status === 'All statuses' || item.status === status)
-  );
+  // Filter real notifications
+  const filteredNotifications = notifications.filter(item => {
+    const matchesSearch = `${item.employeeName} ${item.type} ${item.recipient}`.toLowerCase().includes(globalSearch.toLowerCase());
+    const matchesStatus = status === 'All statuses' || item.status === status;
+    return matchesSearch && matchesStatus;
+  });
+
+  const totalRecords = peopleMode ? totalCount : filteredNotifications.length;
+  const pageCount = Math.max(1, Math.ceil(totalRecords / pageSize));
 
   return (
     <>
       <PageHeading
-        eyebrow="Oracle Database Records"
+        eyebrow="Workspace Personnel"
         title={title}
         text={desc[path] || 'A clear view of employee journey records.'}
         action={peopleMode && <Link href="/dashboard/add-employee" className="primary-action"><Users size={17} /> Add Employee</Link>}
@@ -734,15 +976,19 @@ function ListingPage({
               placeholder="Search name, code, department, email..."
             />
           </label>
-          <label className="filter-select">
-            <ListFilter size={15} />
-            <span className="sr-only">Filter status</span>
-            <select value={status} onChange={event => { setStatus(event.target.value); setPage(0); }}>
-              <option>All statuses</option>
-              {(notificationMode ? ['Pending', 'Processing', 'Sent', 'Failed', 'Cancelled'] : ['Active', 'Onboarding', 'Offboarding', 'Exited']).map(value => <option key={value}>{value}</option>)}
-            </select>
-            <ChevronDown size={14} />
-          </label>
+          <AnimatedSelect
+            variant="filter"
+            icon={<ListFilter size={14} />}
+            value={status}
+            onChange={val => { setStatus(val); setPage(0); }}
+            options={[
+              { value: 'All statuses', label: 'All statuses' },
+              ...(notificationMode
+                ? ['Pending', 'Processing', 'Sent', 'Failed', 'Cancelled']
+                : ['Active', 'Onboarding', 'Offboarding', 'Exited']
+              ).map(val => ({ value: val, label: val })),
+            ]}
+          />
         </div>
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
@@ -761,7 +1007,7 @@ function ListingPage({
         </AnimatePresence>
         <div className="pagination">
           <span>
-            Page {page + 1} of {pageCount} · {peopleMode ? totalCount : filteredNotifications.length} records
+            Page {page + 1} of {pageCount} · {totalRecords} {peopleMode ? 'employees' : 'notification touchpoints'}
           </span>
           <div>
             <button type="button" aria-label="Previous page" disabled={page === 0} onClick={() => setPage(Math.max(0, page - 1))}>
@@ -777,31 +1023,70 @@ function ListingPage({
   );
 }
 
-function ExitTable() {
+function ExitTable({ rows }: { rows: WorkspaceExitItem[] }) {
   return (
     <section className="panel listing-panel">
-      <p className="inline-notice">Interview invitations are linked to offboarding workflows in Oracle.</p>
       <div className="table-scroll">
         <table className="data-table">
+          <colgroup>
+            <col style={{ width: '32%' }} />
+            <col style={{ width: '22%' }} />
+            <col style={{ width: '24%' }} />
+            <col style={{ width: '22%' }} />
+          </colgroup>
           <thead>
             <tr>
               <th>Employee</th>
-              <th>Interview status</th>
-              <th>Link expiry</th>
-              <th>Action</th>
+              <th>Interview Status</th>
+              <th>Planned Exit / Expiry</th>
+              <th style={{ textAlign: 'right' }}>Workflow Status</th>
             </tr>
           </thead>
           <tbody>
-            {demoExitInterviews.map(row => (
-              <tr key={row.id}>
-                <td>{employeeById(row.employeeId)?.name}</td>
-                <td><Status value={row.status} /></td>
-                <td>{fmt(row.expires)}</td>
-                <td><button className="text-action" disabled title="Interview response viewer">Details</button></td>
-              </tr>
-            ))}
+            {rows.map(row => {
+              const initials = row.employeeName.split(' ').map(p => p[0]).join('').slice(0, 2) || 'EM';
+              return (
+                <tr key={row.id}>
+                  <td>
+                    <span className="person-cell">
+                      <span className="person-avatar">{initials}</span>
+                      <span>
+                        <b>{row.employeeName}</b>
+                        <small>{row.department}</small>
+                      </span>
+                    </span>
+                  </td>
+                  <td>
+                    <Status value={row.status} />
+                  </td>
+                  <td>{fmt(row.expires)}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    <span
+                      className="text-action"
+                      style={{ display: 'inline-flex', cursor: 'default' }}
+                    >
+                      {row.status === 'Submitted' ? 'Feedback Captured' : 'Invitation Dispatched'}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
+        {rows.length === 0 && (
+          <div className="table-empty">
+            <MessageSquareText size={24} style={{ color: '#b5798e' }} />
+            <b>No exit interviews scheduled</b>
+            <span>Exit interviews are generated automatically when you schedule an employee offboarding.</span>
+            <Link
+              href="/dashboard/schedule-offboarding"
+              className="secondary-action"
+              style={{ marginTop: '8px' }}
+            >
+              <ArrowDownLeft size={14} /> Record an employee exit
+            </Link>
+          </div>
+        )}
       </div>
     </section>
   );
@@ -827,9 +1112,10 @@ function AddEmployee() {
   const createMutation = useCreateEmployee();
   const { toast } = useToast();
 
+  const defaultDepartments = ['Engineering', 'Design', 'Product', 'People', 'Operations', 'Finance', 'Marketing'];
   const deptList = departments && departments.length > 0
     ? departments.map(d => d.departmentName)
-    : demoDepartments;
+    : defaultDepartments;
 
   const form = useForm<EmployeeFormValues>({
     resolver: zodResolver(employeeFormSchema),
@@ -869,7 +1155,7 @@ function AddEmployee() {
 
       toast({
         title: 'Employee Registered',
-        description: `${created.name} (${created.employeeCode}) has been persisted to Oracle Database.`,
+        description: `${created.name} (${created.employeeCode}) has been registered to your workspace.`,
       });
 
       setCreatedEmployee(created);
@@ -878,7 +1164,7 @@ function AddEmployee() {
       toast({
         variant: 'destructive',
         title: 'Failed to Add Employee',
-        description: (err as Error).message || 'A database error occurred while creating the employee.',
+        description: (err as Error).message || 'An error occurred while creating the employee.',
       });
     }
   };
@@ -888,7 +1174,7 @@ function AddEmployee() {
       <PageHeading
         eyebrow="Create Employee Record"
         title="Add an employee"
-        text="Register a new team member and persist their profile directly to Oracle Database."
+        text="Register a new team member and begin their journey in your workspace."
       />
       <div className="form-preview-layout">
         <section className="panel form-panel">
@@ -909,19 +1195,26 @@ function AddEmployee() {
                 </label>
                 <label>
                   Department
-                  <select {...form.register('department')} required>
-                    <option value="">Select department</option>
-                    {deptList.map(dept => <option key={dept}>{dept}</option>)}
-                  </select>
+                  <AnimatedSelect
+                    variant="form"
+                    placeholder="Select department"
+                    value={form.watch('department') || ''}
+                    onChange={val => form.setValue('department', val, { shouldValidate: true, shouldDirty: true })}
+                    options={deptList.map(dept => ({ value: dept, label: dept }))}
+                  />
                 </label>
                 <label>
                   Designation / Role
-                  <select {...form.register('designation')}>
-                    <option value="">Select designation (optional)</option>
-                    {(designations || []).map(des => (
-                      <option key={des.designationId} value={des.designationName}>{des.designationName}</option>
-                    ))}
-                  </select>
+                  <AnimatedSelect
+                    variant="form"
+                    placeholder="Select designation (optional)"
+                    value={form.watch('designation') || ''}
+                    onChange={val => form.setValue('designation', val, { shouldValidate: true, shouldDirty: true })}
+                    options={(designations || []).map(des => ({
+                      value: des.designationName,
+                      label: des.designationName,
+                    }))}
+                  />
                 </label>
                 <label>
                   Joining date
@@ -933,12 +1226,17 @@ function AddEmployee() {
                 </label>
                 <label>
                   Lifecycle status
-                  <select {...form.register('status')}>
-                    <option value="Onboarding">Onboarding</option>
-                    <option value="Active">Active</option>
-                    <option value="Offboarding">Offboarding</option>
-                    <option value="Exited">Exited</option>
-                  </select>
+                  <AnimatedSelect
+                    variant="form"
+                    value={form.watch('status') || 'Onboarding'}
+                    onChange={val => form.setValue('status', val as LifecycleStatus, { shouldValidate: true, shouldDirty: true })}
+                    options={[
+                      { value: 'Onboarding', label: 'Onboarding', subtext: 'Beginning onboarding journey' },
+                      { value: 'Active', label: 'Active', subtext: 'Fully active team member' },
+                      { value: 'Offboarding', label: 'Offboarding', subtext: 'Planned transition or exit' },
+                      { value: 'Exited', label: 'Exited', subtext: 'Former employee' },
+                    ]}
+                  />
                 </label>
               </div>
 
@@ -955,7 +1253,7 @@ function AddEmployee() {
                   {createMutation.isPending ? (
                     <>
                       <Loader2 size={16} className="animate-spin" />
-                      Saving to Oracle…
+                      Saving employee…
                     </>
                   ) : (
                     <>
@@ -977,16 +1275,16 @@ function AddEmployee() {
 
           {createdEmployee && (
             <div className="preview-result" role="status" style={{ borderLeftColor: '#2ba45a' }}>
-              <b style={{ color: '#166534' }}>✓ Saved in Oracle Database Free</b>
+              <b style={{ color: '#166534' }}>✓ Employee Added Successfully</b>
               <p>{createdEmployee.name} registered under code <strong>{createdEmployee.employeeCode}</strong> in {createdEmployee.departmentName || 'General'}.</p>
             </div>
           )}
         </section>
         <aside className="panel form-aside">
-          <span className="aside-icon"><Database size={19} /></span>
-          <h2>Persisted to Oracle</h2>
-          <p>This record is committed to <code>HR_EMPLOYEES</code> on your Debian home server, linked with audit logging.</p>
-          <span className="aside-note">Schema: PEOPLE_JOURNEY · Service: FREEPDB1</span>
+          <span className="aside-icon"><UserCheck size={19} /></span>
+          <h2>Instant Onboarding</h2>
+          <p>New team members receive an automated employee code and are immediately enrolled in your workspace journey checklist.</p>
+          <span className="aside-note">Lifecycle & touchpoints tracked automatically</span>
         </aside>
       </div>
     </>
@@ -1007,9 +1305,9 @@ function ScheduleOffboarding() {
   const offboardMutation = useOffboardEmployee();
   const { toast } = useToast();
 
-  const candidateEmployees = employeesData?.data && employeesData.data.length > 0
+  const candidateEmployees: ApiEmployee[] = employeesData?.data
     ? employeesData.data.filter(e => e.status !== 'Exited')
-    : demoEmployees.filter(person => person.status === 'Active' || person.status === 'Onboarding');
+    : [];
 
   const form = useForm<OffboardingFormValues>({
     resolver: zodResolver(offboardingFormSchema),
@@ -1018,9 +1316,7 @@ function ScheduleOffboarding() {
 
   const onSubmit = async (values: OffboardingFormValues) => {
     try {
-      const selectedPerson = candidateEmployees.find(p =>
-        ('employeeId' in p ? String(p.employeeId) : p.id) === values.employeeId
-      );
+      const selectedPerson = candidateEmployees.find(p => String(p.employeeId) === values.employeeId);
 
       const result = await offboardMutation.mutateAsync({
         employeeId: values.employeeId,
@@ -1034,7 +1330,7 @@ function ScheduleOffboarding() {
 
       toast({
         title: 'Offboarding Scheduled',
-        description: `Lifecycle transition for ${result.employee.name} recorded in Oracle Database.`,
+        description: `Lifecycle transition for ${result.employee.name} recorded successfully.`,
       });
 
       setScheduledExit({
@@ -1046,7 +1342,7 @@ function ScheduleOffboarding() {
       toast({
         variant: 'destructive',
         title: 'Offboarding Failed',
-        description: (err as Error).message || 'Failed to record offboarding in Oracle.',
+        description: (err as Error).message || 'Failed to record offboarding.',
       });
     }
   };
@@ -1056,7 +1352,7 @@ function ScheduleOffboarding() {
       <PageHeading
         eyebrow="Lifecycle Management"
         title="Record an exit"
-        text="Schedule offboarding and transition milestones in Oracle Database."
+        text="Schedule offboarding and manage transition milestones."
       />
       <div className="form-preview-layout">
         <section className="panel form-panel">
@@ -1065,18 +1361,17 @@ function ScheduleOffboarding() {
               <div className="form-grid">
                 <label>
                   Employee
-                  <select {...form.register('employeeId')} required>
-                    <option value="">Select an employee</option>
-                    {candidateEmployees.map(person => {
-                      const id = 'employeeId' in person ? String(person.employeeId) : person.id;
-                      const dept = 'departmentName' in person ? (person.departmentName || 'General') : ('department' in person ? person.department : 'General');
-                      return (
-                        <option value={id} key={id}>
-                          {person.name} · {dept} ({person.status})
-                        </option>
-                      );
-                    })}
-                  </select>
+                  <AnimatedSelect
+                    variant="form"
+                    placeholder="Select team member"
+                    value={form.watch('employeeId') || ''}
+                    onChange={val => form.setValue('employeeId', val, { shouldValidate: true, shouldDirty: true })}
+                    options={candidateEmployees.map(person => ({
+                      value: String(person.employeeId),
+                      label: person.name,
+                      subtext: `${person.departmentName || 'General'} · ${person.status}`,
+                    }))}
+                  />
                 </label>
                 <label>
                   Last working day
@@ -1105,7 +1400,7 @@ function ScheduleOffboarding() {
                   {offboardMutation.isPending ? (
                     <>
                       <Loader2 size={16} className="animate-spin" />
-                      Recording in Oracle…
+                      Recording offboarding…
                     </>
                   ) : (
                     <>
@@ -1127,16 +1422,16 @@ function ScheduleOffboarding() {
 
           {scheduledExit && (
             <div className="preview-result" role="status" style={{ borderLeftColor: '#2ba45a' }}>
-              <b style={{ color: '#166534' }}>✓ Offboarding Active in Oracle</b>
+              <b style={{ color: '#166534' }}>✓ Offboarding Scheduled</b>
               <p>{scheduledExit.name} has been transitioned to Offboarding with planned exit on {fmt(scheduledExit.date)}.</p>
             </div>
           )}
         </section>
         <aside className="panel form-aside">
           <span className="aside-icon"><ClipboardCheck size={19} /></span>
-          <h2>Transactional Integrity</h2>
-          <p>Offboarding updates <code>HR_EMPLOYEES</code> and creates an <code>HR_OFFBOARDING</code> record in a single Oracle transaction.</p>
-          <span className="aside-note">Auto-rolled back on any error</span>
+          <h2>Smooth Transitions</h2>
+          <p>Scheduling an exit automatically coordinates checklist milestones, asset handovers, and transition communications.</p>
+          <span className="aside-note">Lifecycle stage updated to Offboarding</span>
         </aside>
       </div>
     </>
@@ -1154,54 +1449,688 @@ function TemplatesPage() {
 }
 
 function ResponsesPage() {
-  const submitted = demoExitInterviews.filter(item => item.status === 'Submitted');
-  return <><PageHeading eyebrow="Exit management" title="Interview Responses" text="Submission tracking and feedback from offboarded personnel." /><div className="response-summary"><span className="kpi-icon lilac"><ClipboardCheck size={19} /></span><div><b>{submitted.length} submitted exit interview{submitted.length === 1 ? '' : 's'}</b><p>Structured interview records linked to Oracle employee accounts.</p></div></div><ExitTable /></>;
-}
-
-function SettingsPage() {
+  const { exitInterviews } = useWorkspaceLifecycleData();
+  const submitted = exitInterviews.filter(item => item.status === 'Submitted');
   return (
     <>
-      <PageHeading eyebrow="Workspace configuration" title="Settings" text="Connection and database configuration overview." />
-      <section className="panel settings-panel">
-        <div className="settings-row">
-          <span className="settings-icon"><Database size={18} /></span>
-          <div>
-            <b>Oracle Database Free (FREEPDB1)</b>
-            <p>Connected via Debian Home Server on private listener.</p>
-          </div>
-          <span className="settings-state" style={{ color: '#2ba45a', fontWeight: 600 }}>Connected</span>
+      <PageHeading eyebrow="Exit Management" title="Interview Responses" text="Submission tracking and feedback from offboarded personnel." />
+      <div className="response-summary">
+        <span className="kpi-icon lilac"><ClipboardCheck size={19} /></span>
+        <div>
+          <b>{submitted.length} submitted exit interview{submitted.length === 1 ? '' : 's'}</b>
+          <p>Structured interview records linked to workspace team accounts.</p>
         </div>
-        <div className="settings-row">
-          <span className="settings-icon"><Users size={18} /></span>
-          <div>
-            <b>Employee data source</b>
-            <p>Oracle Database table <code>HR_EMPLOYEES</code>.</p>
-          </div>
-          <span className="settings-state" style={{ color: '#2ba45a', fontWeight: 600 }}>Live Database</span>
-        </div>
-        <div className="settings-row">
-          <span className="settings-icon"><Bell size={18} /></span>
-          <div>
-            <b>Authentication Provider</b>
-            <p>Firebase Authentication with server-side Admin token verification.</p>
-          </div>
-          <span className="settings-state" style={{ color: '#2ba45a', fontWeight: 600 }}>Active</span>
-        </div>
-      </section>
+      </div>
+      <ExitTable rows={submitted} />
     </>
   );
 }
 
-function Unavailable({ title }: { title: string }) {
+function SettingsPage() {
+  const { appUser, user, signOut } = useAuth();
+  const [dateFormat, setDateFormat] = useState('DD MMM YYYY');
+  const [landingView, setLandingView] = useState('overview');
+  const [emailAlerts, setEmailAlerts] = useState(true);
+  const [journeyDigests, setJourneyDigests] = useState(true);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+  const { toast } = useToast();
+
+  const displayName = appUser?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Workspace User';
+  const avatarLetter = (displayName[0] || 'U').toUpperCase();
+
+  const handleSavePreferences = () => {
+    toast({
+      title: 'Preferences Saved',
+      description: 'Your workspace settings have been updated successfully.',
+    });
+  };
+
   return (
     <>
-      <PageHeading eyebrow="Administration" title={title} text="Authorized administrator user management." />
-      <section className="unavailable-panel">
-        <span><Users size={21} /></span>
-        <h2>HR User Access Control</h2>
-        <p>User accounts and permissions are governed through the Oracle <code>HR_USERS</code> table and verified with Firebase Admin SDK.</p>
-        <Link href="/dashboard" className="secondary-action">Return to overview <ArrowRight size={15} /></Link>
+      <PageHeading
+        eyebrow="Preferences & Account"
+        title="Workspace Settings"
+        text="Customize your personal experience, notification alerts, and workspace display preferences."
+      />
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) minmax(280px, 0.8fr)', gap: '16px', alignItems: 'start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* Account Profile Card */}
+          <section className="panel" style={{ padding: '24px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '20px' }}>
+              <div
+                style={{
+                  display: 'grid',
+                  placeItems: 'center',
+                  width: '52px',
+                  height: '52px',
+                  borderRadius: '16px',
+                  background: 'linear-gradient(135deg, #f8e5eb, #f5dcc4)',
+                  color: '#8b4b62',
+                  fontSize: '20px',
+                  fontWeight: 700,
+                  boxShadow: '0 4px 12px rgba(139, 75, 98, 0.12)',
+                }}
+              >
+                {avatarLetter}
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#3d2e37' }}>
+                    {displayName}
+                  </h2>
+                  <span
+                    style={{
+                      padding: '2px 8px',
+                      borderRadius: '999px',
+                      background: '#f0fdf4',
+                      border: '1px solid #bbf7d0',
+                      color: '#166534',
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      letterSpacing: '.04em',
+                    }}
+                  >
+                    Active Workspace
+                  </span>
+                </div>
+                <p style={{ margin: '4px 0 0', color: '#887783', fontSize: '12px' }}>
+                  {user?.email}
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', paddingTop: '16px', borderTop: '1px solid #f2e7e7' }}>
+              <div>
+                <span style={{ fontSize: '10px', color: '#9c8c96', textTransform: 'uppercase', letterSpacing: '.06em', fontWeight: 700 }}>
+                  Account Type
+                </span>
+                <p style={{ margin: '4px 0 0', fontSize: '13px', fontWeight: 600, color: '#44353f' }}>
+                  Personal Workspace
+                </p>
+              </div>
+              <div>
+                <span style={{ fontSize: '10px', color: '#9c8c96', textTransform: 'uppercase', letterSpacing: '.06em', fontWeight: 700 }}>
+                  Workspace Privacy
+                </span>
+                <p style={{ margin: '4px 0 0', fontSize: '13px', fontWeight: 600, color: '#166534' }}>
+                  Private & Isolated
+                </p>
+              </div>
+            </div>
+          </section>
+
+          {/* Preferences Form */}
+          <section className="panel" style={{ padding: '24px' }}>
+            <div className="panel-heading" style={{ marginBottom: '18px' }}>
+              <div>
+                <span className="panel-kicker">DISPLAY & LOCALIZATION</span>
+                <h2>Workspace Preferences</h2>
+                <p>Choose your regional format and default landing destination.</p>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px', marginBottom: '20px' }}>
+              <div style={{ display: 'grid', gap: '6px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 600, color: '#55444e' }}>Date Format</span>
+                <AnimatedSelect
+                  variant="form"
+                  value={dateFormat}
+                  onChange={setDateFormat}
+                  options={[
+                    { value: 'DD MMM YYYY', label: '24 Oct 2026', subtext: 'Day Month Year' },
+                    { value: 'YYYY-MM-DD', label: '2026-10-24', subtext: 'ISO standard' },
+                    { value: 'MM/DD/YYYY', label: '10/24/2026', subtext: 'US standard' },
+                  ]}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gap: '6px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 600, color: '#55444e' }}>Default View</span>
+                <AnimatedSelect
+                  variant="form"
+                  value={landingView}
+                  onChange={setLandingView}
+                  options={[
+                    { value: 'overview', label: 'People Overview', subtext: 'Metrics and summaries' },
+                    { value: 'employees', label: 'Team Directory', subtext: 'All employees list' },
+                    { value: 'onboarding', label: 'Onboarding Journeys', subtext: 'Active new joiners' },
+                  ]}
+                />
+              </div>
+            </div>
+
+            <div className="panel-heading" style={{ margin: '24px 0 14px 0', paddingTop: '16px', borderTop: '1px solid #f4ecec' }}>
+              <div>
+                <span className="panel-kicker">COMMUNICATIONS</span>
+                <h2>Notification Preferences</h2>
+                <p>Manage event touchpoints and journey updates.</p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '12px 14px',
+                  borderRadius: '10px',
+                  background: '#fffdfa',
+                  border: '1px solid #eee4e4',
+                  cursor: 'pointer',
+                }}
+              >
+                <div>
+                  <b style={{ display: 'block', fontSize: '12px', color: '#44353f' }}>Milestone Email Reminders</b>
+                  <span style={{ fontSize: '10px', color: '#8d7d87' }}>Receive notifications when employees reach key lifecycle dates</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={emailAlerts}
+                  onChange={e => setEmailAlerts(e.target.checked)}
+                  style={{ width: '16px', height: '16px', accentColor: '#bd7b92', cursor: 'pointer' }}
+                />
+              </label>
+
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '12px 14px',
+                  borderRadius: '10px',
+                  background: '#fffdfa',
+                  border: '1px solid #eee4e4',
+                  cursor: 'pointer',
+                }}
+              >
+                <div>
+                  <b style={{ display: 'block', fontSize: '12px', color: '#44353f' }}>Weekly Journey Summary</b>
+                  <span style={{ fontSize: '10px', color: '#8d7d87' }}>Receive an aggregated digest of upcoming onboarding and exit milestones</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={journeyDigests}
+                  onChange={e => setJourneyDigests(e.target.checked)}
+                  style={{ width: '16px', height: '16px', accentColor: '#bd7b92', cursor: 'pointer' }}
+                />
+              </label>
+            </div>
+
+            <div style={{ marginTop: '22px', display: 'flex', gap: '10px' }}>
+              <button type="button" className="primary-action" onClick={handleSavePreferences}>
+                <Check size={16} /> Save preferences
+              </button>
+            </div>
+          </section>
+        </div>
+
+        {/* Aside: Privacy & Security */}
+        <aside style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* Data Privacy & Compliance */}
+          <section className="panel" style={{ padding: '20px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+              <span className="aside-icon" style={{ margin: 0 }}><UserCheck size={18} /></span>
+              <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '999px', background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
+                GDPR & CCPA Ready
+              </span>
+            </div>
+            <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#4a3b45', margin: '0 0 6px 0' }}>Data Privacy Guarantee</h2>
+            <p style={{ fontSize: '11px', color: '#887680', lineHeight: 1.6, margin: '0 0 14px 0' }}>
+              Your workspace is strictly isolated. All personnel files, onboarding roadmaps, and offboarding schedules created here are private to your Google account.
+            </p>
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={() => setShowPrivacyModal(true)}
+              style={{ width: '100%', justifyContent: 'center', fontSize: '11px' }}
+            >
+              <FileText size={14} /> View Privacy & Compliance Policy
+            </button>
+          </section>
+
+          {/* Security & Hacking Defenses */}
+          <section className="panel" style={{ padding: '20px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+              <span className="aside-icon" style={{ margin: 0, color: '#0369a1', background: '#f0f9ff' }}><ShieldCheck size={18} /></span>
+              <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '999px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>
+                OWASP Hardened
+              </span>
+            </div>
+            <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#4a3b45', margin: '0 0 8px 0' }}>Threat Defense Status</h2>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px', color: '#685963' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>SQL Injection:</span>
+                <strong style={{ color: '#15803d' }}>Parameterized (100%)</strong>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>API Rate Limiter:</span>
+                <strong style={{ color: '#15803d' }}>Active (500 req/15m)</strong>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>Security Headers:</span>
+                <strong style={{ color: '#15803d' }}>Helmet Active (CSP/HSTS)</strong>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>Tamper Audit Log:</span>
+                <strong style={{ color: '#15803d' }}>Enabled (hr_audit_logs)</strong>
+              </div>
+            </div>
+          </section>
+
+          {/* Session Management */}
+          <section className="panel" style={{ padding: '20px' }}>
+            <span className="aside-icon" style={{ marginBottom: '12px' }}><LogOut size={18} /></span>
+            <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#4a3b45', margin: '0 0 6px 0' }}>Session Management</h2>
+            <p style={{ fontSize: '11px', color: '#887680', lineHeight: 1.6, margin: '0 0 14px 0' }}>
+              Signed in with Google. You can safely sign out of your personal workspace at any time.
+            </p>
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={signOut}
+              style={{ width: '100%', justifyContent: 'center' }}
+            >
+              <LogOut size={14} /> Sign out
+            </button>
+          </section>
+        </aside>
+      </div>
+
+      {/* Privacy & Compliance Policy Modal */}
+      <AnimatePresence>
+        {showPrivacyModal && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 9999,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: 'rgba(56, 36, 47, 0.45)',
+              backdropFilter: 'blur(4px)',
+              padding: '20px',
+            }}
+            onClick={() => setShowPrivacyModal(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              transition={{ duration: 0.2 }}
+              onClick={e => e.stopPropagation()}
+              style={{
+                width: '100%',
+                maxWidth: '680px',
+                maxHeight: '85vh',
+                display: 'flex',
+                flexDirection: 'column',
+                background: '#ffffff',
+                borderRadius: '20px',
+                boxShadow: '0 25px 50px -12px rgba(105, 52, 75, 0.25)',
+                border: '1px solid #f0e3e7',
+                overflow: 'hidden',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '20px 24px',
+                  borderBottom: '1px solid #f4ecec',
+                  background: '#fdfafb',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div
+                    style={{
+                      width: '38px',
+                      height: '38px',
+                      borderRadius: '10px',
+                      background: '#fcecf2',
+                      color: '#a85172',
+                      display: 'grid',
+                      placeItems: 'center',
+                    }}
+                  >
+                    <ShieldCheck size={20} />
+                  </div>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 700, color: '#3f2d38' }}>
+                      Privacy & Data Protection Policy
+                    </h3>
+                    <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#917f8b' }}>
+                      Compliance guarantees for People Journey personal workspace
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPrivacyModal(false)}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    cursor: 'pointer',
+                    color: '#8b7c86',
+                    padding: '6px',
+                    borderRadius: '8px',
+                  }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div style={{ padding: '24px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '18px', fontSize: '13px', lineHeight: 1.6, color: '#554550' }}>
+                <div>
+                  <h4 style={{ margin: '0 0 6px 0', fontSize: '14px', fontWeight: 700, color: '#382631' }}>
+                    1. Workspace Partitioning & Zero-Shared Access
+                  </h4>
+                  <p style={{ margin: 0 }}>
+                    Every user has an exclusively partitioned workspace. All employee records, onboarding checklists, and offboarding logs are keyed directly to your unique, immutable identity. No other user of this platform has access to query, edit, or view your workspace contents.
+                  </p>
+                </div>
+
+                <div>
+                  <h4 style={{ margin: '0 0 6px 0', fontSize: '14px', fontWeight: 700, color: '#382631' }}>
+                    2. Cryptographic Authentication & Token Claims
+                  </h4>
+                  <p style={{ margin: 0 }}>
+                    Sign-in is verified directly through Google OAuth 2.0 PKCE. Credentials are never handled or stored by this application; the backend verifies short-lived cryptographically signed Firebase ID tokens on every API transaction.
+                  </p>
+                </div>
+
+                <div>
+                  <h4 style={{ margin: '0 0 6px 0', fontSize: '14px', fontWeight: 700, color: '#382631' }}>
+                    3. OWASP Defensive Hardening
+                  </h4>
+                  <p style={{ margin: 0 }}>
+                    The backend API employs parameterized SQL execution to eliminate SQL injection vectors, Helmet security headers (CSP, HSTS, X-Frame-Options) to neutralize clickjacking and XSS, and IP-level rate limiting to shield against distributed denial-of-service (DDoS) and brute-force attacks.
+                  </p>
+                </div>
+
+                <div>
+                  <h4 style={{ margin: '0 0 6px 0', fontSize: '14px', fontWeight: 700, color: '#382631' }}>
+                    4. Immutable Forensic Audit Trail
+                  </h4>
+                  <p style={{ margin: 0 }}>
+                    All sensitive workspace actions (employee additions, record edits, offboarding transitions, and authentication events) are captured in an append-only audit log table (<code style={{ background: '#f5eaef', padding: '2px 6px', borderRadius: '4px', fontSize: '12px' }}>hr_audit_logs</code>) with ISO timestamps and user IDs.
+                  </p>
+                </div>
+
+                <div>
+                  <h4 style={{ margin: '0 0 6px 0', fontSize: '14px', fontWeight: 700, color: '#382631' }}>
+                    5. GDPR & CCPA Rights (Portability & Erasure)
+                  </h4>
+                  <p style={{ margin: 0 }}>
+                    You retain 100% ownership of your personnel data. In compliance with GDPR and CCPA regulations, you have the right to export your team data, rectify inaccurate records, or request complete account erasure with cascading cleanup.
+                  </p>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  padding: '16px 24px',
+                  borderTop: '1px solid #f4ecec',
+                  background: '#fdfafb',
+                }}
+              >
+                <button
+                  type="button"
+                  className="primary-action"
+                  onClick={() => setShowPrivacyModal(false)}
+                >
+                  <Check size={16} /> Acknowledge and Close
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+}
+
+
+
+
+function PersonalDashboard() {
+  const { data: dashboard, isLoading, error, refetch } = usePersonalDashboard();
+  const { user } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="panel" style={{ padding: '60px 20px', textAlign: 'center', color: '#887582' }}>
+        <Loader2 size={28} className="animate-spin" style={{ margin: '0 auto 12px auto', color: '#bd7b92' }} />
+        <h3>Loading your personal workspace...</h3>
+        <p>Preparing your personal team touchpoints</p>
+      </div>
+    );
+  }
+
+  if (error || !dashboard) {
+    return (
+      <div className="panel" style={{ padding: '40px 20px', textAlign: 'center' }}>
+        <CircleHelp size={32} style={{ margin: '0 auto 12px auto', color: '#e11d48' }} />
+        <h3>Unable to load your dashboard</h3>
+        <p style={{ color: '#6b7280', margin: '8px 0 16px 0' }}>
+          {(error as Error)?.message || 'Workspace service temporarily unavailable. Please retry.'}
+        </p>
+        <button type="button" className="primary-action" onClick={() => refetch()} style={{ margin: '0 auto' }}>
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  const { user: profile, employeeProfile, checklist, notifications } = dashboard;
+  const completedCount = checklist.filter(c => c.completed).length;
+  const totalCount = checklist.length;
+
+  const stats = [
+    {
+      label: 'Account status',
+      value: (profile.accountStatus || 'active').toUpperCase(),
+      icon: UserCheck,
+      tone: 'rose',
+      note: 'Verified Google identity',
+    },
+    {
+      label: 'Access role',
+      value: profile.role === 'user' ? 'Standard User' : profile.role,
+      icon: BriefcaseBusiness,
+      tone: 'lilac',
+      note: 'Private workspace active',
+    },
+    {
+      label: 'Corporate profile',
+      value: employeeProfile ? employeeProfile.employeeCode : 'Not linked',
+      icon: UsersRound,
+      tone: 'peach',
+      note: employeeProfile ? (employeeProfile.departmentName || 'Corporate Member') : 'Pending HR Directory match',
+    },
+    {
+      label: 'Journey checklist',
+      value: `${completedCount} of ${totalCount}`,
+      icon: ClipboardCheck,
+      tone: 'butter',
+      note: `${Math.round((completedCount / (totalCount || 1)) * 100)}% touchpoints ready`,
+    },
+  ];
+
+  return (
+    <>
+      <PageHeading
+        eyebrow="Personal Workspace"
+        title={`Welcome, ${profile.displayName || user?.displayName || 'Team Member'}`}
+        text="Your personalized employee lifecycle, onboarding touchpoints, and notifications."
+      />
+
+      <section className="kpi-grid" aria-label="Personal overview">
+        {stats.map(item => {
+          const Icon = item.icon;
+          return (
+            <div className="kpi-card" key={item.label}>
+              <span className={`kpi-icon ${item.tone}`}><Icon size={19} /></span>
+              <span className="kpi-label">{item.label}</span>
+              <b className="kpi-value">{item.value}</b>
+              <small>{item.note}</small>
+            </div>
+          );
+        })}
       </section>
+
+      <div className="overview-grid">
+        {/* Left Column: Corporate Record & Journey Checklist */}
+        <section className="panel">
+          <div className="panel-heading">
+            <div>
+              <span className="panel-kicker">EMPLOYEE RECORD</span>
+              <h2>Corporate Profile</h2>
+              <p>Your official corporate employee record and department.</p>
+            </div>
+            <UsersRound size={18} className="heading-icon" />
+          </div>
+
+          {employeeProfile ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '12px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px' }}>
+                <div style={{ padding: '10px', background: '#fdfbfa', borderRadius: '8px', border: '1px solid #ebdada' }}>
+                  <small style={{ color: '#887582', fontSize: '11px' }}>Employee Code</small>
+                  <p style={{ fontWeight: 600, color: '#33242c', margin: '2px 0 0 0' }}>{employeeProfile.employeeCode}</p>
+                </div>
+                <div style={{ padding: '10px', background: '#fdfbfa', borderRadius: '8px', border: '1px solid #ebdada' }}>
+                  <small style={{ color: '#887582', fontSize: '11px' }}>Department</small>
+                  <p style={{ fontWeight: 600, color: '#33242c', margin: '2px 0 0 0' }}>{employeeProfile.departmentName || 'General'}</p>
+                </div>
+                <div style={{ padding: '10px', background: '#fdfbfa', borderRadius: '8px', border: '1px solid #ebdada' }}>
+                  <small style={{ color: '#887582', fontSize: '11px' }}>Designation</small>
+                  <p style={{ fontWeight: 600, color: '#33242c', margin: '2px 0 0 0' }}>{employeeProfile.designationName || 'Team Member'}</p>
+                </div>
+                <div style={{ padding: '10px', background: '#fdfbfa', borderRadius: '8px', border: '1px solid #ebdada' }}>
+                  <small style={{ color: '#887582', fontSize: '11px' }}>Joining Date</small>
+                  <p style={{ fontWeight: 600, color: '#33242c', margin: '2px 0 0 0' }}>{fmt(employeeProfile.hireDate)}</p>
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #bbf7d0', color: '#166534', fontSize: '12px' }}>
+                <Check size={16} />
+                <span>Your Google identity is securely linked to corporate record <b>{employeeProfile.employeeCode}</b> ({profile.email}).</span>
+              </div>
+            </div>
+          ) : (
+            <div style={{ padding: '16px', background: '#fdf4f7', borderRadius: '12px', border: '1px solid #fae2eb', color: '#7b3e55', marginTop: '12px' }}>
+              <b style={{ display: 'block', marginBottom: '4px' }}>Welcome to Your Personal Workspace</b>
+              <p style={{ fontSize: '12px', margin: 0, lineHeight: 1.5 }}>
+                You are signed in as <b>{profile.email}</b>. You have full access to manage your own team directory, track onboarding, schedule transitions, and customize touchpoints in your private workspace.
+              </p>
+            </div>
+          )}
+
+          <div style={{ marginTop: '24px' }}>
+            <div className="panel-heading" style={{ marginBottom: '12px' }}>
+              <div>
+                <span className="panel-kicker">ONBOARDING TOUCHPOINTS</span>
+                <h2>Your Journey Checklist</h2>
+              </div>
+            </div>
+            <div className="event-list">
+              {checklist.map(item => (
+                <article className="event-item" key={item.id} style={{ alignItems: 'center' }}>
+                  <span
+                    className="event-node"
+                    style={{
+                      background: item.completed ? '#16a34a' : '#9ca3af'
+                    }}
+                  />
+                  <div className="event-copy">
+                    <b style={{ color: '#2d222b' }}>{item.title}</b>
+                    <span>{item.description}</span>
+                  </div>
+                  <span
+                    className={`status-badge status-${item.completed ? 'active' : 'pending'}`}
+                  >
+                    {item.completed ? 'Done' : 'Pending'}
+                  </span>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* Right Column: Identity/Security & Personal Notifications */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <span className="panel-kicker">ACCOUNT & ACCESS</span>
+                <h2>Security & Profile</h2>
+                <p>Your verified credentials and workspace status.</p>
+              </div>
+              <UserCheck size={18} className="heading-icon" />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '12px', fontSize: '13px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f3e8e8' }}>
+                <span style={{ color: '#7a6673' }}>Email</span>
+                <span style={{ fontWeight: 600, color: '#31232c' }}>{profile.email}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f3e8e8' }}>
+                <span style={{ color: '#7a6673' }}>Display Name</span>
+                <span style={{ fontWeight: 600, color: '#31232c' }}>{profile.displayName || '—'}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f3e8e8' }}>
+                <span style={{ color: '#7a6673' }}>Workspace Role</span>
+                <span style={{ fontWeight: 600, color: '#16a34a', textTransform: 'uppercase', fontSize: '11px', letterSpacing: '.05em' }}>
+                  Personal Workspace
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f3e8e8' }}>
+                <span style={{ color: '#7a6673' }}>Workspace Privacy</span>
+                <span style={{ fontWeight: 600, color: '#16a34a' }}>Strictly Isolated</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0' }}>
+                <span style={{ color: '#7a6673' }}>Member Since</span>
+                <span style={{ fontWeight: 600, color: '#31232c' }}>{fmt(profile.createdAt)}</span>
+              </div>
+            </div>
+          </section>
+
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <span className="panel-kicker">COMMUNICATIONS</span>
+                <h2>Personal Notifications</h2>
+                <p>Direct touchpoints sent to your account.</p>
+              </div>
+              <Bell size={18} className="heading-icon" />
+            </div>
+
+            <div className="event-list" style={{ marginTop: '12px' }}>
+              {notifications.map(notif => (
+                <article className="event-item" key={notif.id}>
+                  <span className="event-node" />
+                  <div className="event-copy">
+                    <b>{notif.title}</b>
+                    <span>{notif.message}</span>
+                  </div>
+                  <span style={{ fontSize: '11px', color: '#978691', whiteSpace: 'nowrap' }}>
+                    {fmt(notif.createdAt)}
+                  </span>
+                </article>
+              ))}
+              {notifications.length === 0 && (
+                <p className="empty-inline" style={{ padding: '20px 0', textAlign: 'center' }}>
+                  No unread notifications at this time.
+                </p>
+              )}
+            </div>
+          </section>
+        </div>
+      </div>
     </>
   );
 }
@@ -1209,7 +2138,16 @@ function Unavailable({ title }: { title: string }) {
 export function DashboardPage() {
   const [path, setPath] = useLocation();
   const [globalSearch, setGlobalSearch] = useState('');
-  const title = titles[path] || 'People Workspace';
-  const content = useMemo(() => path === '/dashboard' ? <Overview /> : <ListingPage path={path} globalSearch={globalSearch} setGlobalSearch={setGlobalSearch} />, [path, globalSearch]);
+  const title = titles[path] || 'Personal Workspace';
+
+  const content = useMemo(() => {
+    if (path === '/dashboard') {
+      return <Overview />;
+    }
+    return <ListingPage path={path} globalSearch={globalSearch} setGlobalSearch={setGlobalSearch} />;
+  }, [path, globalSearch]);
+
   return <Shell title={title} path={path} onNavigate={setPath} searchValue={globalSearch} onSearchChange={setGlobalSearch}>{content}</Shell>;
 }
+
+

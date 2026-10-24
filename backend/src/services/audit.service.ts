@@ -1,9 +1,10 @@
-import type oracledb from 'oracledb';
+import type pg from 'pg';
 import { executeSql } from '../config/database';
 import { logger } from '../utils/logger';
 
 export interface AuditLogEntry {
-  hrUserId?: number | null;
+  userId?: string | null;
+  hrUserId?: number | string | null; // compatibility alias
   actionType: string;
   entityType: string;
   entityId?: string | number | null;
@@ -12,38 +13,44 @@ export interface AuditLogEntry {
 
 export const auditService = {
   /**
-   * Record an audit event into HR_AUDIT_LOGS.
-   * Can be executed within an ongoing Oracle transaction connection or standalone.
+   * Record an audit event into hr_audit_logs.
+   * Can be executed within an ongoing PostgreSQL transaction client or standalone.
    */
-  async log(entry: AuditLogEntry, connection?: oracledb.Connection): Promise<void> {
-    const detailsStr = entry.details
+  async log(entry: AuditLogEntry, client?: pg.PoolClient): Promise<void> {
+    const rawUserId = entry.userId || (entry.hrUserId ? String(entry.hrUserId) : null);
+    
+    // Check if rawUserId is a valid UUID, otherwise null
+    const isValidUuid = rawUserId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(rawUserId);
+    const userId = isValidUuid ? rawUserId : null;
+
+    const detailsJson = entry.details
       ? typeof entry.details === 'string'
-        ? entry.details.slice(0, 2000)
-        : JSON.stringify(entry.details).slice(0, 2000)
+        ? entry.details
+        : JSON.stringify(entry.details)
       : null;
 
-    const binds = {
-      hrUserId: entry.hrUserId ?? null,
-      actionType: entry.actionType.slice(0, 50),
-      entityType: entry.entityType.slice(0, 50),
-      entityId: entry.entityId ? String(entry.entityId).slice(0, 100) : null,
-      details: detailsStr,
-    };
-
     const sql = `
-      INSERT INTO HR_AUDIT_LOGS (HR_USER_ID, ACTION_TYPE, ENTITY_TYPE, ENTITY_ID, DETAILS)
-      VALUES (:hrUserId, :actionType, :entityType, :entityId, :details)
+      INSERT INTO hr_audit_logs (user_id, action_type, entity_type, entity_id, details)
+      VALUES ($1, $2, $3, $4, $5::jsonb)
     `;
 
+    const params = [
+      userId,
+      entry.actionType.slice(0, 100),
+      entry.entityType.slice(0, 100),
+      entry.entityId ? String(entry.entityId).slice(0, 100) : null,
+      detailsJson,
+    ];
+
     try {
-      if (connection) {
-        await connection.execute(sql, binds);
+      if (client) {
+        await client.query(sql, params);
       } else {
-        await executeSql(sql, binds);
+        await executeSql(sql, params);
       }
     } catch (err) {
-      // Audit logging should not crash the main operation, but must be logged
-      logger.error({ err, entry }, 'Failed to record audit log entry');
+      // Audit logging should not crash the main business operation, but must be logged
+      logger.error({ err, entry }, 'Failed to record audit log entry in PostgreSQL');
     }
   },
 };

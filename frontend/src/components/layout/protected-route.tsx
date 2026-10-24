@@ -1,7 +1,7 @@
 import { useEffect, type ComponentType, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { motion, useReducedMotion } from "framer-motion";
-import { ShieldAlert, ArrowLeft, LogOut, LockKeyhole } from "lucide-react";
+import { ShieldAlert, ArrowLeft, LogOut, LockKeyhole, LayoutDashboard } from "lucide-react";
 import { useAuth } from "@/context";
 
 interface ProtectedRouteProps {
@@ -53,7 +53,7 @@ export function AuthLoadingScreen({ message = "Restoring your secure session…"
         </h1>
 
         <p style={{ fontSize: "12px", color: "#81747d", marginBottom: "20px" }}>
-          Confirming your identity and permissions with Firebase Authentication.
+          Confirming your identity and preparing your personal workspace.
         </p>
 
         <div
@@ -67,7 +67,7 @@ export function AuthLoadingScreen({ message = "Restoring your secure session…"
           }}
         >
           <span className="status-dot" style={{ background: "#b67c90" }} />
-          Verifying credentials…
+          Verifying authorization…
         </div>
       </motion.div>
     </div>
@@ -75,14 +75,15 @@ export function AuthLoadingScreen({ message = "Restoring your secure session…"
 }
 
 /**
- * Branded Access Denied screen for users authenticated in Firebase
- * but not authorized to view or manage HR records.
+ * Branded Access Denied screen for users whose account is deactivated or unavailable.
  */
 export function AccessDeniedScreen({
   email,
+  reason,
   onSignOut,
 }: {
   email: string | null;
+  reason?: string | null;
   onSignOut: () => void;
 }) {
   const shouldReduceMotion = useReducedMotion();
@@ -129,84 +130,32 @@ export function AccessDeniedScreen({
           }}
         >
           <ShieldAlert size={14} />
-          <span>HR Authorization Required</span>
+          <span>Workspace Access Notice</span>
         </div>
 
         <h1
           className="display-font"
           id="access-denied-title"
-          style={{ fontSize: "32px", lineHeight: 1.15, margin: "0 0 10px 0", color: "#443942" }}
+          style={{ fontSize: "30px", lineHeight: 1.15, margin: "0 0 10px 0", color: "#443942" }}
         >
-          Workspace access <br />
-          <em style={{ color: "#be8297", fontWeight: 400 }}>is restricted.</em>
+          Access Unavailable
         </h1>
 
-        <p style={{ color: "#786d76", fontSize: "12.5px", lineHeight: 1.6, margin: "0 0 18px 0" }}>
-          You are signed in as <strong style={{ color: "#443942" }}>{email || "unknown user"}</strong>,
-          but this account does not possess authorized HR staff permissions.
+        <p style={{ color: "#786d76", fontSize: "13px", lineHeight: 1.6, margin: "0 0 18px 0" }}>
+          You are signed in as <strong style={{ color: "#443942" }}>{email || "unknown user"}</strong>.
+          {reason ? ` ${reason}` : " Your personal workspace could not be loaded at this time. Please check your network or try again."}
         </p>
-
-        <div
-          style={{
-            background: "#fff9f5",
-            border: "1px solid #f3e5d8",
-            borderRadius: "12px",
-            padding: "14px 16px",
-            marginBottom: "22px",
-            fontSize: "11.5px",
-            color: "#795f53",
-            lineHeight: 1.55,
-          }}
-        >
-          <strong style={{ display: "block", color: "#61483d", marginBottom: "4px" }}>
-            Development Environment Note:
-          </strong>
-          To grant this account access in local development, add this email address to{" "}
-          <code
-            style={{
-              background: "#faede3",
-              padding: "2px 5px",
-              borderRadius: "4px",
-              fontSize: "11px",
-              fontFamily: "monospace",
-            }}
-          >
-            VITE_HR_ALLOWED_EMAILS
-          </code>{" "}
-          in{" "}
-          <code
-            style={{
-              background: "#faede3",
-              padding: "2px 5px",
-              borderRadius: "4px",
-              fontSize: "11px",
-              fontFamily: "monospace",
-            }}
-          >
-            frontend/.env.local
-          </code>
-          , or assign an <code style={{ fontFamily: "monospace" }}>hr_admin</code> custom claim in Firebase.
-        </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
           <button
             type="button"
             onClick={onSignOut}
-            className="primary-action"
+            className="secondary-action"
             style={{ width: "100%", justifyContent: "center" }}
           >
             <LogOut size={15} />
-            Sign out & switch account
+            Sign out & switch Google account
           </button>
-
-          <Link
-            href="/"
-            className="secondary-action"
-            style={{ width: "100%", justifyContent: "center", textDecoration: "none" }}
-          >
-            <ArrowLeft size={15} />
-            Return to People Journey home
-          </Link>
         </div>
       </motion.section>
 
@@ -217,10 +166,13 @@ export function AccessDeniedScreen({
 
 /**
  * ProtectedRoute component for Wouter.
- * Enforces session initialization, authentication, and HR authorization.
+ * Enforces session initialization, authentication, and workspace profile availability.
  */
-export function ProtectedRoute({ component: Component, children }: ProtectedRouteProps) {
-  const { user, loading, authorizationChecking, isAuthorized } = useAuth();
+export function ProtectedRoute({
+  component: Component,
+  children,
+}: ProtectedRouteProps) {
+  const { user, loading, authorizationChecking, isAuthorized, authError, signOut } = useAuth();
   const [, setLocation] = useLocation();
 
   // Redirect unauthenticated visitors to login
@@ -230,7 +182,7 @@ export function ProtectedRoute({ component: Component, children }: ProtectedRout
     }
   }, [loading, user, setLocation]);
 
-  // Initial Firebase session restoration
+  // Initial Firebase session restoration or token verification
   if (loading || (user && authorizationChecking && isAuthorized === null)) {
     return <AuthLoadingScreen message="Restoring your secure session…" />;
   }
@@ -240,7 +192,18 @@ export function ProtectedRoute({ component: Component, children }: ProtectedRout
     return null;
   }
 
-  // Authenticated user has full workspace access
+  // Account deactivated or server rejected authorization
+  if (isAuthorized === false) {
+    return (
+      <AccessDeniedScreen
+        email={user.email}
+        reason={authError || "Your account has not been authorized or has been deactivated."}
+        onSignOut={signOut}
+      />
+    );
+  }
+
+  // Authenticated and authorized
   if (Component) {
     return <Component />;
   }

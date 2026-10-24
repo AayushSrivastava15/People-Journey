@@ -1,183 +1,282 @@
-import oracledb from 'oracledb';
 import { executeSql } from '../config/database';
-import type { HrUser, CreateHrUserInput, UpdateHrUserInput } from '../models/user.model';
+import type {
+  AppUser,
+  AppRole,
+  CreateUserInput,
+  UpdateUserProfileInput,
+  AdminUpdateUserInput,
+} from '../models/user.model';
+import { env } from '../config/env';
 import { logger } from '../utils/logger';
 
-interface RawHrUserRow {
-  HR_USER_ID: number;
-  FIREBASE_UID: string;
-  EMAIL: string;
-  FULL_NAME: string;
-  HR_ROLE: 'hr_admin' | 'hr_staff';
-  IS_ACTIVE: string;
-  CREATED_AT?: Date | string;
-  UPDATED_AT?: Date | string;
+interface RawAppUserRow {
+  id: string;
+  firebase_uid: string;
+  email: string;
+  display_name: string | null;
+  photo_url: string | null;
+  role: 'user';
+  account_status: 'active' | 'deactivated' | 'suspended';
+  preferences: Record<string, unknown> | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+  last_login_at: Date | string | null;
 }
 
-function mapRowToHrUser(row: RawHrUserRow): HrUser {
+function mapRowToAppUser(row: RawAppUserRow): AppUser {
   return {
-    hrUserId: Number(row.HR_USER_ID),
-    firebaseUid: row.FIREBASE_UID,
-    email: row.EMAIL,
-    fullName: row.FULL_NAME,
-    role: row.HR_ROLE,
-    isActive: row.IS_ACTIVE === 'Y',
-    createdAt: row.CREATED_AT ? new Date(row.CREATED_AT).toISOString() : undefined,
-    updatedAt: row.UPDATED_AT ? new Date(row.UPDATED_AT).toISOString() : undefined,
+    id: row.id,
+    firebaseUid: row.firebase_uid,
+    email: row.email,
+    displayName: row.display_name,
+    photoUrl: row.photo_url,
+    role: row.role,
+    accountStatus: row.account_status,
+    preferences: row.preferences || {},
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : undefined,
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
+    lastLoginAt: row.last_login_at ? new Date(row.last_login_at).toISOString() : null,
   };
 }
 
 export const userService = {
   /**
-   * Find an HR user by their verified Firebase UID.
+   * Find user by authoritative Firebase UID.
    */
-  async findByFirebaseUid(firebaseUid: string): Promise<HrUser | null> {
-    const result = await executeSql<RawHrUserRow>(
-      `SELECT HR_USER_ID, FIREBASE_UID, EMAIL, FULL_NAME, HR_ROLE, IS_ACTIVE, CREATED_AT, UPDATED_AT
-       FROM HR_USERS
-       WHERE FIREBASE_UID = :firebaseUid`,
-      { firebaseUid }
+  async findByFirebaseUid(firebaseUid: string): Promise<AppUser | null> {
+    const result = await executeSql<RawAppUserRow>(
+      `SELECT id, firebase_uid, email, display_name, photo_url, role, account_status, preferences, created_at, updated_at, last_login_at
+       FROM app_users
+       WHERE firebase_uid = $1`,
+      [firebaseUid]
     );
 
     const row = result.rows?.[0];
-    return row ? mapRowToHrUser(row) : null;
+    return row ? mapRowToAppUser(row) : null;
   },
 
   /**
-   * Find an HR user by email (case-insensitive).
+   * Find user by email (case-insensitive).
    */
-  async findByEmail(email: string): Promise<HrUser | null> {
-    const result = await executeSql<RawHrUserRow>(
-      `SELECT HR_USER_ID, FIREBASE_UID, EMAIL, FULL_NAME, HR_ROLE, IS_ACTIVE, CREATED_AT, UPDATED_AT
-       FROM HR_USERS
-       WHERE LOWER(EMAIL) = LOWER(:email)`,
-      { email: email.trim().toLowerCase() }
+  async findByEmail(email: string): Promise<AppUser | null> {
+    const result = await executeSql<RawAppUserRow>(
+      `SELECT id, firebase_uid, email, display_name, photo_url, role, account_status, preferences, created_at, updated_at, last_login_at
+       FROM app_users
+       WHERE LOWER(email) = LOWER($1)`,
+      [email.trim().toLowerCase()]
     );
 
     const row = result.rows?.[0];
-    return row ? mapRowToHrUser(row) : null;
+    return row ? mapRowToAppUser(row) : null;
   },
 
   /**
-   * Find an HR user by their database primary key.
+   * Find user by primary UUID key.
    */
-  async findById(hrUserId: number): Promise<HrUser | null> {
-    const result = await executeSql<RawHrUserRow>(
-      `SELECT HR_USER_ID, FIREBASE_UID, EMAIL, FULL_NAME, HR_ROLE, IS_ACTIVE, CREATED_AT, UPDATED_AT
-       FROM HR_USERS
-       WHERE HR_USER_ID = :hrUserId`,
-      { hrUserId }
+  async findById(id: string): Promise<AppUser | null> {
+    const result = await executeSql<RawAppUserRow>(
+      `SELECT id, firebase_uid, email, display_name, photo_url, role, account_status, preferences, created_at, updated_at, last_login_at
+       FROM app_users
+       WHERE id = $1`,
+      [id]
     );
 
     const row = result.rows?.[0];
-    return row ? mapRowToHrUser(row) : null;
+    return row ? mapRowToAppUser(row) : null;
   },
 
   /**
-   * Get the total count of registered HR users in Oracle.
+   * Get total count of registered application users.
    */
   async count(): Promise<number> {
-    const result = await executeSql<{ TOTAL: number }>('SELECT COUNT(*) AS TOTAL FROM HR_USERS');
-    return Number(result.rows?.[0]?.TOTAL || 0);
+    const result = await executeSql<{ total: string }>('SELECT COUNT(*) AS total FROM app_users');
+    return parseInt(result.rows?.[0]?.total || '0', 10);
   },
 
   /**
-   * Link an existing user record to a newly verified Firebase UID.
+   * Atomic Google Authentication registration and login sync.
+   * - New user: auto-created with role 'user' and status 'active'.
+   * - Returning user: updates last_login_at and syncs display info.
+   * - Concurrency-safe: utilizes ON CONFLICT (firebase_uid) atomic upsert.
    */
-  async linkFirebaseUid(hrUserId: number, firebaseUid: string): Promise<void> {
-    await executeSql(
-      `UPDATE HR_USERS
-       SET FIREBASE_UID = :firebaseUid, UPDATED_AT = CURRENT_TIMESTAMP
-       WHERE HR_USER_ID = :hrUserId`,
-      { firebaseUid, hrUserId }
-    );
-  },
-
-  /**
-   * Create a new HR user record in Oracle.
-   */
-  async create(data: CreateHrUserInput): Promise<HrUser> {
+  async syncGoogleUser(data: {
+    firebaseUid: string;
+    email: string;
+    displayName?: string;
+    photoUrl?: string;
+  }): Promise<AppUser> {
     const email = data.email.trim().toLowerCase();
-    const fullName = data.fullName.trim();
-    const role = data.role || 'hr_staff';
-    const firebaseUid = data.firebaseUid || `pending_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const displayName = data.displayName?.trim() || null;
+    const photoUrl = data.photoUrl?.trim() || null;
+    const initialRole: AppRole = 'user';
 
-    const binds = {
-      firebaseUid,
+    const sql = `
+      INSERT INTO app_users (
+        firebase_uid,
+        email,
+        display_name,
+        photo_url,
+        role,
+        account_status,
+        preferences,
+        last_login_at
+      )
+      VALUES ($1, $2, $3, $4, $5, 'active', '{}'::jsonb, CURRENT_TIMESTAMP)
+      ON CONFLICT (firebase_uid) DO UPDATE
+      SET
+        email = EXCLUDED.email,
+        display_name = COALESCE(EXCLUDED.display_name, app_users.display_name),
+        photo_url = COALESCE(EXCLUDED.photo_url, app_users.photo_url),
+        last_login_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING id, firebase_uid, email, display_name, photo_url, role, account_status, preferences, created_at, updated_at, last_login_at;
+    `;
+
+    const result = await executeSql<RawAppUserRow>(sql, [
+      data.firebaseUid,
       email,
-      fullName,
+      displayName,
+      photoUrl,
+      initialRole,
+    ]);
+
+    const row = result.rows?.[0];
+    if (!row) {
+      throw new Error('Failed to register or update user profile in PostgreSQL.');
+    }
+
+    return mapRowToAppUser(row);
+  },
+
+  /**
+   * Manual creation (e.g. for provisioning scripts or admins).
+   */
+  async create(data: CreateUserInput): Promise<AppUser> {
+    const email = data.email.trim().toLowerCase();
+    const role = data.role || 'user';
+    const status = data.accountStatus || 'active';
+    const preferences = data.preferences || {};
+
+    const sql = `
+      INSERT INTO app_users (
+        firebase_uid,
+        email,
+        display_name,
+        photo_url,
+        role,
+        account_status,
+        preferences
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id, firebase_uid, email, display_name, photo_url, role, account_status, preferences, created_at, updated_at, last_login_at;
+    `;
+
+    const result = await executeSql<RawAppUserRow>(sql, [
+      data.firebaseUid,
+      email,
+      data.displayName || null,
+      data.photoUrl || null,
       role,
-      out_id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
-    };
+      status,
+      JSON.stringify(preferences),
+    ]);
 
-    const result = await executeSql(
-      `INSERT INTO HR_USERS (FIREBASE_UID, EMAIL, FULL_NAME, HR_ROLE, IS_ACTIVE)
-       VALUES (:firebaseUid, :email, :fullName, :role, 'Y')
-       RETURNING HR_USER_ID INTO :out_id`,
-      binds
-    );
-
-    const outId = (result.outBinds as { out_id: number[] })?.out_id?.[0];
-    if (!outId) {
-      throw new Error('Failed to retrieve generated HR_USER_ID from insert operation.');
+    const row = result.rows?.[0];
+    if (!row) {
+      throw new Error('Failed to create user in database.');
     }
 
-    const created = await this.findById(outId);
-    if (!created) {
-      throw new Error('Failed to load created HR user from database.');
-    }
-
-    logger.info({ hrUserId: outId, email, role }, 'Created new HR user in Oracle');
-    return created;
+    return mapRowToAppUser(row);
   },
 
   /**
-   * List all HR users.
+   * User self-service profile update (only display_name, photo_url, preferences).
    */
-  async findAll(): Promise<HrUser[]> {
-    const result = await executeSql<RawHrUserRow>(
-      `SELECT HR_USER_ID, FIREBASE_UID, EMAIL, FULL_NAME, HR_ROLE, IS_ACTIVE, CREATED_AT, UPDATED_AT
-       FROM HR_USERS
-       ORDER BY CREATED_AT DESC`
-    );
+  async updateProfile(userId: string, data: UpdateUserProfileInput): Promise<AppUser> {
+    const updates: string[] = ['updated_at = CURRENT_TIMESTAMP'];
+    const params: unknown[] = [userId];
+    let paramIndex = 2;
 
-    return (result.rows || []).map(mapRowToHrUser);
+    if (data.displayName !== undefined) {
+      updates.push(`display_name = $${paramIndex++}`);
+      params.push(data.displayName);
+    }
+
+    if (data.photoUrl !== undefined) {
+      updates.push(`photo_url = $${paramIndex++}`);
+      params.push(data.photoUrl || null);
+    }
+
+    if (data.preferences !== undefined) {
+      updates.push(`preferences = $${paramIndex++}`);
+      params.push(JSON.stringify(data.preferences));
+    }
+
+    const sql = `
+      UPDATE app_users
+      SET ${updates.join(', ')}
+      WHERE id = $1
+      RETURNING id, firebase_uid, email, display_name, photo_url, role, account_status, preferences, created_at, updated_at, last_login_at;
+    `;
+
+    const result = await executeSql<RawAppUserRow>(sql, params);
+    const row = result.rows?.[0];
+    if (!row) {
+      throw new Error(`User with ID ${userId} not found.`);
+    }
+
+    return mapRowToAppUser(row);
   },
 
   /**
-   * Update an existing HR user's details or status.
+   * Administrative user update (role, account status, display name).
    */
-  async update(hrUserId: number, data: UpdateHrUserInput): Promise<HrUser> {
-    const existing = await this.findById(hrUserId);
-    if (!existing) {
-      throw new Error(`HR User with ID ${hrUserId} not found.`);
-    }
-
-    const updates: string[] = ['UPDATED_AT = CURRENT_TIMESTAMP'];
-    const binds: oracledb.BindParameters = { hrUserId };
-
-    if (data.fullName !== undefined) {
-      updates.push('FULL_NAME = :fullName');
-      binds.fullName = data.fullName.trim();
-    }
+  async adminUpdate(userId: string, data: AdminUpdateUserInput): Promise<AppUser> {
+    const updates: string[] = ['updated_at = CURRENT_TIMESTAMP'];
+    const params: unknown[] = [userId];
+    let paramIndex = 2;
 
     if (data.role !== undefined) {
-      updates.push('HR_ROLE = :role');
-      binds.role = data.role;
+      updates.push(`role = $${paramIndex++}`);
+      params.push(data.role);
     }
 
-    if (data.isActive !== undefined) {
-      updates.push('IS_ACTIVE = :isActive');
-      binds.isActive = data.isActive ? 'Y' : 'N';
+    if (data.accountStatus !== undefined) {
+      updates.push(`account_status = $${paramIndex++}`);
+      params.push(data.accountStatus);
     }
 
-    await executeSql(
-      `UPDATE HR_USERS
-       SET ${updates.join(', ')}
-       WHERE HR_USER_ID = :hrUserId`,
-      binds
+    if (data.displayName !== undefined) {
+      updates.push(`display_name = $${paramIndex++}`);
+      params.push(data.displayName);
+    }
+
+    const sql = `
+      UPDATE app_users
+      SET ${updates.join(', ')}
+      WHERE id = $1
+      RETURNING id, firebase_uid, email, display_name, photo_url, role, account_status, preferences, created_at, updated_at, last_login_at;
+    `;
+
+    const result = await executeSql<RawAppUserRow>(sql, params);
+    const row = result.rows?.[0];
+    if (!row) {
+      throw new Error(`User with ID ${userId} not found.`);
+    }
+
+    return mapRowToAppUser(row);
+  },
+
+  /**
+   * List all registered users (Admin only).
+   */
+  async findAll(): Promise<AppUser[]> {
+    const result = await executeSql<RawAppUserRow>(
+      `SELECT id, firebase_uid, email, display_name, photo_url, role, account_status, preferences, created_at, updated_at, last_login_at
+       FROM app_users
+       ORDER BY created_at DESC`
     );
 
-    return (await this.findById(hrUserId))!;
+    return (result.rows || []).map(mapRowToAppUser);
   },
 };

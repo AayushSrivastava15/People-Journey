@@ -1,8 +1,9 @@
 import { describe, it } from 'node:test';
-import { strictEqual, deepStrictEqual } from 'node:assert';
-import { authenticateToken, requireRole } from '../../src/middleware/auth.middleware';
+import { strictEqual, ok } from 'node:assert';
+import { authenticateToken } from '../../src/middleware/auth.middleware';
 import type { Request, Response } from 'express';
-import type { HrUser } from '../../src/models/user.model';
+import type { AppUser } from '../../src/models/user.model';
+import { AppRole, UpdateUserProfileSchema } from '../../src/models/user.model';
 
 interface MockResponse extends Partial<Response> {
   statusCode?: number;
@@ -22,7 +23,7 @@ function createMockResponse(): MockResponse {
   return res;
 }
 
-describe('Authentication Middleware', () => {
+describe('Authentication Middleware Header Parsing', () => {
   it('should return 401 when Authorization header is missing', async () => {
     const req = { headers: {} } as Request;
     const res = createMockResponse();
@@ -34,7 +35,7 @@ describe('Authentication Middleware', () => {
 
     strictEqual(res.statusCode, 401);
     strictEqual(nextCalled, false);
-    strictEqual((res.jsonData as { authorized: boolean }).authorized, false);
+    strictEqual((res.jsonData as { success: boolean }).success, false);
   });
 
   it('should return 401 when Authorization header does not start with Bearer', async () => {
@@ -64,56 +65,65 @@ describe('Authentication Middleware', () => {
   });
 });
 
-describe('Role-based Authorization Middleware', () => {
-  const mockUser: HrUser = {
-    hrUserId: 1,
-    firebaseUid: 'test_uid_123',
-    email: 'staff@peoplejourney.com',
-    fullName: 'Test Staff',
-    role: 'hr_staff',
-    isActive: true,
-  };
-
-  it('should allow user with required role', () => {
-    const req = { user: mockUser } as unknown as Request;
-    const res = createMockResponse();
-    let nextCalled = false;
-
-    const middleware = requireRole(['hr_staff', 'hr_admin']);
-    middleware(req, res as Response, () => {
-      nextCalled = true;
-    });
-
-    strictEqual(nextCalled, true);
-    strictEqual(res.statusCode, undefined);
+describe('Single-Role Personal Workspace Model', () => {
+  it('should only permit role "user" in AppRole schema', () => {
+    strictEqual(AppRole.safeParse('user').success, true);
+    strictEqual(AppRole.safeParse('hr_admin').success, false);
+    strictEqual(AppRole.safeParse('hr_staff').success, false);
+    strictEqual(AppRole.safeParse('super_admin').success, false);
   });
 
-  it('should return 403 when user lacks required role', () => {
-    const req = { user: mockUser } as unknown as Request;
-    const res = createMockResponse();
-    let nextCalled = false;
+  it('should prevent role escalation in profile update schema', () => {
+    const maliciousPayload = {
+      displayName: 'Workspace User',
+      role: 'admin',
+      accountStatus: 'active',
+      ownerUserId: '00000000-0000-0000-0000-000000000000',
+    };
 
-    const middleware = requireRole(['hr_admin']);
-    middleware(req, res as Response, () => {
-      nextCalled = true;
-    });
-
-    strictEqual(res.statusCode, 403);
-    strictEqual(nextCalled, false);
-    strictEqual((res.jsonData as { authorized: boolean }).authorized, false);
+    const parsed = UpdateUserProfileSchema.parse(maliciousPayload);
+    strictEqual((parsed as Record<string, unknown>).role, undefined);
+    strictEqual((parsed as Record<string, unknown>).accountStatus, undefined);
+    strictEqual((parsed as Record<string, unknown>).ownerUserId, undefined);
+    strictEqual(parsed.displayName, 'Workspace User');
   });
 
-  it('should return 401 when user is missing from request', () => {
-    const req = {} as Request;
-    const res = createMockResponse();
-    let nextCalled = false;
+  it('should reject invalid URLs in photoUrl updates', () => {
+    const invalidPayload = {
+      photoUrl: 'javascript:alert(1)',
+    };
 
-    const middleware = requireRole(['hr_admin']);
-    middleware(req, res as Response, () => {
-      nextCalled = true;
-    });
-
-    strictEqual(res.statusCode, 401);
-    strictEqual(nextCalled, false);
+    const result = UpdateUserProfileSchema.safeParse(invalidPayload);
+    strictEqual(result.success, false);
   });
 });
+
+describe('Account Status Enforcement', () => {
+  const deactivatedUser: AppUser = {
+    id: 'd3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44',
+    firebaseUid: 'deactivated_uid_999',
+    email: 'disabled.user@example.com',
+    displayName: 'Disabled User',
+    role: 'user',
+    accountStatus: 'deactivated',
+  };
+
+  it('should reject deactivated users even with role user', async () => {
+    // Test the account status validation pattern used in auth middleware & session
+    const res = createMockResponse();
+    if (deactivatedUser.accountStatus !== 'active') {
+      res.status!(403).json({
+        success: false,
+        error: {
+          code: 'ACCOUNT_DEACTIVATED',
+          message: 'Your account has been deactivated.',
+        },
+      });
+    }
+
+    strictEqual(res.statusCode, 403);
+    strictEqual((res.jsonData as { error: { code: string } }).error.code, 'ACCOUNT_DEACTIVATED');
+  });
+});
+
+

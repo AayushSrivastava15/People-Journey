@@ -1,8 +1,10 @@
 import {
   createUserWithEmailAndPassword,
+  getRedirectResult,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   updateProfile,
   type User,
@@ -13,14 +15,44 @@ import {
   authPersistenceReady,
   googleProvider,
 } from "../lib/firebase";
+import type { AppUser } from "../types/api";
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
 
 /**
- * Sign in with Google.
+ * Sign in with Google using Firebase Authentication.
+ * Primary: genuine popup flow with Google account selection.
+ * Fallback: if popup is blocked by browser, initiates redirect flow.
  */
 export async function signInWithGoogle(): Promise<User> {
   await authPersistenceReady;
-  const result = await signInWithPopup(auth, googleProvider);
-  return result.user;
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    return result.user;
+  } catch (error: unknown) {
+    const code = (error as { code?: string })?.code;
+    if (code === 'auth/popup-blocked') {
+      console.warn('Popup blocked by browser; falling back to signInWithRedirect...');
+      await signInWithRedirect(auth, googleProvider);
+      // Flow redirects the page; execution pauses until redirect return
+      throw new Error('Redirecting to Google for account sign-in...');
+    }
+    throw error;
+  }
+}
+
+/**
+ * Check for pending redirect result on page load.
+ */
+export async function handleRedirectResult(): Promise<User | null> {
+  await authPersistenceReady;
+  try {
+    const result = await getRedirectResult(auth);
+    return result ? result.user : null;
+  } catch (error) {
+    console.error('Redirect sign-in error:', error);
+    return null;
+  }
 }
 
 /**
@@ -75,6 +107,37 @@ export async function resetPassword(email: string): Promise<void> {
 }
 
 /**
+ * Synchronize verified Firebase user with Express backend and PostgreSQL app_users table.
+ * Returns authoritative PostgreSQL profile and role.
+ */
+export async function syncUserWithBackend(token: string): Promise<AppUser> {
+  const url = `${API_BASE_URL.replace(/\/$/, '')}/auth/session`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    let errMessage = 'Failed to verify session with application server.';
+    try {
+      const errData = await response.json();
+      if (errData?.error?.message) {
+        errMessage = errData.error.message;
+      }
+    } catch {
+      // Fallback message
+    }
+    throw new Error(errMessage);
+  }
+
+  const data = await response.json();
+  return data.user;
+}
+
+/**
  * Get the current user's Firebase ID token for authenticated requests.
  */
 export async function getCurrentUserToken(forceRefresh = false): Promise<string | null> {
@@ -111,7 +174,7 @@ export function mapAuthError(error: unknown): string {
       return "The Google sign-in window was closed before finishing. Please try again when ready.";
 
     case "auth/popup-blocked":
-      return "Your browser blocked the Google sign-in popup. Please allow popups for this site and try again.";
+      return "Your browser blocked the Google sign-in popup. Redirecting to Google...";
 
     case "auth/cancelled-popup-request":
       return "A new sign-in was started before the previous one completed.";

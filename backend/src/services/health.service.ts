@@ -25,7 +25,7 @@ export const healthService = {
         status: dbStatus,
         poolInitialized: isPoolInitialized(),
         latencyMs: dbTest.latencyMs,
-        message: dbTest.healthy ? 'Oracle Database Free connection healthy' : dbTest.error,
+        message: dbTest.healthy ? 'Supabase PostgreSQL connection healthy' : dbTest.error,
       },
     };
   },

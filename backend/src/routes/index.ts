@@ -9,6 +9,7 @@ const router: IRouter = Router();
 
 router.use('/', healthRoutes);
 router.use('/auth', authRoutes);
+router.use('/users', authRoutes);
 router.use('/employees', employeeRoutes);
 router.use('/', masterRoutes);
 router.use('/dashboard', dashboardRoutes);
