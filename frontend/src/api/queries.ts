@@ -9,6 +9,7 @@ import type {
   PersonalDashboardData,
   AppUser,
   CreateEmployeePayload,
+  UpdateEmployeePayload,
   OffboardEmployeePayload,
   CompanyProfile,
   UpsertCompanyProfileInput,
@@ -136,6 +137,30 @@ export function useCreateEmployee() {
       queryClient.invalidateQueries({ queryKey: ['employees'] });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.departments });
+    },
+  });
+}
+
+export function useUpdateEmployee() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      employeeId,
+      payload,
+    }: {
+      employeeId: number;
+      payload: UpdateEmployeePayload;
+    }) =>
+      apiClient<Employee>(`/employees/${employeeId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['employees'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.departments });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.personalDashboard });
     },
   });
 }

@@ -5,7 +5,7 @@ import { useForm } from 'react-hook-form';
 import {
   Activity, ArrowDownLeft, ArrowRight, Bell, BriefcaseBusiness, CalendarDays, Check,
   ChevronDown, ChevronLeft, ChevronRight, CircleHelp, ClipboardCheck, Clock3, Database, DoorOpen,
-  FileText, LayoutDashboard, ListFilter, Loader2, Lock, LogOut, Menu, MessageSquareText, Search, Settings,
+  FileText, LayoutDashboard, ListFilter, Loader2, Lock, LogOut, Menu, MessageSquareText, Pencil, Search, Settings,
   ShieldCheck, UserCheck, Users, UsersRound, X,
 } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -26,6 +26,8 @@ import { CompanyProfileCard } from '@/components/company-profile-card';
 import { EmailTemplatesView } from '@/components/email-templates-view';
 import { EmailNotificationsView } from '@/components/email-notifications-view';
 import { EmailDraftHistoryView } from '@/components/email-draft-history-view';
+import { EditEmployeeDialog } from '@/components/edit-employee-dialog';
+
 
 const navGroups = [
   { label: 'Overview', links: [{ label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard }] },
@@ -484,7 +486,22 @@ function PageHeading({ eyebrow, title, text, action }: { eyebrow?: string; title
   return <div className="page-heading"><div>{eyebrow && <span className="page-eyebrow">{eyebrow}</span>}<h1>{title}</h1><p>{text}</p></div>{action}</div>;
 }
 
-function EmployeeTable({ people, compact = false, isLoading = false }: { people: ApiEmployee[]; compact?: boolean; isLoading?: boolean }) {
+function EmployeeTable({
+  people,
+  compact = false,
+  isLoading = false,
+  departments = [],
+  designations = [],
+}: {
+  people: ApiEmployee[];
+  compact?: boolean;
+  isLoading?: boolean;
+  departments?: import('@/types/api').Department[];
+  designations?: import('@/types/api').Designation[];
+}) {
+  const [editingEmployee, setEditingEmployee] = useState<ApiEmployee | null>(null);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+
   if (isLoading) {
     return (
       <div className="table-scroll" style={{ padding: '40px 20px', textAlign: 'center', color: '#887582' }}>
@@ -494,81 +511,130 @@ function EmployeeTable({ people, compact = false, isLoading = false }: { people:
     );
   }
 
-  return (
-    <div className="table-scroll">
-      <table className="data-table">
-        <colgroup>
-          <col style={{ width: compact ? '32%' : '26%' }} />
-          <col style={{ width: compact ? '22%' : '18%' }} />
-          <col style={{ width: compact ? '24%' : '18%' }} />
-          <col style={{ width: compact ? '22%' : '14%' }} />
-          {!compact && <col style={{ width: '12%' }} />}
-          {!compact && <col style={{ width: '12%' }} />}
-        </colgroup>
-        <thead>
-          <tr>
-            <th>Employee</th>
-            <th>Department</th>
-            <th>Role / Designation</th>
-            <th>Joining Date</th>
-            {!compact && <th>Last Working Day</th>}
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {people.map(person => {
-            const id = person.employeeId;
-            const name = person.name;
-            const email = person.workEmail || '';
-            const code = person.employeeCode || '';
-            const dept = person.departmentName || 'General';
-            const role = person.designationName || 'Team Member';
-            const hire = person.hireDate;
-            const exit = person.exitDate;
-            const initials = name ? name.split(' ').map((p: string) => p[0]).join('').slice(0, 2) : 'EM';
+  const handleEditClick = (employee: ApiEmployee) => {
+    setEditingEmployee(employee);
+    setEditDialogOpen(true);
+  };
 
-            return (
-              <tr key={String(id)}>
-                <td>
-                  <span className="person-cell">
-                    <span className="person-avatar">{initials}</span>
-                    <span>
-                      <b>{name}</b>
-                      <small>{email || code || 'Registered'}</small>
-                    </span>
-                  </span>
-                </td>
-                <td>{dept || 'General'}</td>
-                <td>{role || 'Team Member'}</td>
-                <td>{fmt(hire)}</td>
-                {!compact && (
+  return (
+    <>
+      <div className="table-scroll">
+        <table className="data-table">
+          <colgroup>
+            <col style={{ width: compact ? '30%' : '24%' }} />
+            <col style={{ width: compact ? '20%' : '16%' }} />
+            <col style={{ width: compact ? '22%' : '16%' }} />
+            <col style={{ width: compact ? '18%' : '12%' }} />
+            {!compact && <col style={{ width: '12%' }} />}
+            <col style={{ width: compact ? '10%' : '11%' }} />
+            <col style={{ width: '9%' }} />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Employee</th>
+              <th>Department</th>
+              <th>Role / Designation</th>
+              <th>Joining Date</th>
+              {!compact && <th>Last Working Day</th>}
+              <th>Status</th>
+              <th style={{ textAlign: 'center' }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {people.map(person => {
+              const id = person.employeeId;
+              const name = person.name;
+              const email = person.workEmail || '';
+              const code = person.employeeCode || '';
+              const dept = person.departmentName || 'General';
+              const role = person.designationName || 'Team Member';
+              const hire = person.hireDate;
+              const exit = person.exitDate;
+              const initials = name ? name.split(' ').map((p: string) => p[0]).join('').slice(0, 2) : 'EM';
+
+              return (
+                <tr key={String(id)}>
                   <td>
-                    {exit ? fmt(exit) : <span style={{ color: '#b5a4ac' }}>—</span>}
+                    <span className="person-cell">
+                      <span className="person-avatar">{initials}</span>
+                      <span>
+                        <b>{name}</b>
+                        <small>{email || code || 'Registered'}</small>
+                      </span>
+                    </span>
                   </td>
-                )}
-                <td><Status value={person.status} /></td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      {people.length === 0 && (
-        <div className="table-empty">
-          <UsersRound size={24} style={{ color: '#b5798e' }} />
-          <b>No matching employee records</b>
-          <span>No employees found in your workspace. Try adding a new employee or clearing your search filters.</span>
-          <Link
-            href="/dashboard/add-employee"
-            className="secondary-action"
-            style={{ marginTop: '6px' }}
-          >
-            <Users size={14} /> Add new employee
-          </Link>
-        </div>
-      )}
-    </div>
+                  <td>{dept || 'General'}</td>
+                  <td>{role || 'Team Member'}</td>
+                  <td>{fmt(hire)}</td>
+                  {!compact && (
+                    <td>
+                      {exit ? fmt(exit) : <span style={{ color: '#b5a4ac' }}>—</span>}
+                    </td>
+                  )}
+                  <td><Status value={person.status} /></td>
+                  <td style={{ textAlign: 'center' }}>
+                    <button
+                      type="button"
+                      title={`Edit ${name}`}
+                      aria-label={`Edit ${name}`}
+                      onClick={() => handleEditClick(person)}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                        width: 30, height: 30, borderRadius: '8px',
+                        border: '1px solid #eee3e2', background: '#fffdfa',
+                        color: '#887582', cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                      }}
+                      onMouseEnter={e => {
+                        (e.currentTarget as HTMLButtonElement).style.background = '#f4e4ea';
+                        (e.currentTarget as HTMLButtonElement).style.color = '#bd7b92';
+                        (e.currentTarget as HTMLButtonElement).style.borderColor = '#dfc9d0';
+                      }}
+                      onMouseLeave={e => {
+                        (e.currentTarget as HTMLButtonElement).style.background = '#fffdfa';
+                        (e.currentTarget as HTMLButtonElement).style.color = '#887582';
+                        (e.currentTarget as HTMLButtonElement).style.borderColor = '#eee3e2';
+                      }}
+                    >
+                      <Pencil size={13} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {people.length === 0 && (
+          <div className="table-empty">
+            <UsersRound size={24} style={{ color: '#b5798e' }} />
+            <b>No matching employee records</b>
+            <span>No employees found in your workspace. Try adding a new employee or clearing your search filters.</span>
+            <Link
+              href="/dashboard/add-employee"
+              className="secondary-action"
+              style={{ marginTop: '6px' }}
+            >
+              <Users size={14} /> Add new employee
+            </Link>
+          </div>
+        )}
+      </div>
+
+      {/* Edit Employee Dialog */}
+      <EditEmployeeDialog
+        employee={editingEmployee}
+        open={editDialogOpen}
+        onOpenChange={(o) => {
+          setEditDialogOpen(o);
+          if (!o) setEditingEmployee(null);
+        }}
+        departments={departments}
+        designations={designations}
+      />
+    </>
   );
 }
+
 
 function NotificationTable({ rows }: { rows: WorkspaceNotificationItem[] }) {
   return (
@@ -935,6 +1001,7 @@ function ListingPage({
   });
 
   const { data: liveDepartments } = useDepartments();
+  const { data: liveDesignations } = useDesignations();
 
   const people = employeeData?.data || [];
   const totalCount = employeeData?.total || 0;
@@ -1006,7 +1073,7 @@ function ListingPage({
             transition={{ duration: 0.18, ease: 'easeOut' }}
           >
             {peopleMode ? (
-              <EmployeeTable people={people} isLoading={employeesLoading} />
+              <EmployeeTable people={people} isLoading={employeesLoading} departments={liveDepartments || []} designations={liveDesignations || []} />
             ) : (
               <NotificationTable rows={filteredNotifications.slice(page * pageSize, (page + 1) * pageSize)} />
             )}

@@ -141,6 +141,18 @@ export interface CreateEmployeePayload {
   lastWorkingDay?: string | null;
 }
 
+export interface UpdateEmployeePayload {
+  firstName?: string;
+  lastName?: string;
+  workEmail?: string;
+  phone?: string;
+  departmentId?: number | null;
+  designationId?: number | null;
+  employmentStatus?: string;
+  hireDate?: string;
+  exitDate?: string | null;
+}
+
 export interface OffboardEmployeePayload {
   plannedExitDate: string;
   lastWorkingDay?: string;
