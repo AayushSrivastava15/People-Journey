@@ -4,6 +4,9 @@ import { userService } from '../services/user.service';
 import { auditService } from '../services/audit.service';
 import type { AppUser, AppRole } from '../models/user.model';
 import { logger } from '../utils/logger';
+import { authCache } from '../utils/auth-cache';
+
+export const invalidateUserAuthCache = (identifier?: string) => authCache.invalidate(identifier);
 
 // Extend Express Request type
 declare global {
@@ -85,6 +88,25 @@ export async function authenticateToken(
     picture: decodedToken.picture,
   };
 
+  const cached = authCache.get(decodedToken.uid);
+  if (cached) {
+    if (cached.accountStatus !== 'active') {
+      res.status(403).json({
+        success: false,
+        authorized: false,
+        error: {
+          code: 'ACCOUNT_DEACTIVATED',
+          message: 'Your account has been deactivated or suspended. Please contact your system administrator.',
+        },
+      });
+      return;
+    }
+    req.user = cached;
+    req.appUser = cached;
+    next();
+    return;
+  }
+
   const email = (decodedToken.email || '').toLowerCase().trim();
   const displayName = decodedToken.name || (email ? email.split('@')[0] : 'User');
   const photoUrl = decodedToken.picture || null;
@@ -111,14 +133,22 @@ export async function authenticateToken(
         details: { email: user.email, authProvider: 'google.com' },
       });
     } else {
-      // Periodic login sync
-      user = await userService.syncGoogleUser({
-        firebaseUid: decodedToken.uid,
-        email: email || user.email,
-        displayName: displayName || user.displayName || undefined,
-        photoUrl: photoUrl || user.photoUrl || undefined,
-      });
+      // Throttle last_login_at write: update at most once every 15 minutes
+      const now = Date.now();
+      const lastLoginTime = user.lastLoginAt ? new Date(user.lastLoginAt).getTime() : 0;
+      const FIFTEEN_MINUTES = 15 * 60 * 1000;
+      if (!lastLoginTime || (now - lastLoginTime) > FIFTEEN_MINUTES) {
+        user = await userService.syncGoogleUser({
+          firebaseUid: decodedToken.uid,
+          email: email || user.email,
+          displayName: displayName || user.displayName || undefined,
+          photoUrl: photoUrl || user.photoUrl || undefined,
+        });
+      }
     }
+
+    // Cache user entry
+    authCache.set(decodedToken.uid, user);
 
     // 2. Reject deactivated or suspended accounts
     if (user.accountStatus !== 'active') {

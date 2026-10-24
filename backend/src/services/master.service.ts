@@ -38,11 +38,15 @@ const DEFAULT_DESIGNATIONS = [
   { name: 'Operations Lead', desc: 'Cross-functional operational coordination' },
 ];
 
+let isMasterDataSeeded = false;
+
 export const masterService = {
   /**
    * Seed initial departments and designations if tables are empty.
    */
   async ensureSeededDefaults(): Promise<void> {
+    if (isMasterDataSeeded) return;
+
     try {
       const deptCountRes = await executeSql<{ cnt: string }>('SELECT COUNT(*) AS cnt FROM hr_departments');
       if (parseInt(deptCountRes.rows?.[0]?.cnt || '0', 10) === 0) {
@@ -69,6 +73,7 @@ export const masterService = {
           );
         }
       }
+      isMasterDataSeeded = true;
     } catch (err) {
       logger.error({ err }, 'Error during default master data seeding in PostgreSQL');
     }

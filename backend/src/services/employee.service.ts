@@ -128,15 +128,19 @@ export const employeeService = {
 
     const whereSql = whereClauses.join(' AND ');
 
-    // 1. Total count query
-    const countSql = `
-      SELECT COUNT(*)::int AS total
-      FROM hr_employees e
-      LEFT JOIN hr_departments d ON e.department_id = d.department_id
-      WHERE ${whereSql}
-    `;
-    const countResult = await executeSql<{ total: number }>(countSql, queryParams);
-    const total = Number(countResult.rows?.[0]?.total || 0);
+    // 1. Total count query (omit departments join if search does not reference it)
+    const countSql = params.search
+      ? `
+        SELECT COUNT(*)::int AS total
+        FROM hr_employees e
+        LEFT JOIN hr_departments d ON e.department_id = d.department_id
+        WHERE ${whereSql}
+      `
+      : `
+        SELECT COUNT(*)::int AS total
+        FROM hr_employees e
+        WHERE ${whereSql}
+      `;
 
     // 2. Data query
     const columnMap: Record<string, string> = {
@@ -176,7 +180,14 @@ export const employeeService = {
     `;
 
     const dataParams = [...queryParams, limit, offset];
-    const dataResult = await executeSql<RawEmployeeRow>(dataSql, dataParams);
+
+    // Execute count and data queries concurrently
+    const [countResult, dataResult] = await Promise.all([
+      executeSql<{ total: number }>(countSql, queryParams),
+      executeSql<RawEmployeeRow>(dataSql, dataParams),
+    ]);
+
+    const total = Number(countResult.rows?.[0]?.total || 0);
     const data = (dataResult.rows || []).map(mapRowToEmployee);
 
     return {

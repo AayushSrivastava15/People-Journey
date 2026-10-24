@@ -10,6 +10,16 @@ import type {
   AppUser,
   CreateEmployeePayload,
   OffboardEmployeePayload,
+  CompanyProfile,
+  UpsertCompanyProfileInput,
+  EmailTemplate,
+  CreateEmailTemplateInput,
+  UpdateEmailTemplateInput,
+  EmailDraft,
+  PreviewDraftInput,
+  PreviewDraftResult,
+  CreateDraftInput,
+  EmailDraftStatus,
 } from '../types/api';
 
 export const QUERY_KEYS = {
@@ -20,6 +30,9 @@ export const QUERY_KEYS = {
   employees: (params?: Record<string, unknown>) => ['employees', params || {}] as const,
   departments: ['departments'] as const,
   designations: ['designations'] as const,
+  companyProfile: ['company-profile'] as const,
+  emailTemplates: (category?: string) => ['email-templates', category || 'all'] as const,
+  emailDrafts: (params?: Record<string, unknown>) => ['email-drafts', params || {}] as const,
 };
 
 export function usePersonalDashboard() {
@@ -29,7 +42,7 @@ export function usePersonalDashboard() {
       const res = await apiClient<{ success: boolean; data: PersonalDashboardData }>('/dashboard/me');
       return res.data;
     },
-    staleTime: 15000,
+    staleTime: 60000,
   });
 }
 
@@ -40,7 +53,7 @@ export function useUserProfile() {
       const res = await apiClient<{ success: boolean; data: AppUser }>('/users/me');
       return res.data;
     },
-    staleTime: 30000,
+    staleTime: 60000,
   });
 }
 
@@ -64,7 +77,7 @@ export function useDashboardStats() {
   return useQuery({
     queryKey: QUERY_KEYS.dashboardStats,
     queryFn: () => apiClient<DashboardStats>('/dashboard/stats'),
-    staleTime: 30000,
+    staleTime: 60000,
   });
 }
 
@@ -90,7 +103,7 @@ export function useEmployees(params: {
   return useQuery({
     queryKey: QUERY_KEYS.employees(params),
     queryFn: () => apiClient<PaginatedResponse<Employee>>(endpoint),
-    staleTime: 15000,
+    staleTime: 60000,
   });
 }
 
@@ -146,6 +159,202 @@ export function useOffboardEmployee() {
       queryClient.invalidateQueries({ queryKey: ['employees'] });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.departments });
+    },
+  });
+}
+
+// ----------------------------------------------------------------------
+// Company Profile Hooks
+// ----------------------------------------------------------------------
+
+export function useCompanyProfile() {
+  return useQuery({
+    queryKey: QUERY_KEYS.companyProfile,
+    queryFn: async () => {
+      const res = await apiClient<{ success: boolean; data: CompanyProfile | null }>('/company-profile');
+      return res.data;
+    },
+    staleTime: 60000,
+  });
+}
+
+export function useUpdateCompanyProfile() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: UpsertCompanyProfileInput) =>
+      apiClient<{ success: boolean; data: CompanyProfile }>('/company-profile', {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.companyProfile });
+    },
+  });
+}
+
+// ----------------------------------------------------------------------
+// Email Templates Hooks
+// ----------------------------------------------------------------------
+
+export function useEmailTemplates(category?: string) {
+  const queryParams = new URLSearchParams();
+  if (category && category !== 'All' && category !== 'All Categories') {
+    queryParams.set('category', category);
+  }
+  const queryString = queryParams.toString();
+  const endpoint = queryString ? `/email-templates?${queryString}` : '/email-templates';
+
+  return useQuery({
+    queryKey: QUERY_KEYS.emailTemplates(category),
+    queryFn: async () => {
+      const res = await apiClient<{ success: boolean; data: EmailTemplate[] }>(endpoint);
+      return res.data;
+    },
+    staleTime: 60000,
+  });
+}
+
+export function useCreateEmailTemplate() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: CreateEmailTemplateInput) =>
+      apiClient<{ success: boolean; data: EmailTemplate }>('/email-templates', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['email-templates'] });
+    },
+  });
+}
+
+export function useUpdateEmailTemplate() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: UpdateEmailTemplateInput }) =>
+      apiClient<{ success: boolean; data: EmailTemplate }>(`/email-templates/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['email-templates'] });
+    },
+  });
+}
+
+export function useDuplicateEmailTemplate() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiClient<{ success: boolean; data: EmailTemplate }>(`/email-templates/${id}/duplicate`, {
+        method: 'POST',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['email-templates'] });
+    },
+  });
+}
+
+export function useDeleteEmailTemplate() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiClient<{ success: boolean; message: string }>(`/email-templates/${id}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['email-templates'] });
+    },
+  });
+}
+
+// ----------------------------------------------------------------------
+// Email Drafts & Gmail Workflow Hooks
+// ----------------------------------------------------------------------
+
+export function useEmailDrafts(params: {
+  page?: number;
+  limit?: number;
+  status?: string;
+  search?: string;
+} = {}) {
+  const queryParams = new URLSearchParams();
+  if (params.page) queryParams.set('page', String(params.page));
+  if (params.limit) queryParams.set('limit', String(params.limit));
+  if (params.status && params.status !== 'All') queryParams.set('status', params.status);
+  if (params.search) queryParams.set('search', params.search);
+
+  const queryString = queryParams.toString();
+  const endpoint = queryString ? `/email-drafts?${queryString}` : '/email-drafts';
+
+  return useQuery({
+    queryKey: QUERY_KEYS.emailDrafts(params),
+    queryFn: async () => {
+      return apiClient<{
+        success: boolean;
+        data: EmailDraft[];
+        total: number;
+        page: number;
+        limit: number;
+      }>(endpoint);
+    },
+    staleTime: 30000,
+  });
+}
+
+export function usePreviewEmailDraft() {
+  return useMutation({
+    mutationFn: (payload: PreviewDraftInput) =>
+      apiClient<{ success: boolean; data: PreviewDraftResult }>('/email-drafts/preview', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+  });
+}
+
+export function useCreateEmailDraft() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (payload: CreateDraftInput) => {
+      const res = await apiClient<{ success: boolean; data: EmailDraft }>('/email-drafts', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      return res.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['email-drafts'] });
+    },
+  });
+}
+
+export function useUpdateDraftStatus() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      id,
+      status,
+      recordGmailOpen,
+    }: {
+      id: string;
+      status: EmailDraftStatus;
+      recordGmailOpen?: boolean;
+    }) => {
+      const res = await apiClient<{ success: boolean; data: EmailDraft }>(`/email-drafts/${id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status, gmailOpened: !!recordGmailOpen }),
+      });
+      return res.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['email-drafts'] });
     },
   });
 }

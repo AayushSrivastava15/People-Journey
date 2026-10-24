@@ -4,20 +4,46 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
-import { LandingPage } from '@/pages/landing-page';
-import { LoginPage } from '@/pages/login-page';
 import { ProtectedRoute } from '@/components/layout/protected-route';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60 * 1000, // 60 seconds
+      gcTime: 5 * 60 * 1000, // 5 minutes
+      refetchOnWindowFocus: false, // Prevent redundant background fetches
+      retry: 1,
+    },
+  },
+});
+
+const LandingPage = lazy(async () => {
+  const module = await import('@/pages/landing-page');
+  return { default: module.LandingPage };
+});
+
+const LoginPage = lazy(async () => {
+  const module = await import('@/pages/login-page');
+  return { default: module.LoginPage };
+});
+
 const DashboardPage = lazy(async () => {
   const module = await import('@/pages/dashboard');
   return { default: module.DashboardPage };
 });
 
+function RouteFallback({ label = 'Loading…' }: { label?: string }) {
+  return (
+    <div style={{ display: 'grid', placeItems: 'center', minHeight: '50vh', color: '#887582', fontSize: '13px' }} role="status">
+      {label}
+    </div>
+  );
+}
+
 function DashboardRoute() {
   return (
-    <Suspense fallback={<div className="min-h-[40vh] p-8 text-sm text-[#81747d]" role="status">Loading workspace…</div>}>
+    <Suspense fallback={<RouteFallback label="Loading workspace…" />}>
       <DashboardPage />
     </Suspense>
   );
@@ -35,8 +61,8 @@ function Router() {
   return (
     <RoutedErrorBoundary>
       <Switch>
-        <Route path="/" component={LandingPage} />
-        <Route path="/login" component={LoginPage} />
+        <Route path="/" component={() => <Suspense fallback={<RouteFallback />}><LandingPage /></Suspense>} />
+        <Route path="/login" component={() => <Suspense fallback={<RouteFallback />}><LoginPage /></Suspense>} />
         <Route path="/dashboard" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/settings" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/employees" component={ProtectedWorkspaceRoute} />

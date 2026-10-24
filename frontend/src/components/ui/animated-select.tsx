@@ -84,10 +84,14 @@ export function AnimatedSelect({
     const spaceBelow = window.innerHeight - rect.bottom;
     const placeAbove = spaceBelow < dropdownHeight && rect.top > dropdownHeight;
 
+    const calculatedWidth = Math.max(rect.width, variant === 'filter' ? 200 : rect.width);
+    const maxLeft = typeof window !== 'undefined' ? Math.max(8, window.innerWidth - calculatedWidth - 12) : rect.left;
+    const clampedLeft = Math.max(8, Math.min(rect.left, maxLeft));
+
     setCoords({
       top: placeAbove ? rect.top - 6 : rect.bottom + 6,
-      left: rect.left,
-      width: Math.max(rect.width, variant === 'filter' ? 180 : rect.width),
+      left: clampedLeft,
+      width: calculatedWidth,
       placeAbove,
     });
   }, [normalizedOptions.length, variant]);
@@ -413,16 +417,32 @@ export function AnimatedSelect({
                         )}
                       </div>
 
-                      {isSelected && (
-                        <motion.span
-                          initial={shouldReduceMotion ? false : { scale: 0.5, opacity: 0 }}
-                          animate={{ scale: 1, opacity: 1 }}
-                          transition={{ duration: 0.15 }}
-                          style={{ color: '#974862', display: 'flex', alignItems: 'center' }}
-                        >
-                          <Check size={14} strokeWidth={2.2} />
-                        </motion.span>
-                      )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                        {opt.badge !== undefined && (
+                          <span
+                            style={{
+                              fontSize: '10px',
+                              padding: '2px 7px',
+                              borderRadius: '999px',
+                              background: isSelected ? '#ebd3dc' : '#f0e6eb',
+                              color: isSelected ? '#7a2b46' : '#7d6c76',
+                              fontWeight: 600,
+                            }}
+                          >
+                            {opt.badge}
+                          </span>
+                        )}
+                        {isSelected && (
+                          <motion.span
+                            initial={shouldReduceMotion ? false : { scale: 0.5, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            transition={{ duration: 0.15 }}
+                            style={{ color: '#974862', display: 'flex', alignItems: 'center' }}
+                          >
+                            <Check size={14} strokeWidth={2.2} />
+                          </motion.span>
+                        )}
+                      </div>
                     </div>
                   );
                 })}

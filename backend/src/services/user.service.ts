@@ -8,6 +8,7 @@ import type {
 } from '../models/user.model';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
+import { authCache } from '../utils/auth-cache';
 
 interface RawAppUserRow {
   id: string;
@@ -225,6 +226,7 @@ export const userService = {
       throw new Error(`User with ID ${userId} not found.`);
     }
 
+    authCache.invalidate(userId);
     return mapRowToAppUser(row);
   },
 
@@ -264,6 +266,7 @@ export const userService = {
       throw new Error(`User with ID ${userId} not found.`);
     }
 
+    authCache.invalidate(userId);
     return mapRowToAppUser(row);
   },
 

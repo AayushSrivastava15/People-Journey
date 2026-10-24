@@ -149,3 +149,138 @@ export interface OffboardEmployeePayload {
   notes?: string;
   contactEmail?: string;
 }
+
+export interface CompanyProfile {
+  id: string;
+  ownerUserId: string;
+  companyName: string;
+  hrContactName?: string | null;
+  hrContactEmail?: string | null;
+  companyAddress?: string | null;
+  officeLocation?: string | null;
+  hrContactPhone?: string | null;
+  defaultSenderName?: string | null;
+  defaultEmailSignature?: string | null;
+  companyWebsite?: string | null;
+  departmentTeam?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface UpsertCompanyProfileInput {
+  companyName: string;
+  hrContactName?: string;
+  hrContactEmail?: string;
+  companyAddress?: string;
+  officeLocation?: string;
+  hrContactPhone?: string;
+  defaultSenderName?: string;
+  defaultEmailSignature?: string;
+  companyWebsite?: string;
+  departmentTeam?: string;
+}
+
+export type EmailTemplateCategory =
+  | 'recruitment'
+  | 'preboarding'
+  | 'onboarding'
+  | 'general'
+  | 'offboarding'
+  | 'exit_interview'
+  | 'lifecycle'
+  | 'Recruitment and Candidate Communication'
+  | 'New Joiner and Preboarding'
+  | 'First-Day and Onboarding'
+  | 'General Employee Communication'
+  | 'Offboarding and Last Working Day'
+  | 'Exit Interview'
+  | 'Other Lifecycle Templates'
+  | string;
+
+export interface EmailTemplate {
+  id: string;
+  ownerUserId?: string | null;
+  name: string;
+  category: EmailTemplateCategory;
+  description?: string | null;
+  subjectTemplate: string;
+  bodyTemplate: string;
+  isActive: boolean;
+  isSystemTemplate: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CreateEmailTemplateInput {
+  name: string;
+  category: EmailTemplateCategory;
+  description?: string;
+  subjectTemplate: string;
+  bodyTemplate: string;
+  isActive?: boolean;
+}
+
+export interface UpdateEmailTemplateInput {
+  name?: string;
+  category?: EmailTemplateCategory;
+  description?: string;
+  subjectTemplate?: string;
+  bodyTemplate?: string;
+  isActive?: boolean;
+}
+
+export type EmailDraftStatus = 'prepared' | 'gmail_opened' | 'sent_unconfirmed' | 'cancelled';
+
+export interface EmailDraft {
+  id: string;
+  ownerUserId: string;
+  employeeId?: number | null;
+  templateId?: string | null;
+  lifecycleEvent: string;
+  recipientEmail: string;
+  recipientName?: string | null;
+  subjectSnapshot: string;
+  bodySnapshot: string;
+  status: EmailDraftStatus;
+  preparedAt: string;
+  gmailOpenedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  employeeName?: string | null;
+  employeeCode?: string | null;
+  templateName?: string | null;
+}
+
+export interface PreviewDraftInput {
+  employeeId?: number;
+  candidateName?: string;
+  candidateEmail?: string;
+  templateId?: string;
+  subjectTemplate?: string;
+  bodyTemplate?: string;
+  customValues?: Record<string, string>;
+}
+
+export interface PreviewDraftResult {
+  recipientEmail: string;
+  recipientName: string;
+  subject: string;
+  body: string;
+  detectedPlaceholders: string[];
+  missingPlaceholders: string[];
+  unresolvedPlaceholders: string[];
+  hasCompanyProfile: boolean;
+  companyName?: string;
+}
+
+export interface CreateDraftInput {
+  employeeId?: number;
+  templateId?: string;
+  lifecycleEvent: string;
+  recipientEmail: string;
+  recipientName?: string;
+  subjectSnapshot: string;
+  bodySnapshot: string;
+  status?: EmailDraftStatus;
+}
+

@@ -11,6 +11,7 @@ import {
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Form } from '@/components/ui/form';
 import { AnimatedSelect } from '@/components/ui/animated-select';
+import { DatePicker } from '@/components/ui/date-picker';
 import {
   useDashboardStats, useEmployees, useDepartments, useDesignations,
   useCreateEmployee, useOffboardEmployee,
@@ -21,6 +22,10 @@ import { useToast } from '@/hooks/use-toast';
 import { z } from 'zod';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { useAuth } from '@/context';
+import { CompanyProfileCard } from '@/components/company-profile-card';
+import { EmailTemplatesView } from '@/components/email-templates-view';
+import { EmailNotificationsView } from '@/components/email-notifications-view';
+import { EmailDraftHistoryView } from '@/components/email-draft-history-view';
 
 const navGroups = [
   { label: 'Overview', links: [{ label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard }] },
@@ -879,7 +884,9 @@ function ListingPage({
   if (path === '/dashboard/add-employee') return <AddEmployee />;
   if (path === '/dashboard/schedule-offboarding') return <ScheduleOffboarding />;
   if (path === '/dashboard/settings') return <SettingsPage />;
-  if (path === '/dashboard/templates') return <TemplatesPage />;
+  if (path === '/dashboard/templates') return <EmailTemplatesView />;
+  if (path === '/dashboard/notifications') return <EmailNotificationsView />;
+  if (path === '/dashboard/notification-history') return <EmailDraftHistoryView />;
   if (path === '/dashboard/interview-responses') return <ResponsesPage />;
 
   const desc: Record<string, string> = {
@@ -1154,8 +1161,8 @@ function AddEmployee() {
       });
 
       toast({
-        title: 'Employee Registered',
-        description: `${created.name} (${created.employeeCode}) has been registered to your workspace.`,
+        title: 'Employee Added',
+        description: `${created.name} has been successfully added to your workspace.`,
       });
 
       setCreatedEmployee(created);
@@ -1181,31 +1188,48 @@ function AddEmployee() {
           <Form {...form}>
             <form autoComplete="off" onSubmit={form.handleSubmit(onSubmit)}>
               <div className="form-grid">
-                <label>
-                  Full name
-                  <input {...form.register('fullName')} required placeholder="e.g. Avery Morgan" />
-                </label>
-                <label>
-                  Work email
-                  <input {...form.register('workEmail')} type="email" placeholder="name@peoplejourney.com" />
-                </label>
-                <label>
-                  Personal email <span className="field-hint">Optional</span>
-                  <input {...form.register('personalEmail')} type="email" placeholder="name@example.com" />
-                </label>
-                <label>
-                  Department
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label htmlFor="fullName">Full name</label>
+                  </div>
+                  <input id="fullName" {...form.register('fullName')} required placeholder="e.g. Avery Morgan" />
+                </div>
+
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label htmlFor="workEmail">Work email</label>
+                  </div>
+                  <input id="workEmail" {...form.register('workEmail')} type="email" placeholder="name@peoplejourney.com" />
+                </div>
+
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label htmlFor="personalEmail">Personal email</label>
+                    <span className="field-hint">Optional</span>
+                  </div>
+                  <input id="personalEmail" {...form.register('personalEmail')} type="email" placeholder="name@example.com" />
+                </div>
+
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label htmlFor="department">Department</label>
+                  </div>
                   <AnimatedSelect
+                    id="department"
                     variant="form"
                     placeholder="Select department"
                     value={form.watch('department') || ''}
                     onChange={val => form.setValue('department', val, { shouldValidate: true, shouldDirty: true })}
                     options={deptList.map(dept => ({ value: dept, label: dept }))}
                   />
-                </label>
-                <label>
-                  Designation / Role
+                </div>
+
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label htmlFor="designation">Designation / Role</label>
+                  </div>
                   <AnimatedSelect
+                    id="designation"
                     variant="form"
                     placeholder="Select designation (optional)"
                     value={form.watch('designation') || ''}
@@ -1215,18 +1239,40 @@ function AddEmployee() {
                       label: des.designationName,
                     }))}
                   />
-                </label>
-                <label>
-                  Joining date
-                  <input {...form.register('joiningDate')} type="date" required />
-                </label>
-                <label>
-                  Last working day <span className="field-hint">Optional</span>
-                  <input {...form.register('lastWorkingDay')} type="date" />
-                </label>
-                <label>
-                  Lifecycle status
+                </div>
+
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label htmlFor="joiningDate">Joining date</label>
+                  </div>
+                  <DatePicker
+                    id="joiningDate"
+                    value={form.watch('joiningDate')}
+                    onChange={val => form.setValue('joiningDate', val, { shouldValidate: true, shouldDirty: true })}
+                    placeholder="Select joining date"
+                    required
+                  />
+                </div>
+
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label htmlFor="lastWorkingDay">Last working day</label>
+                    <span className="field-hint">Optional</span>
+                  </div>
+                  <DatePicker
+                    id="lastWorkingDay"
+                    value={form.watch('lastWorkingDay') || ''}
+                    onChange={val => form.setValue('lastWorkingDay', val, { shouldValidate: true, shouldDirty: true })}
+                    placeholder="Select last working day"
+                  />
+                </div>
+
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label htmlFor="status">Lifecycle status</label>
+                  </div>
                   <AnimatedSelect
+                    id="status"
                     variant="form"
                     value={form.watch('status') || 'Onboarding'}
                     onChange={val => form.setValue('status', val as LifecycleStatus, { shouldValidate: true, shouldDirty: true })}
@@ -1237,7 +1283,7 @@ function AddEmployee() {
                       { value: 'Exited', label: 'Exited', subtext: 'Former employee' },
                     ]}
                   />
-                </label>
+                </div>
               </div>
 
               {Object.keys(form.formState.errors).length > 0 && (
@@ -1276,14 +1322,14 @@ function AddEmployee() {
           {createdEmployee && (
             <div className="preview-result" role="status" style={{ borderLeftColor: '#2ba45a' }}>
               <b style={{ color: '#166534' }}>✓ Employee Added Successfully</b>
-              <p>{createdEmployee.name} registered under code <strong>{createdEmployee.employeeCode}</strong> in {createdEmployee.departmentName || 'General'}.</p>
+              <p>{createdEmployee.name} has been successfully added to your workspace.</p>
             </div>
           )}
         </section>
         <aside className="panel form-aside">
           <span className="aside-icon"><UserCheck size={19} /></span>
           <h2>Instant Onboarding</h2>
-          <p>New team members receive an automated employee code and are immediately enrolled in your workspace journey checklist.</p>
+          <p>New team members are immediately enrolled in your workspace journey checklist and lifecycle touchpoints.</p>
           <span className="aside-note">Lifecycle & touchpoints tracked automatically</span>
         </aside>
       </div>
@@ -1359,9 +1405,12 @@ function ScheduleOffboarding() {
           <Form {...form}>
             <form autoComplete="off" onSubmit={form.handleSubmit(onSubmit)}>
               <div className="form-grid">
-                <label>
-                  Employee
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label htmlFor="exitEmployeeId">Employee</label>
+                  </div>
                   <AnimatedSelect
+                    id="exitEmployeeId"
                     variant="form"
                     placeholder="Select team member"
                     value={form.watch('employeeId') || ''}
@@ -1372,19 +1421,36 @@ function ScheduleOffboarding() {
                       subtext: `${person.departmentName || 'General'} · ${person.status}`,
                     }))}
                   />
-                </label>
-                <label>
-                  Last working day
-                  <input {...form.register('lastWorkingDay')} type="date" required />
-                </label>
-                <label>
-                  Contact email <span className="field-hint">Optional</span>
-                  <input {...form.register('contactEmail')} type="email" placeholder="personal@example.com" />
-                </label>
-                <label>
-                  Transition notes <span className="field-hint">Optional</span>
-                  <input {...form.register('note')} placeholder="Handover, equipment return notes" />
-                </label>
+                </div>
+
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label htmlFor="exitLastWorkingDay">Last working day</label>
+                  </div>
+                  <DatePicker
+                    id="exitLastWorkingDay"
+                    value={form.watch('lastWorkingDay')}
+                    onChange={val => form.setValue('lastWorkingDay', val, { shouldValidate: true, shouldDirty: true })}
+                    placeholder="Select planned exit date"
+                    required
+                  />
+                </div>
+
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label htmlFor="contactEmail">Contact email</label>
+                    <span className="field-hint">Optional</span>
+                  </div>
+                  <input id="contactEmail" {...form.register('contactEmail')} type="email" placeholder="personal@example.com" />
+                </div>
+
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label htmlFor="note">Transition notes</label>
+                    <span className="field-hint">Optional</span>
+                  </div>
+                  <input id="note" {...form.register('note')} placeholder="Handover, equipment return notes" />
+                </div>
               </div>
 
               {Object.keys(form.formState.errors).length > 0 && (
@@ -1559,6 +1625,9 @@ function SettingsPage() {
               </div>
             </div>
           </section>
+
+          {/* Company & HR Profile Section */}
+          <CompanyProfileCard />
 
           {/* Preferences Form */}
           <section className="panel" style={{ padding: '24px' }}>
@@ -2018,7 +2087,7 @@ function PersonalDashboard() {
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #bbf7d0', color: '#166534', fontSize: '12px' }}>
                 <Check size={16} />
-                <span>Your Google identity is securely linked to corporate record <b>{employeeProfile.employeeCode}</b> ({profile.email}).</span>
+                <span>Your Google identity is securely linked to your personal workspace ({profile.email}).</span>
               </div>
             </div>
           ) : (

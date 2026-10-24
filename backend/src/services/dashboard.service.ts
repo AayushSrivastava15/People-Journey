@@ -43,86 +43,7 @@ export const dashboardService = {
    * Scoped strictly to the authenticated user's workspace.
    */
   async getStats(ownerUserId: string): Promise<DashboardStats> {
-    // 1. Status distribution
-    const statusSql = `
-      SELECT employment_status, COUNT(*)::int AS cnt
-      FROM hr_employees
-      WHERE owner_user_id = $1
-      GROUP BY employment_status
-    `;
-    const statusRes = await executeSql<{ employment_status: string; cnt: number }>(statusSql, [ownerUserId]);
-    const statusMap = new Map<string, number>();
-    for (const row of statusRes.rows || []) {
-      statusMap.set(row.employment_status.toUpperCase(), Number(row.cnt));
-    }
-
-    const activeCount = statusMap.get('ACTIVE') || 0;
-    const onboardingCount = statusMap.get('ONBOARDING') || 0;
-    const offboardingCount = statusMap.get('OFFBOARDING') || 0;
-    const exitedCount = statusMap.get('EXITED') || 0;
-    const totalCount = activeCount + onboardingCount + offboardingCount;
-
-    const statusDistribution = [
-      { name: 'Active', value: activeCount },
-      { name: 'Onboarding', value: onboardingCount },
-      { name: 'Offboarding', value: offboardingCount },
-      { name: 'Exited', value: exitedCount },
-    ];
-
-    // 2. Joining this month
-    const joiningMonthSql = `
-      SELECT COUNT(*)::int AS cnt
-      FROM hr_employees
-      WHERE owner_user_id = $1
-        AND hire_date >= DATE_TRUNC('month', CURRENT_TIMESTAMP)
-        AND hire_date < DATE_TRUNC('month', CURRENT_TIMESTAMP) + INTERVAL '1 month'
-    `;
-    const joiningMonthRes = await executeSql<{ cnt: number }>(joiningMonthSql, [ownerUserId]);
-    const joiningThisMonth = Number(joiningMonthRes.rows?.[0]?.cnt || 0);
-
-    // 3. Upcoming joiners (next 7 days)
-    const upcomingJoinersSql = `
-      SELECT COUNT(*)::int AS cnt
-      FROM hr_employees
-      WHERE owner_user_id = $1
-        AND employment_status = 'ONBOARDING'
-        AND hire_date >= CURRENT_DATE
-        AND hire_date <= CURRENT_DATE + INTERVAL '7 days'
-    `;
-    const upcomingJoinersRes = await executeSql<{ cnt: number }>(upcomingJoinersSql, [ownerUserId]);
-    const upcomingJoiners = Number(upcomingJoinersRes.rows?.[0]?.cnt || 0);
-
-    // 4. Upcoming exits (next 7 days)
-    const upcomingExitsSql = `
-      SELECT COUNT(*)::int AS cnt
-      FROM hr_employees
-      WHERE owner_user_id = $1
-        AND employment_status = 'OFFBOARDING'
-        AND exit_date >= CURRENT_DATE
-        AND exit_date <= CURRENT_DATE + INTERVAL '7 days'
-    `;
-    const upcomingExitsRes = await executeSql<{ cnt: number }>(upcomingExitsSql, [ownerUserId]);
-    const upcomingExits = Number(upcomingExitsRes.rows?.[0]?.cnt || 0);
-
-    // 5. Department breakdown
-    const deptSql = `
-      SELECT 
-        COALESCE(d.department_name, 'Unassigned') AS dept_name,
-        COUNT(e.employee_id)::int AS cnt
-      FROM hr_employees e
-      LEFT JOIN hr_departments d ON e.department_id = d.department_id
-      WHERE e.owner_user_id = $1
-        AND e.employment_status != 'EXITED'
-      GROUP BY d.department_name
-      ORDER BY cnt DESC
-    `;
-    const deptRes = await executeSql<{ dept_name: string; cnt: number }>(deptSql, [ownerUserId]);
-    const departmentBreakdown = (deptRes.rows || []).map(r => ({
-      name: r.dept_name,
-      value: Number(r.cnt),
-    }));
-
-    // 6. Monthly activity (last 6 months)
+    // 1. Month buckets for the last 6 months
     const now = new Date();
     const monthKeys: { key: string; label: string }[] = [];
     for (let i = 5; i >= 0; i--) {
@@ -132,6 +53,45 @@ export const dashboardService = {
       monthKeys.push({ key, label });
     }
 
+    // Consolidated single-scan query for status counts and date-range KPIs
+    const kpiSummarySql = `
+      SELECT
+        COUNT(*) FILTER (WHERE UPPER(employment_status) = 'ACTIVE')::int AS active_cnt,
+        COUNT(*) FILTER (WHERE UPPER(employment_status) = 'ONBOARDING')::int AS onboarding_cnt,
+        COUNT(*) FILTER (WHERE UPPER(employment_status) = 'OFFBOARDING')::int AS offboarding_cnt,
+        COUNT(*) FILTER (WHERE UPPER(employment_status) = 'EXITED')::int AS exited_cnt,
+        COUNT(*) FILTER (
+          WHERE hire_date >= DATE_TRUNC('month', CURRENT_TIMESTAMP)
+            AND hire_date < DATE_TRUNC('month', CURRENT_TIMESTAMP) + INTERVAL '1 month'
+        )::int AS joining_month_cnt,
+        COUNT(*) FILTER (
+          WHERE UPPER(employment_status) = 'ONBOARDING'
+            AND hire_date >= CURRENT_DATE
+            AND hire_date <= CURRENT_DATE + INTERVAL '7 days'
+        )::int AS upcoming_joiners_cnt,
+        COUNT(*) FILTER (
+          WHERE UPPER(employment_status) = 'OFFBOARDING'
+            AND exit_date >= CURRENT_DATE
+            AND exit_date <= CURRENT_DATE + INTERVAL '7 days'
+        )::int AS upcoming_exits_cnt
+      FROM hr_employees
+      WHERE owner_user_id = $1
+    `;
+
+    // Department breakdown
+    const deptSql = `
+      SELECT 
+        COALESCE(d.department_name, 'Unassigned') AS dept_name,
+        COUNT(e.employee_id)::int AS cnt
+      FROM hr_employees e
+      LEFT JOIN hr_departments d ON e.department_id = d.department_id
+      WHERE e.owner_user_id = $1
+        AND UPPER(e.employment_status) != 'EXITED'
+      GROUP BY d.department_name
+      ORDER BY cnt DESC
+    `;
+
+    // Monthly hires
     const hiresByMonthSql = `
       SELECT 
         TO_CHAR(hire_date, 'YYYY-MM') AS month_key,
@@ -141,12 +101,8 @@ export const dashboardService = {
         AND hire_date >= DATE_TRUNC('month', CURRENT_TIMESTAMP) - INTERVAL '5 months'
       GROUP BY TO_CHAR(hire_date, 'YYYY-MM')
     `;
-    const hiresByMonthRes = await executeSql<{ month_key: string; cnt: number }>(hiresByMonthSql, [ownerUserId]);
-    const hiresMap = new Map<string, number>();
-    for (const r of hiresByMonthRes.rows || []) {
-      hiresMap.set(r.month_key, Number(r.cnt));
-    }
 
+    // Monthly exits
     const exitsByMonthSql = `
       SELECT 
         TO_CHAR(exit_date, 'YYYY-MM') AS month_key,
@@ -157,19 +113,8 @@ export const dashboardService = {
         AND exit_date >= DATE_TRUNC('month', CURRENT_TIMESTAMP) - INTERVAL '5 months'
       GROUP BY TO_CHAR(exit_date, 'YYYY-MM')
     `;
-    const exitsByMonthRes = await executeSql<{ month_key: string; cnt: number }>(exitsByMonthSql, [ownerUserId]);
-    const exitsMap = new Map<string, number>();
-    for (const r of exitsByMonthRes.rows || []) {
-      exitsMap.set(r.month_key, Number(r.cnt));
-    }
 
-    const monthlyActivity = monthKeys.map(m => ({
-      month: m.label,
-      joining: hiresMap.get(m.key) || 0,
-      exits: exitsMap.get(m.key) || 0,
-    }));
-
-    // 7. Upcoming events (next 14 days)
+    // Upcoming events (next 14 days)
     const eventsSql = `
       SELECT 
         e.employee_id::text AS id,
@@ -180,7 +125,7 @@ export const dashboardService = {
         '/dashboard/onboarding' AS path
       FROM hr_employees e
       WHERE e.owner_user_id = $1
-        AND e.employment_status = 'ONBOARDING'
+        AND UPPER(e.employment_status) = 'ONBOARDING'
         AND e.hire_date >= CURRENT_DATE
         AND e.hire_date <= CURRENT_DATE + INTERVAL '14 days'
       UNION ALL
@@ -193,20 +138,86 @@ export const dashboardService = {
         '/dashboard/offboarding' AS path
       FROM hr_employees e
       WHERE e.owner_user_id = $1
-        AND e.employment_status = 'OFFBOARDING'
+        AND UPPER(e.employment_status) = 'OFFBOARDING'
         AND e.exit_date >= CURRENT_DATE
         AND e.exit_date <= CURRENT_DATE + INTERVAL '14 days'
       ORDER BY event_date ASC
       LIMIT 6
     `;
-    const eventsRes = await executeSql<{
-      id: string;
-      person: string;
-      label: string;
-      event_date: string;
-      status: string;
-      path: string;
-    }>(eventsSql, [ownerUserId]);
+
+    // Execute all 5 optimized queries concurrently in parallel
+    const [
+      kpiRes,
+      deptRes,
+      hiresByMonthRes,
+      exitsByMonthRes,
+      eventsRes,
+    ] = await Promise.all([
+      executeSql<{
+        active_cnt: number;
+        onboarding_cnt: number;
+        offboarding_cnt: number;
+        exited_cnt: number;
+        joining_month_cnt: number;
+        upcoming_joiners_cnt: number;
+        upcoming_exits_cnt: number;
+      }>(kpiSummarySql, [ownerUserId]),
+      executeSql<{ dept_name: string; cnt: number }>(deptSql, [ownerUserId]),
+      executeSql<{ month_key: string; cnt: number }>(hiresByMonthSql, [ownerUserId]),
+      executeSql<{ month_key: string; cnt: number }>(exitsByMonthSql, [ownerUserId]),
+      executeSql<{
+        id: string;
+        person: string;
+        label: string;
+        event_date: string;
+        status: string;
+        path: string;
+      }>(eventsSql, [ownerUserId]),
+    ]);
+
+    const kpi = kpiRes.rows?.[0] || {
+      active_cnt: 0,
+      onboarding_cnt: 0,
+      offboarding_cnt: 0,
+      exited_cnt: 0,
+      joining_month_cnt: 0,
+      upcoming_joiners_cnt: 0,
+      upcoming_exits_cnt: 0,
+    };
+
+    const activeCount = Number(kpi.active_cnt) || 0;
+    const onboardingCount = Number(kpi.onboarding_cnt) || 0;
+    const offboardingCount = Number(kpi.offboarding_cnt) || 0;
+    const exitedCount = Number(kpi.exited_cnt) || 0;
+    const totalCount = activeCount + onboardingCount + offboardingCount;
+
+    const statusDistribution = [
+      { name: 'Active', value: activeCount },
+      { name: 'Onboarding', value: onboardingCount },
+      { name: 'Offboarding', value: offboardingCount },
+      { name: 'Exited', value: exitedCount },
+    ];
+
+    const departmentBreakdown = (deptRes.rows || []).map(r => ({
+      name: r.dept_name,
+      value: Number(r.cnt),
+    }));
+
+    const hiresMap = new Map<string, number>();
+    for (const r of hiresByMonthRes.rows || []) {
+      hiresMap.set(r.month_key, Number(r.cnt));
+    }
+
+    const exitsMap = new Map<string, number>();
+    for (const r of exitsByMonthRes.rows || []) {
+      exitsMap.set(r.month_key, Number(r.cnt));
+    }
+
+    const monthlyActivity = monthKeys.map(m => ({
+      month: m.label,
+      joining: hiresMap.get(m.key) || 0,
+      exits: exitsMap.get(m.key) || 0,
+    }));
 
     const upcomingEvents = (eventsRes.rows || []).map(e => ({
       id: e.id,
@@ -223,9 +234,9 @@ export const dashboardService = {
       onboardingEmployees: onboardingCount,
       offboardingEmployees: offboardingCount,
       exitedEmployees: exitedCount,
-      joiningThisMonth,
-      upcomingJoiners,
-      upcomingExits,
+      joiningThisMonth: Number(kpi.joining_month_cnt) || 0,
+      upcomingJoiners: Number(kpi.upcoming_joiners_cnt) || 0,
+      upcomingExits: Number(kpi.upcoming_exits_cnt) || 0,
       statusDistribution,
       departmentBreakdown,
       monthlyActivity,
