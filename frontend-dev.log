@@ -1,0 +1,15 @@
+
+> people-journey-frontend@1.0.0 dev
+> vite --host localhost --port 3001 --strictPort
+
+
+  VITE v7.3.7  ready in 1555 ms
+
+  ➜  Local:   http://localhost:3001/
+  ➜  press h + enter to show help
+10:22:58 pm [vite] (client) ✨ new dependencies optimized: @radix-ui/react-dialog, @radix-ui/react-alert-dialog
+10:22:58 pm [vite] (client) ✨ optimized dependencies changed. reloading
+10:28:02 pm [vite] (client) hmr update /src/index.css, /src/components/exit-management-view.tsx
+10:28:11 pm [vite] (client) hmr update /src/index.css, /src/components/ui/animated-select.tsx
+10:34:05 pm [vite] (client) hmr update /src/index.css, /src/components/exit-management-view.tsx
+10:44:01 pm [vite] (client) hmr update /src/index.css, /src/components/exit-management-view.tsx

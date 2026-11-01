@@ -14,6 +14,7 @@ import {
   auth,
   authPersistenceReady,
   googleProvider,
+  isFirebaseWebConfigConfigured,
 } from "../lib/firebase";
 import type { AppUser } from "../types/api";
 
@@ -25,6 +26,11 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000
  * Fallback: if popup is blocked by browser, initiates redirect flow.
  */
 export async function signInWithGoogle(): Promise<User> {
+  if (!isFirebaseWebConfigConfigured) {
+    const error = new Error('Firebase web configuration is missing.');
+    Object.assign(error, { code: 'auth/configuration-not-found' });
+    throw error;
+  }
   await authPersistenceReady;
   try {
     const result = await signInWithPopup(auth, googleProvider);
@@ -196,6 +202,14 @@ export function mapAuthError(error: unknown): string {
 
     case "auth/network-request-failed":
       return "We could not connect to the authentication service. Please check your internet connection.";
+
+    case "auth/configuration-not-found":
+    case "auth/api-key-not-valid":
+    case "auth/invalid-api-key":
+      return "Google sign-in is not configured for this local app. Add the VITE_FIREBASE_* web configuration values and restart the frontend.";
+
+    case "auth/unauthorized-domain":
+      return "This local address is not authorized for Google sign-in. Add the current localhost address to Firebase Authentication’s Authorized domains.";
 
     case "auth/operation-not-allowed":
       return "This authentication provider is not enabled in the Firebase Console. Please verify with your system administrator.";

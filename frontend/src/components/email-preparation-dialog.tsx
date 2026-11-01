@@ -26,6 +26,7 @@ interface EmailPreparationDialogProps {
   initialEmployeeId?: number;
   initialTemplateId?: string;
   initialCategory?: string;
+  additionalCustomValues?: Record<string, string>;
 }
 
 const SUPPORTED_PLACEHOLDERS = [
@@ -44,6 +45,7 @@ const SUPPORTED_PLACEHOLDERS = [
   { token: '{{exit_interview_date}}', desc: 'Exit interview date' },
   { token: '{{exit_interview_time}}', desc: 'Exit interview time' },
   { token: '{{meeting_location}}', desc: 'Interview location or Meet link' },
+  { token: '{{form_link}}', desc: 'Secure employee form link' },
   { token: '{{company_signature}}', desc: 'Saved email signature' },
 ];
 
@@ -53,6 +55,7 @@ export function EmailPreparationDialog({
   initialEmployeeId,
   initialTemplateId,
   initialCategory,
+  additionalCustomValues,
 }: EmailPreparationDialogProps) {
   const { toast } = useToast();
   const { data: profile } = useCompanyProfile();
@@ -112,7 +115,9 @@ export function EmailPreparationDialog({
       const selectedEmp = employees.find(e => e.employeeId === selectedEmployeeId);
       let defaultTpl: EmailTemplate | undefined;
 
-      if (selectedEmp?.employmentStatus === 'OFFBOARDING' || selectedEmp?.exitDate) {
+      if (normalizeCategory(selectedCategory) === 'exit_interview') {
+        defaultTpl = templates.find(t => normalizeCategory(t.category) === 'exit_interview');
+      } else if (selectedEmp?.employmentStatus === 'OFFBOARDING' || selectedEmp?.exitDate) {
         defaultTpl = templates.find(t => t.name === 'Last Working Day') || templates.find(t => normalizeCategory(t.category) === 'offboarding');
       } else if (selectedEmp?.employmentStatus === 'ONBOARDING') {
         defaultTpl = templates.find(t => t.name === 'New Joiner Welcome') || templates.find(t => normalizeCategory(t.category) === 'preboarding');
@@ -126,7 +131,7 @@ export function EmailPreparationDialog({
         setSelectedTemplateId(defaultTpl.id);
       }
     }
-  }, [selectedTemplateId, templates, selectedEmployeeId, employees]);
+  }, [selectedTemplateId, templates, selectedEmployeeId, employees, selectedCategory]);
 
   // Filtered templates
   const filteredTemplates = useMemo(() => {
@@ -149,7 +154,7 @@ export function EmailPreparationDialog({
     if (!isOpen) return;
     if (!currentTemplate) return;
 
-    const customValues: Record<string, string> = {};
+    const customValues: Record<string, string> = { ...(additionalCustomValues || {}) };
     if (customExitDate) customValues.exit_interview_date = customExitDate;
     if (customExitTime) customValues.exit_interview_time = customExitTime;
     if (customLocation) customValues.meeting_location = customLocation;
@@ -174,6 +179,13 @@ export function EmailPreparationDialog({
           subj = subj.replace(/\{\{employee_code\}\}/g, '');
           bdy = bdy.replace(/\{\{employee_code\}\}/g, '');
 
+          // Older exit invitation templates may not yet contain {{form_link}}.
+          // Keep the issued link in the prepared draft without storing it elsewhere.
+          const formLink = additionalCustomValues?.form_link;
+          if (formLink && !bdy.includes(formLink)) {
+            bdy = `${bdy.trim()}\n\nComplete your secure exit interview here: ${formLink}`.trim();
+          }
+
           setSubject(subj);
           setBody(bdy);
           setMissingPlaceholders(res.data.missingPlaceholders || []);
@@ -191,6 +203,7 @@ export function EmailPreparationDialog({
     customExitDate,
     customExitTime,
     customLocation,
+    additionalCustomValues,
     profile,
   ]);
 

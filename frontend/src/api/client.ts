@@ -53,7 +53,8 @@ export async function apiClient<T>(endpoint: string, options: RequestInit = {}):
       errorData = await response.json();
       if (typeof errorData === 'object' && errorData !== null) {
         const errObj = errorData as Record<string, unknown>;
-        errorMessage = (errObj.message as string) || (errObj.error as string) || errorMessage;
+        const nestedError = errObj.error as Record<string, unknown> | undefined;
+        errorMessage = (errObj.message as string) || (nestedError?.message as string) || (typeof errObj.error === 'string' ? errObj.error : '') || errorMessage;
       }
     } catch {
       try {

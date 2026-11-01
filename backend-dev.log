@@ -1,0 +1,41 @@
+
+> people-journey-backend@1.0.0 dev
+> tsx watch src/server.ts
+
+◇ injected env (11) from .env
+[22:02:27.156] [32mINFO[39m (24696): [36mInitializing PostgreSQL connection pool...[39m
+    [35mconnectionString[39m: "postgresql://postgres.imdbjeofboslwmflbtby:****@aws-0-ap-south-1.pooler.supabase.com:6543/postgres?pgbouncer=true"
+[22:02:27.810] [31mERROR[39m (24696): [36mFailed to initialize PostgreSQL connection pool[39m
+    [35mmessage[39m: "(ENOTFOUND) tenant/user postgres.imdbjeofboslwmflbtby not found"
+[22:02:27.810] [33mWARN[39m (24696): [36mPostgreSQL connection pool failed to initialize during startup. Requests requiring database access will attempt initialization or return safe service status.[39m
+    [35mmessage[39m: "(ENOTFOUND) tenant/user postgres.imdbjeofboslwmflbtby not found"
+[22:02:27.811] [32mINFO[39m (24696): [36mPeople Journey API server listening[39m
+    [35mport[39m: 5000
+    [35menv[39m: "development"
+10:11:07 pm [tsx] change in ./src\app.ts Rerunning...
+◇ injected env (11) from .env
+[22:11:11.377] [32mINFO[39m (1336): [36mInitializing PostgreSQL connection pool...[39m
+    [35mconnectionString[39m: "postgresql://postgres.imdbjeofboslwmflbtby:****@aws-0-ap-south-1.pooler.supabase.com:6543/postgres?pgbouncer=true"
+[22:11:12.039] [31mERROR[39m (1336): [36mFailed to initialize PostgreSQL connection pool[39m
+    [35mmessage[39m: "(ENOTFOUND) tenant/user postgres.imdbjeofboslwmflbtby not found"
+[22:11:12.039] [33mWARN[39m (1336): [36mPostgreSQL connection pool failed to initialize during startup. Requests requiring database access will attempt initialization or return safe service status.[39m
+    [35mmessage[39m: "(ENOTFOUND) tenant/user postgres.imdbjeofboslwmflbtby not found"
+[22:11:12.041] [32mINFO[39m (1336): [36mPeople Journey API server listening[39m
+    [35mport[39m: 5000
+    [35menv[39m: "development"
+10:34:05 pm [tsx] change in ./src\controllers\exit-interview.controller.ts Rerunning...
+◇ injected env (11) from .env
+[22:34:15.568] [32mINFO[39m (28992): [36mInitializing PostgreSQL connection pool...[39m
+    [35mconnectionString[39m: "postgresql://postgres.imdbjeofboslwmflbtby:****@aws-0-ap-south-1.pooler.supabase.com:6543/postgres?pgbouncer=true"
+[22:34:15.965] [32mINFO[39m (28992): [36mPostgreSQL connection pool initialized and verified successfully.[39m
+[22:34:15.983] [32mINFO[39m (28992): [36mPeople Journey API server listening[39m
+    [35mport[39m: 5000
+    [35menv[39m: "development"
+10:47:23 pm [tsx] change in ./src\services\exit-interview.service.ts Restarting...
+◇ injected env (11) from .env
+[22:47:42.279] [32mINFO[39m (21552): [36mInitializing PostgreSQL connection pool...[39m
+    [35mconnectionString[39m: "postgresql://postgres.imdbjeofboslwmflbtby:****@aws-0-ap-south-1.pooler.supabase.com:6543/postgres?pgbouncer=true"
+[22:47:42.975] [32mINFO[39m (21552): [36mPostgreSQL connection pool initialized and verified successfully.[39m
+[22:47:42.977] [32mINFO[39m (21552): [36mPeople Journey API server listening[39m
+    [35mport[39m: 5000
+    [35menv[39m: "development"

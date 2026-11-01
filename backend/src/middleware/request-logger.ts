@@ -11,7 +11,8 @@ export const requestLogger = pinoHttpFn({
       return {
         id: req.id,
         method: req.method,
-        url: req.url?.split('?')[0],
+        // Public exit-interview tokens are path parameters and must never enter logs.
+        url: req.url?.split('?')[0].replace(/(\/api\/exit-interviews\/public\/)\w{64}/i, '$1[redacted]'),
       };
     },
     res(res: { statusCode?: number }) {

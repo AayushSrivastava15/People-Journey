@@ -7,6 +7,7 @@ import dashboardRoutes from './dashboard.routes';
 import companyProfileRoutes from './company-profile.routes';
 import emailTemplateRoutes from './email-template.routes';
 import emailDraftRoutes from './email-draft.routes';
+import exitInterviewRoutes from './exit-interview.routes';
 
 const router: IRouter = Router();
 
@@ -19,5 +20,6 @@ router.use('/dashboard', dashboardRoutes);
 router.use('/company-profile', companyProfileRoutes);
 router.use('/email-templates', emailTemplateRoutes);
 router.use('/email-drafts', emailDraftRoutes);
+router.use('/exit-interviews', exitInterviewRoutes);
 
 export default router;

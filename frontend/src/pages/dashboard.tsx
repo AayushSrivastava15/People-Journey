@@ -27,6 +27,7 @@ import { EmailTemplatesView } from '@/components/email-templates-view';
 import { EmailNotificationsView } from '@/components/email-notifications-view';
 import { EmailDraftHistoryView } from '@/components/email-draft-history-view';
 import { EditEmployeeDialog } from '@/components/edit-employee-dialog';
+import { ExitManagementView } from '@/components/exit-management-view';
 
 
 const navGroups = [
@@ -953,7 +954,7 @@ function ListingPage({
   if (path === '/dashboard/templates') return <EmailTemplatesView />;
   if (path === '/dashboard/notifications') return <EmailNotificationsView />;
   if (path === '/dashboard/notification-history') return <EmailDraftHistoryView />;
-  if (path === '/dashboard/interview-responses') return <ResponsesPage />;
+  if (path === '/dashboard/interview-responses') return <ExitManagementView mode="responses" />;
 
   const desc: Record<string, string> = {
     '/dashboard/employees': 'A directory of all team members and personnel in your workspace.',
@@ -968,23 +969,7 @@ function ListingPage({
   const peopleMode = ['/dashboard/employees', '/dashboard/onboarding', '/dashboard/offboarding', '/dashboard/departments'].includes(path);
   const notificationMode = ['/dashboard/notifications', '/dashboard/notification-history'].includes(path);
 
-  if (path === '/dashboard/exit-interviews') {
-    return (
-      <>
-        <PageHeading
-          eyebrow="Exit Management"
-          title={title}
-          text={desc[path]}
-          action={
-            <Link href="/dashboard/schedule-offboarding" className="primary-action">
-              <ArrowDownLeft size={16} /> Record an Exit
-            </Link>
-          }
-        />
-        <ExitTable rows={exitInterviews} />
-      </>
-    );
-  }
+  if (path === '/dashboard/exit-interviews') return <ExitManagementView mode="records" />;
 
   // Determine status filter for query
   const queryStatus = path === '/dashboard/onboarding' ? 'ONBOARDING'

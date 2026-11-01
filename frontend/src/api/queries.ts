@@ -21,6 +21,12 @@ import type {
   PreviewDraftResult,
   CreateDraftInput,
   EmailDraftStatus,
+  ExitInterviewTemplate,
+  ExitInterviewRecord,
+  ExitInterviewDetail,
+  ExitInterviewLinkResult,
+  ExitInterviewResponse,
+  ExitInterviewEvaluation,
 } from '../types/api';
 
 export const QUERY_KEYS = {
@@ -34,6 +40,9 @@ export const QUERY_KEYS = {
   companyProfile: ['company-profile'] as const,
   emailTemplates: (category?: string) => ['email-templates', category || 'all'] as const,
   emailDrafts: (params?: Record<string, unknown>) => ['email-drafts', params || {}] as const,
+  exitInterviewTemplates: ['exit-interviews', 'templates'] as const,
+  exitInterviews: (params?: Record<string, unknown>) => ['exit-interviews', params || {}] as const,
+  exitInterview: (id: string) => ['exit-interviews', id] as const,
 };
 
 export function usePersonalDashboard() {
@@ -44,6 +53,89 @@ export function usePersonalDashboard() {
       return res.data;
     },
     staleTime: 60000,
+  });
+}
+
+// ----------------------------------------------------------------------
+// Exit interviews
+// ----------------------------------------------------------------------
+
+export function useExitInterviewTemplates() {
+  return useQuery({
+    queryKey: QUERY_KEYS.exitInterviewTemplates,
+    queryFn: async () => (await apiClient<{ success: boolean; data: ExitInterviewTemplate[] }>('/exit-interviews/templates')).data,
+  });
+}
+
+export function useExitInterviews(params: { page?: number; limit?: number; employeeId?: number; status?: string; departmentId?: number; from?: string; to?: string } = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== '') query.set(key, String(value));
+  const suffix = query.toString();
+  return useQuery({
+    queryKey: QUERY_KEYS.exitInterviews(params),
+    queryFn: () => apiClient<{ success: boolean; data: ExitInterviewRecord[]; total: number; page: number; limit: number }>(`/exit-interviews${suffix ? `?${suffix}` : ''}`),
+  });
+}
+
+export function useExitInterview(id?: string) {
+  return useQuery({
+    queryKey: QUERY_KEYS.exitInterview(id || ''),
+    enabled: !!id,
+    queryFn: async () => (await apiClient<{ success: boolean; data: ExitInterviewDetail }>(`/exit-interviews/${id}`)).data,
+  });
+}
+
+function invalidateExitInterviews(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: ['exit-interviews'] });
+}
+
+export function useCreateExitInterview() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { employeeId: number; offboardingId?: number; templateId: string; expiryDays: number }) =>
+      (await apiClient<{ success: boolean; data: ExitInterviewLinkResult }>('/exit-interviews', { method: 'POST', body: JSON.stringify(payload) })).data,
+    onSuccess: () => invalidateExitInterviews(queryClient),
+  });
+}
+
+export function useRevokeExitInterview() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiClient<{ success: boolean }>(`/exit-interviews/${id}/revoke`, { method: 'POST' }),
+    onSuccess: () => invalidateExitInterviews(queryClient),
+  });
+}
+
+export function useReopenExitInterview() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, expiryDays }: { id: string; expiryDays: number }) =>
+      (await apiClient<{ success: boolean; data: ExitInterviewLinkResult }>(`/exit-interviews/${id}/reopen`, { method: 'POST', body: JSON.stringify({ confirm: true, expiryDays }) })).data,
+    onSuccess: () => invalidateExitInterviews(queryClient),
+  });
+}
+
+export function useExitInterviewResponses(id?: string) {
+  return useQuery({
+    queryKey: ['exit-interviews', id, 'responses'],
+    enabled: !!id,
+    queryFn: async () => (await apiClient<{ success: boolean; data: ExitInterviewResponse[] }>(`/exit-interviews/${id}/responses`)).data,
+  });
+}
+
+export function useExitInterviewEvaluation(id?: string) {
+  return useQuery({
+    queryKey: ['exit-interviews', id, 'evaluation'], enabled: !!id,
+    queryFn: async () => (await apiClient<{ success: boolean; data: ExitInterviewEvaluation | null }>(`/exit-interviews/${id}/evaluation`)).data,
+  });
+}
+
+export function useUpdateExitInterviewEvaluation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, payload }: { id: string; payload: ExitInterviewEvaluation }) =>
+      (await apiClient<{ success: boolean; data: ExitInterviewEvaluation }>(`/exit-interviews/${id}/evaluation`, { method: 'PUT', body: JSON.stringify(payload) })).data,
+    onSuccess: (_data, variables) => queryClient.invalidateQueries({ queryKey: ['exit-interviews', variables.id, 'evaluation'] }),
   });
 }
 

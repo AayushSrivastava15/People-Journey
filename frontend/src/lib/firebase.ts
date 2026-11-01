@@ -15,6 +15,13 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
+export const isFirebaseWebConfigConfigured = Boolean(
+  firebaseConfig.apiKey &&
+  firebaseConfig.authDomain &&
+  firebaseConfig.projectId &&
+  firebaseConfig.appId,
+);
+
 // Reuse the existing Firebase app during development hot reloads.
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 

@@ -27,6 +27,7 @@ export interface AnimatedSelectProps {
   id?: string;
   name?: string;
   required?: boolean;
+  invalid?: boolean;
   'aria-label'?: string;
 }
 
@@ -48,6 +49,7 @@ export function AnimatedSelect({
   id,
   name,
   required,
+  invalid = false,
   'aria-label': ariaLabel,
 }: AnimatedSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -237,7 +239,7 @@ export function AnimatedSelect({
           padding: isFilter ? '0 12px 0 10px' : '0 14px',
           background: isFilter ? '#fffdfa' : '#fffdfa',
           color: selectedOption ? '#3a2d36' : '#9b8a92',
-          border: `1px solid ${isOpen ? '#bd7b92' : '#eee3e2'}`,
+          border: `1px solid ${isOpen ? '#bd7b92' : invalid ? '#df8c9b' : '#eee3e2'}`,
           borderRadius: isFilter ? '9px' : '10px',
           fontSize: isFilter ? '11px' : '12px',
           fontWeight: isFilter ? 600 : 500,
@@ -245,6 +247,7 @@ export function AnimatedSelect({
           cursor: disabled ? 'not-allowed' : 'pointer',
           boxShadow: isOpen
             ? '0 0 0 3px rgba(189, 123, 146, 0.16)'
+            : invalid ? '0 0 0 3px rgba(223, 140, 155, 0.12)'
             : '0 1px 2px rgba(88, 64, 76, 0.04)',
           transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
           outline: 'none',

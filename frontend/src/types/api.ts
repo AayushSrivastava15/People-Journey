@@ -296,3 +296,77 @@ export interface CreateDraftInput {
   status?: EmailDraftStatus;
 }
 
+export type ExitInterviewStatus = 'PENDING' | 'OPENED' | 'COMPLETED' | 'REVOKED' | 'EXPIRED';
+
+export interface ExitInterviewTemplate {
+  id: string;
+  name: string;
+  description: string | null;
+  version: number;
+  isDefault: boolean;
+  isSystemTemplate: boolean;
+}
+
+export interface ExitInterviewRecord {
+  id: string;
+  employeeId: number;
+  offboardingId?: number | null;
+  status: ExitInterviewStatus;
+  expiresAt: string;
+  invitationStatus: 'NOT_PREPARED' | 'PREPARED' | 'GMAIL_OPENED' | 'SENT_UNCONFIRMED';
+  completedAt: string | null;
+  createdAt: string;
+  firstName: string;
+  lastName: string | null;
+  employeeCode: string;
+  departmentName: string | null;
+  templateName: string;
+}
+
+export interface ExitInterviewDetail extends ExitInterviewRecord {
+  template: { name: string; version: number; description?: string | null; schema?: ExitInterviewSchema };
+  workEmail: string | null;
+  reopenedAt?: string | null;
+}
+
+export interface ExitInterviewQuestion {
+  id: string;
+  label: string;
+  type: string;
+  required?: boolean;
+  options?: string[];
+}
+
+export interface ExitInterviewSchema {
+  introduction?: string;
+  sections?: Array<{ id: string; title: string; description?: string; questions: ExitInterviewQuestion[] }>;
+}
+
+export interface ExitInterviewLinkResult {
+  id: string;
+  status: ExitInterviewStatus;
+  expiresAt: string;
+  publicUrl: string;
+  token: string;
+}
+
+export interface ExitInterviewResponse {
+  submissionId: string;
+  questionId: string;
+  answer: unknown;
+  submittedAt: string;
+}
+
+export interface ExitInterviewEvaluation {
+  interviewerName?: string | null;
+  interviewDate?: string | null;
+  interviewMode?: 'in_person' | 'video' | 'phone' | 'other' | null;
+  reasonCategory?: string | null;
+  regrettableExit?: boolean | null;
+  rehireEligibility?: 'eligible' | 'not_eligible' | 'conditional' | 'undetermined' | null;
+  hrObservations?: string | null;
+  actionItems?: string[];
+  hrSignature?: string | null;
+  updatedAt?: string;
+}
+

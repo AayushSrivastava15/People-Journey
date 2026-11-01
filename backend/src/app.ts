@@ -38,7 +38,7 @@ app.use(requestLogger);
 // 3. CORS Configuration
 app.use(
   cors({
-    origin: env.CORS_ORIGIN,
+    origin: env.CORS_ORIGIN.split(',').map(origin => origin.trim()).filter(Boolean),
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
