@@ -6,8 +6,8 @@ import {
   updateTemplate,
   duplicateTemplate,
   deleteTemplate,
-} from '../controllers/email-template.controller';
-import { authenticateToken } from '../middleware/auth.middleware';
+} from '../controllers/email-template.controller.js';
+import { authenticateToken } from '../middleware/auth.middleware.js';
 
 const router: IRouter = Router();
 

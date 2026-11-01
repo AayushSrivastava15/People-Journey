@@ -1,5 +1,5 @@
-import type { HealthCheckResponse } from '../models/health.model';
-import { testConnection, isPoolInitialized } from '../config/database';
+import type { HealthCheckResponse } from '../models/health.model.js';
+import { testConnection, isPoolInitialized } from '../config/database.js';
 
 export const healthService = {
   async check(): Promise<HealthCheckResponse> {

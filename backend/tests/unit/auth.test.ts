@@ -1,9 +1,9 @@
 import { describe, it } from 'node:test';
 import { strictEqual, ok } from 'node:assert';
-import { authenticateToken } from '../../src/middleware/auth.middleware';
+import { authenticateToken } from '../../src/middleware/auth.middleware.js';
 import type { Request, Response } from 'express';
-import type { AppUser } from '../../src/models/user.model';
-import { AppRole, UpdateUserProfileSchema } from '../../src/models/user.model';
+import type { AppUser } from '../../src/models/user.model.js';
+import { AppRole, UpdateUserProfileSchema } from '../../src/models/user.model.js';
 
 interface MockResponse extends Partial<Response> {
   statusCode?: number;

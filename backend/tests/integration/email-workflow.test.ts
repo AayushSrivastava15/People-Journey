@@ -1,9 +1,9 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
-import { executeSql, closePool } from '../../src/config/database';
-import { emailTemplateService } from '../../src/services/email-template.service';
-import { emailDraftService } from '../../src/services/email-draft.service';
-import { companyProfileService } from '../../src/services/company-profile.service';
+import { executeSql, closePool } from '../../src/config/database.js';
+import { emailTemplateService } from '../../src/services/email-template.service.js';
+import { emailDraftService } from '../../src/services/email-draft.service.js';
+import { companyProfileService } from '../../src/services/company-profile.service.js';
 
 describe('Email Templates & Draft Workflow Integration Tests', () => {
   let userAId: string;

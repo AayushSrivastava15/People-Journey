@@ -1,7 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
-import { executeSql, closePool } from '../../src/config/database';
-import { companyProfileService } from '../../src/services/company-profile.service';
+import { executeSql, closePool } from '../../src/config/database.js';
+import { companyProfileService } from '../../src/services/company-profile.service.js';
 
 describe('Company Profile Integration Tests', () => {
   let userAId: string;

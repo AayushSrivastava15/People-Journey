@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { resolvePlaceholders, formatPlaceholderDate } from '../../src/utils/placeholder-engine';
-import type { CompanyProfile } from '../../src/models/company-profile.model';
+import { resolvePlaceholders, formatPlaceholderDate } from '../../src/utils/placeholder-engine.js';
+import type { CompanyProfile } from '../../src/models/company-profile.model.js';
 
 describe('Placeholder Engine Unit Tests', () => {
   const mockCompanyProfile: CompanyProfile = {

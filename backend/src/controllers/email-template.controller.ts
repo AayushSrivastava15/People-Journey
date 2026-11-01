@@ -1,9 +1,9 @@
 import type { Request, Response } from 'express';
-import { emailTemplateService } from '../services/email-template.service';
+import { emailTemplateService } from '../services/email-template.service.js';
 import {
   createEmailTemplateSchema,
   updateEmailTemplateSchema,
-} from '../models/email-template.model';
+} from '../models/email-template.model.js';
 
 export async function listTemplates(req: Request, res: Response): Promise<void> {
   try {

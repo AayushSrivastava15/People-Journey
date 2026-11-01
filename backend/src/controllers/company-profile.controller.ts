@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
-import { companyProfileService } from '../services/company-profile.service';
-import { upsertCompanyProfileSchema } from '../models/company-profile.model';
+import { companyProfileService } from '../services/company-profile.service.js';
+import { upsertCompanyProfileSchema } from '../models/company-profile.model.js';
 
 export async function getCompanyProfile(req: Request, res: Response): Promise<void> {
   try {

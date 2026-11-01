@@ -1,6 +1,6 @@
 import { describe, it, after } from 'node:test';
 import { strictEqual, ok } from 'node:assert';
-import { isPoolInitialized, testConnection, closePool } from '../../src/config/database';
+import { isPoolInitialized, testConnection, closePool } from '../../src/config/database.js';
 
 describe('Database Configuration & Connection Helpers', () => {
   after(async () => {

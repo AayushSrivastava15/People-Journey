@@ -1,7 +1,7 @@
 import { describe, it, after } from 'node:test';
 import { strictEqual, ok } from 'node:assert';
-import { healthService } from '../../src/services/health.service';
-import { closePool } from '../../src/config/database';
+import { healthService } from '../../src/services/health.service.js';
+import { closePool } from '../../src/config/database.js';
 
 describe('Health Service', () => {
   after(async () => {

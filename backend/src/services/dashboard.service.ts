@@ -1,6 +1,6 @@
-import { executeSql } from '../config/database';
-import type { DashboardStats } from '../models/dashboard.model';
-import { userService } from './user.service';
+import { executeSql } from '../config/database.js';
+import type { DashboardStats } from '../models/dashboard.model.js';
+import { userService } from './user.service.js';
 
 export interface PersonalDashboardData {
   user: {

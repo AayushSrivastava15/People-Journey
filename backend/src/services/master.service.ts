@@ -1,7 +1,7 @@
-import { executeSql } from '../config/database';
-import type { Department, Designation, CreateDepartmentInput, CreateDesignationInput } from '../models/master.model';
-import { auditService } from './audit.service';
-import { logger } from '../utils/logger';
+import { executeSql } from '../config/database.js';
+import type { Department, Designation, CreateDepartmentInput, CreateDesignationInput } from '../models/master.model.js';
+import { auditService } from './audit.service.js';
+import { logger } from '../utils/logger.js';
 
 interface RawDepartmentRow {
   department_id: number;

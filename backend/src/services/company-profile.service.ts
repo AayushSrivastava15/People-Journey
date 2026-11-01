@@ -1,6 +1,6 @@
-import { executeSql } from '../config/database';
-import type { CompanyProfile, UpsertCompanyProfileDto } from '../models/company-profile.model';
-import { logger } from '../utils/logger';
+import { executeSql } from '../config/database.js';
+import type { CompanyProfile, UpsertCompanyProfileDto } from '../models/company-profile.model.js';
+import { logger } from '../utils/logger.js';
 
 function mapRowToCompanyProfile(row: any): CompanyProfile {
   return {

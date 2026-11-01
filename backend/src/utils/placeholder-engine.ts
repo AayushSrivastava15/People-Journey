@@ -1,4 +1,4 @@
-import type { CompanyProfile } from '../models/company-profile.model';
+import type { CompanyProfile } from '../models/company-profile.model.js';
 
 export interface PlaceholderEmployeeData {
   employeeName?: string;

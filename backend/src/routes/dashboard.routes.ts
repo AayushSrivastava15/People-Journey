@@ -1,6 +1,6 @@
 import { Router, type IRouter } from 'express';
-import { getDashboardStats, getPersonalDashboard } from '../controllers/dashboard.controller';
-import { authenticateToken } from '../middleware/auth.middleware';
+import { getDashboardStats, getPersonalDashboard } from '../controllers/dashboard.controller.js';
+import { authenticateToken } from '../middleware/auth.middleware.js';
 
 const router: IRouter = Router();
 

@@ -1,12 +1,12 @@
 import type { Request, Response } from 'express';
-import { employeeService } from '../services/employee.service';
+import { employeeService } from '../services/employee.service.js';
 import {
   CreateEmployeeSchema,
   UpdateEmployeeSchema,
   OffboardEmployeeSchema,
   EmployeeQuerySchema,
-} from '../models/employee.model';
-import { logger } from '../utils/logger';
+} from '../models/employee.model.js';
+import { logger } from '../utils/logger.js';
 
 export async function getEmployees(req: Request, res: Response): Promise<void> {
   const userId = req.user?.id;

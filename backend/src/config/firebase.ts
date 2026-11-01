@@ -2,8 +2,8 @@ import { initializeApp, getApps, cert, type App } from 'firebase-admin/app';
 import { getAuth, type Auth } from 'firebase-admin/auth';
 import fs from 'node:fs';
 import path from 'node:path';
-import { env } from './env';
-import { logger } from '../utils/logger';
+import { env } from './env.js';
+import { logger } from '../utils/logger.js';
 
 let appInstance: App | null = null;
 let authInstance: Auth | null = null;

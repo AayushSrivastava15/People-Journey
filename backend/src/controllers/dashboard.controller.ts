@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
-import { dashboardService } from '../services/dashboard.service';
-import { logger } from '../utils/logger';
+import { dashboardService } from '../services/dashboard.service.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * Retrieve personal dashboard metrics for the authenticated user.

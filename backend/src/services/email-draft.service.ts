@@ -1,14 +1,14 @@
-import { executeSql } from '../config/database';
+import { executeSql } from '../config/database.js';
 import type {
   EmailDraft,
   PreviewDraftDto,
   CreateDraftDto,
   DraftStatus,
-} from '../models/email-draft.model';
-import { companyProfileService } from './company-profile.service';
-import { emailTemplateService } from './email-template.service';
-import { resolvePlaceholders, type PlaceholderEmployeeData } from '../utils/placeholder-engine';
-import { logger } from '../utils/logger';
+} from '../models/email-draft.model.js';
+import { companyProfileService } from './company-profile.service.js';
+import { emailTemplateService } from './email-template.service.js';
+import { resolvePlaceholders, type PlaceholderEmployeeData } from '../utils/placeholder-engine.js';
+import { logger } from '../utils/logger.js';
 
 function mapRowToEmailDraft(row: any): EmailDraft {
   return {

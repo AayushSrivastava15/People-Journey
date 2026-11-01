@@ -1,6 +1,6 @@
 import type pg from 'pg';
-import { executeSql } from '../config/database';
-import { logger } from '../utils/logger';
+import { executeSql } from '../config/database.js';
+import { logger } from '../utils/logger.js';
 
 export interface AuditLogEntry {
   userId?: string | null;

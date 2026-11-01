@@ -1,4 +1,4 @@
-import { executeSql, withTransaction } from '../config/database';
+import { executeSql, withTransaction } from '../config/database.js';
 import type {
   Employee,
   CreateEmployeeInput,
@@ -6,10 +6,10 @@ import type {
   OffboardEmployeeInput,
   EmployeeQueryParams,
   EmploymentStatus,
-} from '../models/employee.model';
-import { auditService } from './audit.service';
-import { masterService } from './master.service';
-import { logger } from '../utils/logger';
+} from '../models/employee.model.js';
+import { auditService } from './audit.service.js';
+import { masterService } from './master.service.js';
+import { logger } from '../utils/logger.js';
 
 interface RawEmployeeRow {
   employee_id: number;

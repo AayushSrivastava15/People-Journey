@@ -1,8 +1,8 @@
 import type { Request, Response } from 'express';
-import { userService } from '../services/user.service';
-import { UpdateUserProfileSchema } from '../models/user.model';
-import { getFirebaseAuth } from '../config/firebase';
-import { logger } from '../utils/logger';
+import { userService } from '../services/user.service.js';
+import { UpdateUserProfileSchema } from '../models/user.model.js';
+import { getFirebaseAuth } from '../config/firebase.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * Retrieve current authenticated session and PostgreSQL user profile.

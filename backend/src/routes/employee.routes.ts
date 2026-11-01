@@ -5,8 +5,8 @@ import {
   createEmployee,
   updateEmployee,
   offboardEmployee,
-} from '../controllers/employee.controller';
-import { authenticateToken } from '../middleware/auth.middleware';
+} from '../controllers/employee.controller.js';
+import { authenticateToken } from '../middleware/auth.middleware.js';
 
 const router: IRouter = Router();
 

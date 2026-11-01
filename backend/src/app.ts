@@ -3,10 +3,10 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
-import { requestLogger } from './middleware/request-logger';
-import { errorHandler } from './middleware/error-handler';
-import routes from './routes';
-import { env } from './config/env';
+import { requestLogger } from './middleware/request-logger.js';
+import { errorHandler } from './middleware/error-handler.js';
+import routes from './routes/index.js';
+import { env } from './config/env.js';
 
 const app: Express = express();
 
@@ -56,4 +56,3 @@ app.use('/api', routes);
 app.use(errorHandler);
 
 export default app;
-

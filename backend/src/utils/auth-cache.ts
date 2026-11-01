@@ -1,4 +1,4 @@
-import type { AppUser } from '../models/user.model';
+import type { AppUser } from '../models/user.model.js';
 
 interface CachedUserEntry {
   user: AppUser;

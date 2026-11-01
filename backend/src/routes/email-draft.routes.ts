@@ -5,8 +5,8 @@ import {
   listDrafts,
   getDraftById,
   updateDraftStatus,
-} from '../controllers/email-draft.controller';
-import { authenticateToken } from '../middleware/auth.middleware';
+} from '../controllers/email-draft.controller.js';
+import { authenticateToken } from '../middleware/auth.middleware.js';
 
 const router: IRouter = Router();
 

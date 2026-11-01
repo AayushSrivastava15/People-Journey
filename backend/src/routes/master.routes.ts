@@ -4,8 +4,8 @@ import {
   createDepartment,
   getDesignations,
   createDesignation,
-} from '../controllers/master.controller';
-import { authenticateToken } from '../middleware/auth.middleware';
+} from '../controllers/master.controller.js';
+import { authenticateToken } from '../middleware/auth.middleware.js';
 
 const router: IRouter = Router();
 

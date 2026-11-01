@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import { strictEqual, ok } from 'node:assert';
-import { authCache } from '../../src/utils/auth-cache';
-import type { AppUser } from '../../src/models/user.model';
+import { authCache } from '../../src/utils/auth-cache.js';
+import type { AppUser } from '../../src/models/user.model.js';
 
 describe('In-Memory Auth Cache', () => {
   const mockUser: AppUser = {

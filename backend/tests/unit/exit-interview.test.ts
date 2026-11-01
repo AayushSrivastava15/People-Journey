@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import { strictEqual, ok } from 'node:assert';
-import { createExitInterviewSchema, evaluationSchema, reopenExitInterviewSchema, submitExitInterviewSchema } from '../../src/models/exit-interview.model';
-import { validateExitInterviewAnswers } from '../../src/services/exit-interview.service';
+import { createExitInterviewSchema, evaluationSchema, reopenExitInterviewSchema, submitExitInterviewSchema } from '../../src/models/exit-interview.model.js';
+import { validateExitInterviewAnswers } from '../../src/services/exit-interview.service.js';
 
 const frozenSchema = { sections: [{ id: 'feedback', questions: [
   { id: 'reason', type: 'textarea', required: true },

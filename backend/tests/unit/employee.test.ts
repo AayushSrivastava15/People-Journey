@@ -5,8 +5,8 @@ import {
   UpdateEmployeeSchema,
   OffboardEmployeeSchema,
   EmployeeQuerySchema,
-} from '../../src/models/employee.model';
-import { CreateDepartmentSchema, CreateDesignationSchema } from '../../src/models/master.model';
+} from '../../src/models/employee.model.js';
+import { CreateDepartmentSchema, CreateDesignationSchema } from '../../src/models/master.model.js';
 
 describe('Employee Validation Schemas', () => {
   it('should validate valid employee creation payload', () => {

@@ -1,10 +1,7 @@
-import pinoHttp from 'pino-http';
-import { logger } from '../utils/logger';
+import { pinoHttp } from 'pino-http';
+import { logger } from '../utils/logger.js';
 
-// Support both ESM default and CJS imports for pino-http
-const pinoHttpFn = typeof pinoHttp === 'function' ? pinoHttp : (pinoHttp as unknown as { default: typeof pinoHttp }).default;
-
-export const requestLogger = pinoHttpFn({
+export const requestLogger = pinoHttp({
   logger,
   serializers: {
     req(req: { id?: string | number; method?: string; url?: string }) {

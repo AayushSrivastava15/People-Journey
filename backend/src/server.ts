@@ -1,7 +1,7 @@
-import app from './app';
-import { env } from './config/env';
-import { logger } from './utils/logger';
-import { initPool, closePool } from './config/database';
+import app from './app.js';
+import { env } from './config/env.js';
+import { logger } from './utils/logger.js';
+import { initPool, closePool } from './config/database.js';
 
 async function bootstrap() {
   // Attempt to initialize PostgreSQL connection pool if DATABASE_URL is configured
@@ -18,7 +18,7 @@ async function bootstrap() {
     logger.info('DATABASE_URL not configured. Database pool will initialize when DATABASE_URL is set.');
   }
 
-  const server = app.listen(env.PORT, () => {
+  const server = app.listen(env.PORT, '0.0.0.0', () => {
     logger.info({ port: env.PORT, env: env.NODE_ENV }, 'People Journey API server listening');
   });
 

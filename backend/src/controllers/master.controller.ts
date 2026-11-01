@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
-import { masterService } from '../services/master.service';
-import { CreateDepartmentSchema, CreateDesignationSchema } from '../models/master.model';
-import { logger } from '../utils/logger';
+import { masterService } from '../services/master.service.js';
+import { CreateDepartmentSchema, CreateDesignationSchema } from '../models/master.model.js';
+import { logger } from '../utils/logger.js';
 
 export async function getDepartments(req: Request, res: Response): Promise<void> {
   try {

@@ -1,10 +1,10 @@
 import type { Request, Response, NextFunction } from 'express';
-import { getFirebaseAuth } from '../config/firebase';
-import { userService } from '../services/user.service';
-import { auditService } from '../services/audit.service';
-import type { AppUser, AppRole } from '../models/user.model';
-import { logger } from '../utils/logger';
-import { authCache } from '../utils/auth-cache';
+import { getFirebaseAuth } from '../config/firebase.js';
+import { userService } from '../services/user.service.js';
+import { auditService } from '../services/audit.service.js';
+import type { AppUser, AppRole } from '../models/user.model.js';
+import { logger } from '../utils/logger.js';
+import { authCache } from '../utils/auth-cache.js';
 
 export const invalidateUserAuthCache = (identifier?: string) => authCache.invalidate(identifier);
 

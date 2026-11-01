@@ -1,7 +1,7 @@
 import { Router, type IRouter } from 'express';
 import rateLimit from 'express-rate-limit';
-import { authenticateToken } from '../middleware/auth.middleware';
-import { createInterview, getEvaluation, getInterview, getPublicForm, getResponses, listInterviews, listTemplates, reopenInterview, revokeInterview, submitPublicForm, updateEvaluation } from '../controllers/exit-interview.controller';
+import { authenticateToken } from '../middleware/auth.middleware.js';
+import { createInterview, getEvaluation, getInterview, getPublicForm, getResponses, listInterviews, listTemplates, reopenInterview, revokeInterview, submitPublicForm, updateEvaluation } from '../controllers/exit-interview.controller.js';
 
 const router: IRouter = Router();
 const publicLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 30, standardHeaders: 'draft-7', legacyHeaders: false, message: {success:false,error:{code:'RATE_LIMIT_EXCEEDED',message:'Too many form requests. Please try again later.'}} });

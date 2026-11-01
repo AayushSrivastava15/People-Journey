@@ -1,5 +1,5 @@
 import { Router, type IRouter } from 'express';
-import { getHealth } from '../controllers/health.controller';
+import { getHealth } from '../controllers/health.controller.js';
 
 const router: IRouter = Router();
 

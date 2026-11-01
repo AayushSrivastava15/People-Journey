@@ -1,13 +1,13 @@
 import { Router, type IRouter } from 'express';
-import healthRoutes from './health.routes';
-import authRoutes from './auth.routes';
-import employeeRoutes from './employee.routes';
-import masterRoutes from './master.routes';
-import dashboardRoutes from './dashboard.routes';
-import companyProfileRoutes from './company-profile.routes';
-import emailTemplateRoutes from './email-template.routes';
-import emailDraftRoutes from './email-draft.routes';
-import exitInterviewRoutes from './exit-interview.routes';
+import healthRoutes from './health.routes.js';
+import authRoutes from './auth.routes.js';
+import employeeRoutes from './employee.routes.js';
+import masterRoutes from './master.routes.js';
+import dashboardRoutes from './dashboard.routes.js';
+import companyProfileRoutes from './company-profile.routes.js';
+import emailTemplateRoutes from './email-template.routes.js';
+import emailDraftRoutes from './email-draft.routes.js';
+import exitInterviewRoutes from './exit-interview.routes.js';
 
 const router: IRouter = Router();
 

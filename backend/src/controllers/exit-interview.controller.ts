@@ -1,8 +1,8 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
-import { createExitInterviewSchema, evaluationSchema, listExitInterviewsSchema, reopenExitInterviewSchema, submitExitInterviewSchema } from '../models/exit-interview.model';
-import { exitInterviewService } from '../services/exit-interview.service';
-import { logger } from '../utils/logger';
+import { createExitInterviewSchema, evaluationSchema, listExitInterviewsSchema, reopenExitInterviewSchema, submitExitInterviewSchema } from '../models/exit-interview.model.js';
+import { exitInterviewService } from '../services/exit-interview.service.js';
+import { logger } from '../utils/logger.js';
 
 const uuid = z.string().uuid();
 function owner(req: Request, res: Response): string | null {

@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual, randomUUID } from 'node:crypto';
-import { executeSql, withTransaction } from '../config/database';
-import { env } from '../config/env';
+import { executeSql, withTransaction } from '../config/database.js';
+import { env } from '../config/env.js';
 
 const hashToken = (token: string) => createHash('sha256').update(token, 'utf8').digest('hex');
 function publicUrl(token: string): string {

@@ -1,10 +1,10 @@
-import { executeSql } from '../config/database';
+import { executeSql } from '../config/database.js';
 import type {
   EmailTemplate,
   CreateEmailTemplateDto,
   UpdateEmailTemplateDto,
-} from '../models/email-template.model';
-import { logger } from '../utils/logger';
+} from '../models/email-template.model.js';
+import { logger } from '../utils/logger.js';
 
 function mapRowToEmailTemplate(row: any): EmailTemplate {
   return {

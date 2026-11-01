@@ -1,11 +1,11 @@
 import { describe, it, after } from 'node:test';
 import { strictEqual, ok } from 'node:assert';
-import { executeSql, withTransaction, closePool, isPoolInitialized } from '../../src/config/database';
-import { auditService } from '../../src/services/audit.service';
-import { masterService } from '../../src/services/master.service';
-import { dashboardService } from '../../src/services/dashboard.service';
-import { userService } from '../../src/services/user.service';
-import { env } from '../../src/config/env';
+import { executeSql, withTransaction, closePool, isPoolInitialized } from '../../src/config/database.js';
+import { auditService } from '../../src/services/audit.service.js';
+import { masterService } from '../../src/services/master.service.js';
+import { dashboardService } from '../../src/services/dashboard.service.js';
+import { userService } from '../../src/services/user.service.js';
+import { env } from '../../src/config/env.js';
 
 describe('Supabase PostgreSQL Integration & Transaction Tests', () => {
   after(async () => {
@@ -132,7 +132,7 @@ describe('Supabase PostgreSQL Integration & Transaction Tests', () => {
       return;
     }
 
-    const { employeeService } = await import('../../src/services/employee.service');
+    const { employeeService } = await import('../../src/services/employee.service.js');
 
     // Create User A
     const userA = await userService.syncGoogleUser({
@@ -195,4 +195,3 @@ describe('Supabase PostgreSQL Integration & Transaction Tests', () => {
     }
   });
 });
-

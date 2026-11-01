@@ -1,14 +1,14 @@
-import { executeSql } from '../config/database';
+import { executeSql } from '../config/database.js';
 import type {
   AppUser,
   AppRole,
   CreateUserInput,
   UpdateUserProfileInput,
   AdminUpdateUserInput,
-} from '../models/user.model';
-import { env } from '../config/env';
-import { logger } from '../utils/logger';
-import { authCache } from '../utils/auth-cache';
+} from '../models/user.model.js';
+import { env } from '../config/env.js';
+import { logger } from '../utils/logger.js';
+import { authCache } from '../utils/auth-cache.js';
 
 interface RawAppUserRow {
   id: string;

@@ -1,10 +1,10 @@
 import type { Request, Response } from 'express';
-import { emailDraftService } from '../services/email-draft.service';
+import { emailDraftService } from '../services/email-draft.service.js';
 import {
   previewDraftSchema,
   createDraftSchema,
   updateDraftStatusSchema,
-} from '../models/email-draft.model';
+} from '../models/email-draft.model.js';
 
 export async function previewDraft(req: Request, res: Response): Promise<void> {
   try {
