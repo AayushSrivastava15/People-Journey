@@ -41,6 +41,8 @@ firebase-adminsdk*.json
 /connect.lock
 /coverage
 /libpeerconnection.log
+*.log
+*.log.*
 npm-debug.log
 yarn-error.log
 testem.log
