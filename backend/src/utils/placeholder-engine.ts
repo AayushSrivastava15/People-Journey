@@ -118,13 +118,12 @@ export function resolvePlaceholders(
     joining_time: customValues.joining_time || '9:30 AM',
     last_working_day: formatPlaceholderDate(employee?.exitDate || customValues.last_working_day) || undefined,
     offboarding_date: formatPlaceholderDate(employee?.exitDate || customValues.offboarding_date) || undefined,
-    exit_interview_date: formatPlaceholderDate(customValues.exit_interview_date) || undefined,
-    exit_interview_time: customValues.exit_interview_time || '2:00 PM',
-    meeting_location: customValues.meeting_location || companyProfile?.officeLocation || 'Google Meet / Conference Room',
+    response_due_date: formatPlaceholderDate(customValues.response_due_date) || '—',
+    exit_interview_link: customValues.exit_interview_link || customValues.form_link || '',
+    form_link: customValues.exit_interview_link || customValues.form_link || '',
     manager_name: employee?.manager || customValues.manager_name || 'Your Reporting Manager',
     required_documents: customValues.required_documents || 'Government Photo ID, signed offer letter, direct deposit authorization form',
     pending_tasks: customValues.pending_tasks || 'Complete profile enrollment and review team guidelines',
-    form_link: customValues.form_link || companyProfile?.companyWebsite || '',
     today_date: todayFormatted,
   };
 

@@ -33,6 +33,11 @@ const DashboardPage = lazy(async () => {
   return { default: module.DashboardPage };
 });
 
+const ShortLinkRedirectPage = lazy(async () => {
+  const module = await import('@/pages/short-link-redirect');
+  return { default: module.ShortLinkRedirectPage };
+});
+
 function RouteFallback({ label = 'Loading…' }: { label?: string }) {
   return (
     <div style={{ display: 'grid', placeItems: 'center', minHeight: '50vh', color: '#887582', fontSize: '13px' }} role="status">
@@ -76,6 +81,7 @@ function Router() {
         <Route path="/dashboard/notification-history" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/exit-interviews" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/interview-responses" component={ProtectedWorkspaceRoute} />
+        <Route path="/e/:code" component={() => <Suspense fallback={<RouteFallback label="Opening feedback survey…" />}><ShortLinkRedirectPage /></Suspense>} />
         <Route component={NotFound} />
       </Switch>
     </RoutedErrorBoundary>

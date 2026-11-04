@@ -8,6 +8,8 @@ import { errorHandler } from './middleware/error-handler.js';
 import routes from './routes/index.js';
 import { env } from './config/env.js';
 
+import { resolveShortLink, handleGoogleFormsWebhook } from './controllers/exit-interview.controller.js';
+
 const app: Express = express();
 
 // 1. HTTP Security Headers (prevents clickjacking, MIME sniffing, XSS injection)
@@ -50,6 +52,10 @@ app.use(cookieParser());
 // 4. Request Payload Size Limits (prevents memory exhaustion attacks)
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+// Short URL direct redirect for departing employees
+app.get('/e/:code', resolveShortLink);
+app.post('/api/webhooks/google-forms', handleGoogleFormsWebhook);
 
 app.use('/api', routes);
 

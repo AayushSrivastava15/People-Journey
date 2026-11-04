@@ -336,13 +336,20 @@ export interface ExitInterviewRecord {
   lastName: string | null;
   employeeCode: string;
   departmentName: string | null;
+  designationName?: string | null;
   templateName: string;
+  shortCode?: string | null;
+  shortUrl?: string;
+  publicUrl?: string;
+  responseDueDate?: string | null;
 }
 
 export interface ExitInterviewDetail extends ExitInterviewRecord {
   template: { name: string; version: number; description?: string | null; schema?: ExitInterviewSchema };
   workEmail: string | null;
   reopenedAt?: string | null;
+  googleFormResponseId?: string | null;
+  rawResponsePayload?: any;
 }
 
 export interface ExitInterviewQuestion {
@@ -364,6 +371,9 @@ export interface ExitInterviewLinkResult {
   expiresAt: string;
   publicUrl: string;
   token: string;
+  shortCode?: string;
+  shortUrl?: string;
+  responseDueDate?: string | null;
 }
 
 export interface ExitInterviewResponse {

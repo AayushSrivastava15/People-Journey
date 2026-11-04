@@ -42,12 +42,22 @@ const SUPPORTED_PLACEHOLDERS = [
   { token: '{{department_name}}', desc: 'Employee department' },
   { token: '{{joining_date}}', desc: 'Scheduled start date' },
   { token: '{{last_working_day}}', desc: 'Recorded exit date' },
-  { token: '{{exit_interview_date}}', desc: 'Exit interview date' },
-  { token: '{{exit_interview_time}}', desc: 'Exit interview time' },
-  { token: '{{meeting_location}}', desc: 'Interview location or Meet link' },
-  { token: '{{form_link}}', desc: 'Secure employee form link' },
+  { token: '{{exit_interview_link}}', desc: 'Unique survey short link' },
+  { token: '{{response_due_date}}', desc: 'Feedback form response deadline' },
+  { token: '{{form_link}}', desc: 'Survey form link' },
   { token: '{{company_signature}}', desc: 'Saved email signature' },
 ];
+
+function formatDisplayDate(val?: string): string {
+  if (!val) return '—';
+  try {
+    const d = new Date(val);
+    if (isNaN(d.getTime())) return val;
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  } catch {
+    return val;
+  }
+}
 
 export function EmailPreparationDialog({
   isOpen,
@@ -85,9 +95,7 @@ export function EmailPreparationDialog({
   const [hasCompanyProfile, setHasCompanyProfile] = useState<boolean>(true);
 
   // Custom placeholder overrides
-  const [customExitDate, setCustomExitDate] = useState<string>('');
-  const [customExitTime, setCustomExitTime] = useState<string>('2:00 PM');
-  const [customLocation, setCustomLocation] = useState<string>('');
+  const [responseDueDate, setResponseDueDate] = useState<string>(additionalCustomValues?.response_due_date || '');
 
   // Status and feedback
   const [copied, setCopied] = useState<boolean>(false);
@@ -155,9 +163,12 @@ export function EmailPreparationDialog({
     if (!currentTemplate) return;
 
     const customValues: Record<string, string> = { ...(additionalCustomValues || {}) };
-    if (customExitDate) customValues.exit_interview_date = customExitDate;
-    if (customExitTime) customValues.exit_interview_time = customExitTime;
-    if (customLocation) customValues.meeting_location = customLocation;
+    if (responseDueDate) customValues.response_due_date = responseDueDate;
+    const surveyLink = additionalCustomValues?.exit_interview_link || additionalCustomValues?.form_link;
+    if (surveyLink) {
+      customValues.exit_interview_link = surveyLink;
+      customValues.form_link = surveyLink;
+    }
 
     previewMutation.mutate(
       {
@@ -171,19 +182,34 @@ export function EmailPreparationDialog({
         onSuccess: res => {
           setRecipient(res.data.recipientEmail || '');
           const effectiveCompanyName = profile?.companyName || 'our company';
+          const effectiveHrName = profile?.hrContactName || 'HR Team';
+          const effectiveHrEmail = profile?.hrContactEmail || '';
+          const effectiveDueDate = responseDueDate
+            ? formatDisplayDate(responseDueDate)
+            : additionalCustomValues?.response_due_date
+            ? formatDisplayDate(additionalCustomValues.response_due_date)
+            : '—';
+
           let subj = res.data.subject || '';
           let bdy = res.data.body || '';
 
           subj = subj.replace(/\{\{company_name\}\}/g, effectiveCompanyName);
           bdy = bdy.replace(/\{\{company_name\}\}/g, effectiveCompanyName);
+          subj = subj.replace(/\{\{hr_contact_name\}\}/g, effectiveHrName);
+          bdy = bdy.replace(/\{\{hr_contact_name\}\}/g, effectiveHrName);
+          subj = subj.replace(/\{\{hr_contact_email\}\}/g, effectiveHrEmail);
+          bdy = bdy.replace(/\{\{hr_contact_email\}\}/g, effectiveHrEmail);
+          subj = subj.replace(/\{\{response_due_date\}\}/g, effectiveDueDate);
+          bdy = bdy.replace(/\{\{response_due_date\}\}/g, effectiveDueDate);
           subj = subj.replace(/\{\{employee_code\}\}/g, '');
           bdy = bdy.replace(/\{\{employee_code\}\}/g, '');
 
-          // Older exit invitation templates may not yet contain {{form_link}}.
-          // Keep the issued link in the prepared draft without storing it elsewhere.
-          const formLink = additionalCustomValues?.form_link;
-          if (formLink && !bdy.includes(formLink)) {
-            bdy = `${bdy.trim()}\n\nComplete your secure exit interview here: ${formLink}`.trim();
+          if (surveyLink) {
+            subj = subj.replace(/\{\{exit_interview_link\}\}/g, surveyLink).replace(/\{\{form_link\}\}/g, surveyLink);
+            bdy = bdy.replace(/\{\{exit_interview_link\}\}/g, surveyLink).replace(/\{\{form_link\}\}/g, surveyLink);
+            if (!bdy.includes(surveyLink)) {
+              bdy = `${bdy.trim()}\n\nExit Feedback Form: ${surveyLink}`.trim();
+            }
           }
 
           setSubject(subj);
@@ -200,9 +226,7 @@ export function EmailPreparationDialog({
     isCandidateMode,
     candidateName,
     candidateEmail,
-    customExitDate,
-    customExitTime,
-    customLocation,
+    responseDueDate,
     additionalCustomValues,
     profile,
   ]);
@@ -575,14 +599,15 @@ export function EmailPreparationDialog({
             </div>
           </div>
 
-          {/* Contextual Override inputs for Exit Interview or Special Dates */}
-          {(currentTemplate?.name.includes('Exit Interview') || normalizeCategory(currentTemplate?.category) === 'exit_interview') && (
+          {/* Contextual Override inputs for Exit Interview / Feedback Form */}
+          {(currentTemplate?.name.includes('Exit') || normalizeCategory(currentTemplate?.category) === 'exit_interview') && (
             <div
               style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)',
-                gap: '10px',
-                padding: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '16px',
+                padding: '12px 14px',
                 borderRadius: '10px',
                 background: '#faf5f8',
                 border: '1px solid #f3e6ec',
@@ -590,32 +615,27 @@ export function EmailPreparationDialog({
               }}
             >
               <div>
-                <label style={{ fontSize: '10px', fontWeight: 600, color: '#7a5a6a' }}>Exit Interview Date</label>
-                <input
-                  type="date"
-                  value={customExitDate}
-                  onChange={e => setCustomExitDate(e.target.value)}
-                  style={{ width: '100%', fontSize: '11px', padding: '6px', borderRadius: '6px', border: '1px solid #e6d8df' }}
-                />
+                <label style={{ fontSize: '11px', fontWeight: 600, color: '#7a5a6a', display: 'block' }}>
+                  Response Due Date (Optional)
+                </label>
+                <span style={{ fontSize: '10px', color: '#9d8a95' }}>
+                  Submission deadline for the employee's feedback form. Leave empty if no strict deadline is needed.
+                </span>
               </div>
-              <div>
-                <label style={{ fontSize: '10px', fontWeight: 600, color: '#7a5a6a' }}>Interview Time</label>
-                <input
-                  value={customExitTime}
-                  onChange={e => setCustomExitTime(e.target.value)}
-                  placeholder="e.g. 2:00 PM"
-                  style={{ width: '100%', fontSize: '11px', padding: '6px', borderRadius: '6px', border: '1px solid #e6d8df' }}
-                />
-              </div>
-              <div>
-                <label style={{ fontSize: '10px', fontWeight: 600, color: '#7a5a6a' }}>Meeting Location / Link</label>
-                <input
-                  value={customLocation}
-                  onChange={e => setCustomLocation(e.target.value)}
-                  placeholder="e.g. Google Meet / Room 4"
-                  style={{ width: '100%', fontSize: '11px', padding: '6px', borderRadius: '6px', border: '1px solid #e6d8df' }}
-                />
-              </div>
+              <input
+                type="date"
+                value={responseDueDate}
+                onChange={e => setResponseDueDate(e.target.value)}
+                style={{
+                  width: '150px',
+                  fontSize: '11px',
+                  padding: '6px 8px',
+                  borderRadius: '6px',
+                  border: '1px solid #e6d8df',
+                  background: '#ffffff',
+                  color: '#57434c',
+                }}
+              />
             </div>
           )}
 

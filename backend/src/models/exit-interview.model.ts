@@ -5,7 +5,21 @@ export const createExitInterviewSchema = z.object({
   offboardingId: z.coerce.number().int().positive().optional(),
   templateId: z.string().uuid(),
   expiryDays: z.coerce.number().int().min(1).max(90).default(14),
+  responseDueDate: z.string().nullable().optional(),
 }).strict();
+
+export const regenerateExitInterviewSchema = z.object({
+  expiryDays: z.coerce.number().int().min(1).max(90).default(14),
+}).strict();
+
+export const googleFormsWebhookSchema = z.object({
+  responseId: z.string().min(1).max(255).optional(),
+  timestamp: z.string().optional(),
+  invitationReference: z.string().optional(),
+  employeeId: z.string().optional(),
+  employeeName: z.string().optional(),
+  answers: z.record(z.unknown()).default({}),
+});
 
 export const listExitInterviewsSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),

@@ -25,8 +25,13 @@ export const env = {
   PORT: Number(process.env.PORT) || 5000,
   NODE_ENV: process.env.NODE_ENV || 'development',
   CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:3000',
-  PUBLIC_APP_URL: process.env.PUBLIC_APP_URL || (process.env.NODE_ENV === 'development' ? 'http://localhost:3000' : ''),
+  PUBLIC_APP_URL: process.env.PUBLIC_APP_URL || (process.env.NODE_ENV === 'development' ? 'http://localhost:5000' : ''),
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
+
+  // Google Forms Integration & Webhook Security
+  GOOGLE_FORMS_URL: process.env.GOOGLE_FORMS_URL || 'https://docs.google.com/forms/d/e/1FAIpQLScU6NpuggNgHkybtyD7PYDyZhabK1V3L8MbKoCrcCIFiyb4uw/viewform',
+  GOOGLE_FORMS_WEBHOOK_SECRET: process.env.GOOGLE_FORMS_WEBHOOK_SECRET || 'pj_gforms_sec_9f7a2d48b1c5',
+  APP_BASE_URL: process.env.APP_BASE_URL || process.env.PUBLIC_APP_URL || (process.env.NODE_ENV === 'development' ? 'http://localhost:5000' : ''),
 
   // PostgreSQL Database configuration (Supabase)
   DATABASE_URL: process.env.DATABASE_URL || '',

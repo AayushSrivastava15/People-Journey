@@ -172,8 +172,20 @@ function invalidateExitInterviews(queryClient: ReturnType<typeof useQueryClient>
 export function useCreateExitInterview() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (payload: { employeeId: number; offboardingId?: number; templateId: string; expiryDays: number }) =>
+    mutationFn: async (payload: { employeeId: number; offboardingId?: number; templateId: string; expiryDays: number; responseDueDate?: string | null }) =>
       (await apiClient<{ success: boolean; data: ExitInterviewLinkResult }>('/exit-interviews', { method: 'POST', body: JSON.stringify(payload) })).data,
+    onSuccess: () => invalidateExitInterviews(queryClient),
+  });
+}
+
+export function useRegenerateExitInterview() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, expiryDays }: { id: string; expiryDays?: number }) =>
+      (await apiClient<{ success: boolean; data: ExitInterviewLinkResult }>(`/exit-interviews/${id}/regenerate`, {
+        method: 'POST',
+        body: JSON.stringify({ expiryDays: expiryDays ?? 14 }),
+      })).data,
     onSuccess: () => invalidateExitInterviews(queryClient),
   });
 }

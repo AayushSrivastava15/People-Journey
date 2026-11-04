@@ -15,7 +15,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import {
   useDashboardStats, useEmployees, useDepartments, useDesignations,
   useCreateEmployee, useOffboardEmployee,
-  usePersonalDashboard, useNotifications,
+  usePersonalDashboard, useNotifications, useExitInterviews,
 } from '@/api/queries';
 import type { Employee as ApiEmployee } from '@/types/api';
 import { useToast } from '@/hooks/use-toast';
@@ -711,15 +711,18 @@ function Overview() {
 
   // Fetch live workspace stats & derived lifecycle data
   const { data: liveStats } = useDashboardStats();
-  const { notifications, exitInterviews } = useWorkspaceLifecycleData();
+  const { notifications } = useWorkspaceLifecycleData();
   const { data: notifData } = useNotifications();
+  const { data: exitInterviewsData } = useExitInterviews({ limit: 100 });
 
   const totalEmployees = liveStats ? liveStats.totalEmployees : 0;
   const joiningMonth = liveStats ? liveStats.joiningThisMonth : 0;
   const upcomingJoiners = liveStats ? liveStats.upcomingJoiners : 0;
   const upcomingExits = liveStats ? liveStats.upcomingExits : 0;
   const pendingNoticesCount = notifData?.unreadCount ?? 0;
-  const completedInterviewsCount = exitInterviews.filter(p => p.status === 'Submitted').length;
+  const completedInterviewsCount = exitInterviewsData?.data?.filter(
+    p => p.status === 'COMPLETED'
+  ).length ?? 0;
 
   const stats = [
     { label: 'Total employees', value: totalEmployees, icon: UsersRound, tone: 'rose', href: '/dashboard/employees', note: 'In your workspace' },
@@ -939,7 +942,7 @@ function ListingPage({
   const pageSize = 5;
   const title = titles[path] || 'Personal Workspace';
 
-  const { notifications, exitInterviews } = useWorkspaceLifecycleData();
+  const { notifications } = useWorkspaceLifecycleData();
 
   if (path === '/dashboard/add-employee') return <AddEmployee />;
   if (path === '/dashboard/schedule-offboarding') return <ScheduleOffboarding />;
