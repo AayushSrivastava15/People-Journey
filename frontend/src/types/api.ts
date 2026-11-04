@@ -86,6 +86,22 @@ export interface DashboardStats {
   }[];
 }
 
+export interface UserNotificationItem {
+  id: number;
+  userId: string;
+  title: string;
+  message: string;
+  type: 'offboarding' | 'onboarding' | 'exit_management' | 'info' | string;
+  isRead: boolean;
+  createdAt: string;
+}
+
+export interface UserNotificationsResponse {
+  notifications: UserNotificationItem[];
+  unreadCount: number;
+  total: number;
+}
+
 export interface PersonalDashboardData {
   user: {
     id: string;

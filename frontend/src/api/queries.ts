@@ -27,6 +27,8 @@ import type {
   ExitInterviewLinkResult,
   ExitInterviewResponse,
   ExitInterviewEvaluation,
+  UserNotificationItem,
+  UserNotificationsResponse,
 } from '../types/api';
 
 export const QUERY_KEYS = {
@@ -43,6 +45,7 @@ export const QUERY_KEYS = {
   exitInterviewTemplates: ['exit-interviews', 'templates'] as const,
   exitInterviews: (params?: Record<string, unknown>) => ['exit-interviews', params || {}] as const,
   exitInterview: (id: string) => ['exit-interviews', id] as const,
+  notifications: ['notifications'] as const,
 };
 
 export function usePersonalDashboard() {
@@ -53,6 +56,82 @@ export function usePersonalDashboard() {
       return res.data;
     },
     staleTime: 60000,
+  });
+}
+
+export function useNotifications() {
+  return useQuery({
+    queryKey: QUERY_KEYS.notifications,
+    queryFn: async () => {
+      const res = await apiClient<{ success: boolean; data: UserNotificationsResponse }>('/notifications');
+      return res.data;
+    },
+    staleTime: 15000,
+    refetchInterval: 30000,
+  });
+}
+
+export function useMarkNotificationAsRead() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => {
+      return apiClient<{ success: boolean }>(`/notifications/${id}/read`, {
+        method: 'PATCH',
+      });
+    },
+    onMutate: async (id: number) => {
+      await queryClient.cancelQueries({ queryKey: QUERY_KEYS.notifications });
+      const previous = queryClient.getQueryData<UserNotificationsResponse>(QUERY_KEYS.notifications);
+      if (previous) {
+        queryClient.setQueryData<UserNotificationsResponse>(QUERY_KEYS.notifications, {
+          ...previous,
+          unreadCount: Math.max(0, previous.unreadCount - 1),
+          notifications: previous.notifications.map(n => (n.id === id ? { ...n, isRead: true } : n)),
+        });
+      }
+      return { previous };
+    },
+    onError: (_err, _id, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(QUERY_KEYS.notifications, context.previous);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.notifications });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.personalDashboard });
+    },
+  });
+}
+
+export function useMarkAllNotificationsAsRead() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      return apiClient<{ success: boolean; updatedCount: number }>('/notifications/mark-all-read', {
+        method: 'PATCH',
+      });
+    },
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: QUERY_KEYS.notifications });
+      const previous = queryClient.getQueryData<UserNotificationsResponse>(QUERY_KEYS.notifications);
+      if (previous) {
+        queryClient.setQueryData<UserNotificationsResponse>(QUERY_KEYS.notifications, {
+          ...previous,
+          unreadCount: 0,
+          notifications: previous.notifications.map(n => ({ ...n, isRead: true })),
+        });
+      }
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(QUERY_KEYS.notifications, context.previous);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.notifications });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.personalDashboard });
+    },
   });
 }
 
@@ -87,6 +166,7 @@ export function useExitInterview(id?: string) {
 
 function invalidateExitInterviews(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: ['exit-interviews'] });
+  queryClient.invalidateQueries({ queryKey: QUERY_KEYS.notifications });
 }
 
 export function useCreateExitInterview() {
@@ -229,6 +309,7 @@ export function useCreateEmployee() {
       queryClient.invalidateQueries({ queryKey: ['employees'] });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.departments });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.notifications });
     },
   });
 }
@@ -276,6 +357,7 @@ export function useOffboardEmployee() {
       queryClient.invalidateQueries({ queryKey: ['employees'] });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.departments });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.notifications });
     },
   });
 }

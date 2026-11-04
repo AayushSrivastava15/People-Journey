@@ -15,7 +15,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import {
   useDashboardStats, useEmployees, useDepartments, useDesignations,
   useCreateEmployee, useOffboardEmployee,
-  usePersonalDashboard,
+  usePersonalDashboard, useNotifications,
 } from '@/api/queries';
 import type { Employee as ApiEmployee } from '@/types/api';
 import { useToast } from '@/hooks/use-toast';
@@ -28,6 +28,7 @@ import { EmailNotificationsView } from '@/components/email-notifications-view';
 import { EmailDraftHistoryView } from '@/components/email-draft-history-view';
 import { EditEmployeeDialog } from '@/components/edit-employee-dialog';
 import { ExitManagementView } from '@/components/exit-management-view';
+import { NotificationBellDropdown } from '@/components/notification-bell-dropdown';
 
 
 const navGroups = [
@@ -262,8 +263,6 @@ function Shell({
   const [collapsed, setCollapsed] = useState(false);
   const { user, appUser, signOut } = useAuth();
   const shouldReduceMotion = useReducedMotion();
-  const { notifications } = useWorkspaceLifecycleData();
-  const pendingNoticesCount = notifications.filter(n => n.status === 'Pending' || n.status === 'Processing').length;
 
   const handleSignOut = async () => {
     await signOut();
@@ -370,14 +369,7 @@ function Shell({
               />
               <kbd>WORKSPACE</kbd>
             </label>
-            <Link
-              href="/dashboard/notifications"
-              className="topbar-bell"
-              aria-label={pendingNoticesCount > 0 ? `View notifications (${pendingNoticesCount} pending)` : 'View notifications'}
-            >
-              <Bell size={18} />
-              {pendingNoticesCount > 0 && <i aria-hidden="true">{pendingNoticesCount > 9 ? '9+' : pendingNoticesCount}</i>}
-            </Link>
+            <NotificationBellDropdown onNavigate={onNavigate} />
             <span className="topbar-date">
               {new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date())}
             </span>
@@ -720,12 +712,13 @@ function Overview() {
   // Fetch live workspace stats & derived lifecycle data
   const { data: liveStats } = useDashboardStats();
   const { notifications, exitInterviews } = useWorkspaceLifecycleData();
+  const { data: notifData } = useNotifications();
 
   const totalEmployees = liveStats ? liveStats.totalEmployees : 0;
   const joiningMonth = liveStats ? liveStats.joiningThisMonth : 0;
   const upcomingJoiners = liveStats ? liveStats.upcomingJoiners : 0;
   const upcomingExits = liveStats ? liveStats.upcomingExits : 0;
-  const pendingNoticesCount = notifications.filter(p => p.status === 'Pending' || p.status === 'Processing').length;
+  const pendingNoticesCount = notifData?.unreadCount ?? 0;
   const completedInterviewsCount = exitInterviews.filter(p => p.status === 'Submitted').length;
 
   const stats = [
