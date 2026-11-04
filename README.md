@@ -2,6 +2,8 @@
 
 A human-centric employee lifecycle management workspace for onboarding, offboarding, milestone communications, and exit interviews.
 
+**Live application:** https://people-journey-frontend.onrender.com/
+
 Built with a clean separation of concerns:
 - **`frontend/`**: Standalone React 19 + TypeScript web application powered by Vite, Tailwind CSS, shadcn/ui, Motion, Firebase Authentication (Google Sign-In), and TanStack Query.
 - **`backend/`**: Express 5 + TypeScript REST API integrated with **Supabase PostgreSQL** (transaction pooler on port 6543) and **Firebase Admin SDK** for single-role personal workspace HR management and strict data isolation.
@@ -151,4 +153,3 @@ npm run test --prefix backend
   - First-time Google logins automatically register into `app_users` with the default role `user`.
   - Every authenticated user receives full feature permissions within their own isolated workspace.
   - Server-enforced per-user data isolation: all employee and offboarding queries are strictly scoped to the authenticated owner's `app_users.id`. Users cannot view or modify other users' records.
-
