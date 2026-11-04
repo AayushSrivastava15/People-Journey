@@ -6,7 +6,27 @@
 
 import { auth } from '../lib/firebase';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+/**
+ * Normalizes the API base URL to ensure:
+ * 1. Trailing slashes are stripped.
+ * 2. The canonical '/api' prefix is always included, even if the environment variable
+ *    only specifies the backend host (e.g. 'https://people-journey.onrender.com').
+ */
+export function getApiBaseUrl(): string {
+  const raw = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').trim().replace(/\/+$/, '');
+  return raw.endsWith('/api') ? raw : `${raw}/api`;
+}
+
+/**
+ * Constructs a normalized, canonical URL for an API endpoint, preventing
+ * double '/api/api' or missing '/api' segments.
+ */
+export function buildApiUrl(endpoint: string): string {
+  const base = getApiBaseUrl();
+  const cleanEndpoint = endpoint.replace(/^\/+/, '');
+  const path = cleanEndpoint.startsWith('api/') ? cleanEndpoint.slice(4) : cleanEndpoint;
+  return `${base}/${path}`;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -21,7 +41,7 @@ export class ApiError extends Error {
 }
 
 export async function apiClient<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const url = `${API_BASE_URL.replace(/\/$/, '')}/${endpoint.replace(/^\//, '')}`;
+  const url = buildApiUrl(endpoint);
 
   const headers = new Headers(options.headers || {});
   if (!headers.has('Content-Type')) {

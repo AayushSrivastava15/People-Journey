@@ -17,8 +17,7 @@ import {
   isFirebaseWebConfigConfigured,
 } from "../lib/firebase";
 import type { AppUser } from "../types/api";
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+import { buildApiUrl } from "../api/client";
 
 /**
  * Sign in with Google using Firebase Authentication.
@@ -117,7 +116,7 @@ export async function resetPassword(email: string): Promise<void> {
  * Returns authoritative PostgreSQL profile and role.
  */
 export async function syncUserWithBackend(token: string): Promise<AppUser> {
-  const url = `${API_BASE_URL.replace(/\/$/, '')}/auth/session`;
+  const url = buildApiUrl('/auth/session');
   const response = await fetch(url, {
     method: 'GET',
     headers: {

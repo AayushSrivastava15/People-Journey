@@ -1,9 +1,12 @@
 import { describe, it } from 'node:test';
 import { strictEqual, ok } from 'node:assert';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { authenticateToken } from '../../src/middleware/auth.middleware.js';
 import type { Request, Response } from 'express';
 import type { AppUser } from '../../src/models/user.model.js';
 import { AppRole, UpdateUserProfileSchema } from '../../src/models/user.model.js';
+import app from '../../src/app.js';
 
 interface MockResponse extends Partial<Response> {
   statusCode?: number;
@@ -125,5 +128,53 @@ describe('Account Status Enforcement', () => {
     strictEqual((res.jsonData as { error: { code: string } }).error.code, 'ACCOUNT_DEACTIVATED');
   });
 });
+
+describe('Authentication Express Route Registration & Prefix Contract', () => {
+  it('should return 401 (UNAUTHORIZED) on GET /api/auth/session without token, confirming route exists', async () => {
+    const server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/auth/session`);
+      strictEqual(response.status, 401);
+      const data = await response.json() as { success: boolean; authorized: boolean; error: { code: string } };
+      strictEqual(data.success, false);
+      strictEqual(data.authorized, false);
+      strictEqual(data.error.code, 'UNAUTHORIZED');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('should return 404 (NOT FOUND) on GET /auth/session without /api prefix, verifying prefix boundary', async () => {
+    const server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/auth/session`);
+      strictEqual(response.status, 404);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('should register compatibility route GET /api/auth/verify with identical 401 response', async () => {
+    const server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/auth/verify`);
+      strictEqual(response.status, 401);
+      const data = await response.json() as { error: { code: string } };
+      strictEqual(data.error.code, 'UNAUTHORIZED');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
 
 
