@@ -571,12 +571,16 @@ function CreateInterviewDialog({
   };
 
   const surveyUrl = useMemo(() => {
-    let raw = result?.shortUrl || result?.publicUrl || '';
-    if (!raw && result?.shortCode) {
-      raw = `/e/${result.shortCode}`;
+    const code = result?.shortCode;
+    if (code && typeof window !== 'undefined' && window.location.origin) {
+      return `${window.location.origin}/e/${code.trim()}`;
     }
-    if (raw && typeof window !== 'undefined') {
-      raw = raw.replace(/^http:\/\/localhost:5000\b/, window.location.origin);
+    let raw = result?.shortUrl || result?.publicUrl || '';
+    if (raw.includes(',')) {
+      raw = raw.split(',')[0].trim();
+    }
+    if (raw && typeof window !== 'undefined' && window.location.origin) {
+      raw = raw.replace(/^https?:\/\/localhost:\d+/, window.location.origin);
       if (raw.startsWith('/')) {
         raw = `${window.location.origin}${raw}`;
       }
@@ -877,12 +881,16 @@ function InterviewDetailDialog({
   }, [initialTab]);
 
   const surveyUrl = useMemo(() => {
-    let raw = detail?.shortUrl || detail?.publicUrl || '';
-    if (!raw && detail?.shortCode) {
-      raw = `/e/${detail.shortCode}`;
+    const code = detail?.shortCode;
+    if (code && typeof window !== 'undefined' && window.location.origin) {
+      return `${window.location.origin}/e/${code.trim()}`;
     }
-    if (raw && typeof window !== 'undefined') {
-      raw = raw.replace(/^http:\/\/localhost:5000\b/, window.location.origin);
+    let raw = detail?.shortUrl || detail?.publicUrl || '';
+    if (raw.includes(',')) {
+      raw = raw.split(',')[0].trim();
+    }
+    if (raw && typeof window !== 'undefined' && window.location.origin) {
+      raw = raw.replace(/^https?:\/\/localhost:\d+/, window.location.origin);
       if (raw.startsWith('/')) {
         raw = `${window.location.origin}${raw}`;
       }
@@ -934,8 +942,11 @@ function InterviewDetailDialog({
         title: 'New survey link created!',
         description: 'Previous link revoked. New link is ready to share.',
       });
-      if (res?.shortUrl) {
-        await navigator.clipboard.writeText(res.shortUrl);
+      const freshLink = res?.shortCode && typeof window !== 'undefined' && window.location.origin
+        ? `${window.location.origin}/e/${res.shortCode.trim()}`
+        : (res?.shortUrl || '').split(',')[0].trim();
+      if (freshLink) {
+        await navigator.clipboard.writeText(freshLink);
       }
     } catch (e) {
       toast({

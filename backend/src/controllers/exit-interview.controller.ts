@@ -224,16 +224,21 @@ export const resolveShortLink = async (req: Request, res: Response) => {
     const result = await exitInterviewService.resolveShortCode(code);
 
     if (result.status === 'ACTIVE') {
-      return res.json({ success: true, data: result });
+      return res.json({ success: true, data: { ...result, valid: true } });
     }
 
     if (result.status === 'NOT_FOUND') {
-      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Survey link not found.' } });
+      return res.status(404).json({
+        success: false,
+        data: { valid: false, reason: 'NOT_FOUND' },
+        error: { code: 'NOT_FOUND', message: 'Survey link not found.' },
+      });
     }
 
     if (result.status === 'EXPIRED') {
       return res.status(410).json({
         success: false,
+        data: { valid: false, reason: 'EXPIRED' },
         error: { code: 'LINK_EXPIRED', message: 'This exit feedback link has expired. Please contact your HR team.' },
       });
     }
@@ -241,6 +246,7 @@ export const resolveShortLink = async (req: Request, res: Response) => {
     if (result.status === 'CANCELLED') {
       return res.status(410).json({
         success: false,
+        data: { valid: false, reason: 'CANCELLED' },
         error: { code: 'LINK_CANCELLED', message: 'This survey invitation was cancelled or replaced.' },
       });
     }
@@ -248,6 +254,7 @@ export const resolveShortLink = async (req: Request, res: Response) => {
     if (result.status === 'COMPLETED') {
       return res.status(200).json({
         success: true,
+        data: { valid: false, reason: 'COMPLETED' },
         status: 'COMPLETED',
         message: 'Thank you! Your exit feedback has already been received.',
       });

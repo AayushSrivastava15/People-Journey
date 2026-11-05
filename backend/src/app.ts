@@ -59,9 +59,8 @@ app.get('/e/:code', (req, res, next) => {
   if (req.accepts(['html', 'json']) === 'html' || !req.headers.accept?.includes('application/json')) {
     const frontendBase = (
       env.FRONTEND_URL ||
-      env.CORS_ORIGIN ||
       (env.NODE_ENV === 'production' ? 'https://people-journey-frontend.onrender.com' : 'http://localhost:3000')
-    ).replace(/\/$/, '');
+    ).split(',')[0].trim().replace(/\/$/, '');
     return res.redirect(302, `${frontendBase}/e/${code}`);
   }
   return resolveShortLink(req, res);

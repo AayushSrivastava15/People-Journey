@@ -19,7 +19,7 @@ function generateShortCode(length = 7): string {
 }
 
 export function getShortUrl(shortCode: string): string {
-  const frontendBase = (env.FRONTEND_URL || env.CORS_ORIGIN || 'http://localhost:3000').replace(/\/$/, '');
+  const frontendBase = (env.FRONTEND_URL || 'http://localhost:3000').split(',')[0].trim().replace(/\/$/, '');
   return `${frontendBase}/e/${shortCode}`;
 }
 
@@ -743,11 +743,12 @@ export const exitInterviewService = {
           version: number;
           schema: ExitQuestionnaireSchema;
         };
+        valid: true;
       }
-    | { status: 'NOT_FOUND' }
-    | { status: 'CANCELLED' }
-    | { status: 'EXPIRED'; expiresAt: Date }
-    | { status: 'COMPLETED'; completedAt: Date | null }
+    | { status: 'NOT_FOUND'; valid: false; reason: 'NOT_FOUND' }
+    | { status: 'CANCELLED'; valid: false; reason: 'CANCELLED' }
+    | { status: 'EXPIRED'; valid: false; reason: 'EXPIRED'; expiresAt: Date }
+    | { status: 'COMPLETED'; valid: false; reason: 'COMPLETED'; completedAt: Date | null }
   > {
     return withTransaction(async client => {
       const q = await client.query(
@@ -768,17 +769,17 @@ export const exitInterviewService = {
         [shortCode]
       );
 
-      if (!q.rowCount) return { status: 'NOT_FOUND' as const };
+      if (!q.rowCount) return { status: 'NOT_FOUND' as const, valid: false as const, reason: 'NOT_FOUND' as const };
       const row = q.rows[0];
 
       if (row.status === 'REVOKED') {
-        return { status: 'CANCELLED' as const };
+        return { status: 'CANCELLED' as const, valid: false as const, reason: 'CANCELLED' as const };
       }
       if (row.status === 'COMPLETED') {
-        return { status: 'COMPLETED' as const, completedAt: row.completed_at };
+        return { status: 'COMPLETED' as const, valid: false as const, reason: 'COMPLETED' as const, completedAt: row.completed_at };
       }
       if (!row.is_valid) {
-        return { status: 'EXPIRED' as const, expiresAt: row.expires_at };
+        return { status: 'EXPIRED' as const, valid: false as const, reason: 'EXPIRED' as const, expiresAt: row.expires_at };
       }
 
       // Mark as OPENED on link access
@@ -795,6 +796,7 @@ export const exitInterviewService = {
 
       return {
         status: 'ACTIVE' as const,
+        valid: true as const,
         invitationId: row.id,
         shortCode: row.short_code,
         expiresAt: new Date(row.expires_at).toISOString(),

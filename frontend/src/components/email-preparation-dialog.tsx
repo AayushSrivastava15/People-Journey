@@ -164,8 +164,14 @@ export function EmailPreparationDialog({
 
     const customValues: Record<string, string> = { ...(additionalCustomValues || {}) };
     if (responseDueDate) customValues.response_due_date = responseDueDate;
-    const surveyLink = additionalCustomValues?.exit_interview_link || additionalCustomValues?.form_link;
+    let surveyLink = additionalCustomValues?.exit_interview_link || additionalCustomValues?.form_link;
     if (surveyLink) {
+      if (surveyLink.includes(',')) {
+        surveyLink = surveyLink.split(',')[0].trim();
+      }
+      if (typeof window !== 'undefined' && window.location.origin) {
+        surveyLink = surveyLink.replace(/^https?:\/\/localhost:\d+/, window.location.origin);
+      }
       customValues.exit_interview_link = surveyLink;
       customValues.form_link = surveyLink;
     }

@@ -98,7 +98,11 @@ export function ShortLinkRedirectPage() {
         if (!isMounted) return;
 
         if (json.success && json.data) {
-          setData(json.data);
+          const isSurveyValid = json.data.valid === true || json.data.status === 'ACTIVE';
+          setData({
+            ...json.data,
+            valid: isSurveyValid,
+          });
           // Restore draft if available
           try {
             const savedDraft = localStorage.getItem(storageKey);
@@ -279,10 +283,11 @@ export function ShortLinkRedirectPage() {
   // ---------------------------------------------------------------------------
   // ERROR & TERMINAL STATUS SCREENS
   // ---------------------------------------------------------------------------
-  if (!data?.valid) {
-    const isCompleted = data?.reason === 'ALREADY_SUBMITTED' || data?.reason === 'COMPLETED';
-    const isExpired = data?.reason === 'EXPIRED';
-    const isCancelled = data?.reason === 'CANCELLED' || data?.reason === 'REVOKED';
+  const isSurveyActive = Boolean(data && (data.valid === true || (data as any).status === 'ACTIVE'));
+  if (!data || !isSurveyActive) {
+    const isCompleted = data?.reason === 'ALREADY_SUBMITTED' || data?.reason === 'COMPLETED' || (data as any)?.status === 'COMPLETED';
+    const isExpired = data?.reason === 'EXPIRED' || (data as any)?.status === 'EXPIRED' || data?.reason === 'LINK_EXPIRED';
+    const isCancelled = data?.reason === 'CANCELLED' || data?.reason === 'REVOKED' || (data as any)?.status === 'CANCELLED' || (data as any)?.status === 'REVOKED' || data?.reason === 'LINK_CANCELLED';
 
     return (
       <div className="min-h-screen bg-[#faf7f5] flex items-center justify-center p-4">
