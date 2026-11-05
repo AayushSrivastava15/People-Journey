@@ -6,6 +6,8 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
 import { ProtectedRoute } from '@/components/layout/protected-route';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
+import { LandingPage } from '@/pages/landing-page';
+import { LoginPage } from '@/pages/login-page';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -16,16 +18,6 @@ const queryClient = new QueryClient({
       retry: 1,
     },
   },
-});
-
-const LandingPage = lazy(async () => {
-  const module = await import('@/pages/landing-page');
-  return { default: module.LandingPage };
-});
-
-const LoginPage = lazy(async () => {
-  const module = await import('@/pages/login-page');
-  return { default: module.LoginPage };
 });
 
 const DashboardPage = lazy(async () => {
@@ -66,8 +58,8 @@ function Router() {
   return (
     <RoutedErrorBoundary>
       <Switch>
-        <Route path="/" component={() => <Suspense fallback={<RouteFallback />}><LandingPage /></Suspense>} />
-        <Route path="/login" component={() => <Suspense fallback={<RouteFallback />}><LoginPage /></Suspense>} />
+        <Route path="/" component={LandingPage} />
+        <Route path="/login" component={LoginPage} />
         <Route path="/dashboard" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/settings" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/employees" component={ProtectedWorkspaceRoute} />

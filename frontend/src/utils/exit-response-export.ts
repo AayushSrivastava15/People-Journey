@@ -237,3 +237,4 @@ export function exportResponseToPdf(detail: ExitResponseDetail) {
   const filename = `Exit_Interview_${cleanName}_${detail.employee.code}.pdf`;
   doc.save(filename);
 }
+
