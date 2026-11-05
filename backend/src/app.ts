@@ -49,9 +49,9 @@ app.use(
 
 app.use(cookieParser());
 
-// 4. Request Payload Size Limits (prevents memory exhaustion attacks)
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+// 4. Request Payload Size Limits (supports high-res company logo uploads)
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Short URL direct resolver for departing employees (redirects browser hits to frontend hosted form)
 app.get('/e/:code', (req, res, next) => {

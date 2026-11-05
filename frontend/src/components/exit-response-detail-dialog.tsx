@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -12,6 +13,7 @@ import {
   Clock,
   Download,
   FileCheck,
+  FileSpreadsheet,
   FileText,
   Loader2,
   Mail,
@@ -21,6 +23,7 @@ import {
   X,
 } from 'lucide-react';
 import type { ExitResponseDetail, ExitResponseQuestionDetail } from '@/types/api';
+import { exportResponseToPdf, exportResponseToExcel } from '@/utils/exit-response-export';
 
 interface ResponseDetailDialogProps {
   id: string | null;
@@ -47,8 +50,34 @@ const ratingLabel = (score: number) => {
 
 export function ResponseDetailDialog({ id, open, onOpenChange }: ResponseDetailDialogProps) {
   const { data: detail, isLoading, isError } = useExitResponseDetail(id || undefined);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
 
   if (!open) return null;
+
+  const handleDownloadPdf = async () => {
+    if (!detail) return;
+    try {
+      setIsExportingPdf(true);
+      exportResponseToPdf(detail);
+    } catch (err) {
+      console.error('Failed to export PDF', err);
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
+  const handleExportExcel = async () => {
+    if (!detail) return;
+    try {
+      setIsExportingExcel(true);
+      exportResponseToExcel(detail);
+    } catch (err) {
+      console.error('Failed to export Excel', err);
+    } finally {
+      setIsExportingExcel(false);
+    }
+  };
 
   const handlePrint = () => {
     window.print();
@@ -83,15 +112,36 @@ export function ResponseDetailDialog({ id, open, onOpenChange }: ResponseDetailD
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleDownloadPdf}
+              disabled={!detail || isExportingPdf}
+              className="primary-action text-xs px-3 py-1.5 flex items-center gap-1.5"
+              title="Download Full Multi-Page PDF Report"
+            >
+              {isExportingPdf ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+              <span>Download PDF</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleExportExcel}
+              disabled={!detail || isExportingExcel}
+              className="secondary-action text-xs px-3 py-1.5 flex items-center gap-1.5"
+              title="Download Clean Formatted Excel (.xlsx)"
+            >
+              {isExportingExcel ? <Loader2 size={13} className="animate-spin" /> : <FileSpreadsheet size={13} />}
+              <span>Export Excel (.xlsx)</span>
+            </button>
             <button
               type="button"
               onClick={handlePrint}
               disabled={!detail}
-              className="secondary-action text-xs px-3 py-1.5 flex items-center gap-1.5"
-              title="Print or Save as PDF"
+              className="secondary-action text-xs px-2.5 py-1.5 flex items-center gap-1.5"
+              title="Print via Browser"
             >
-              <Printer size={14} /> Print / Save PDF
+              <Printer size={13} />
+              <span className="hidden sm:inline">Print</span>
             </button>
             <button
               type="button"

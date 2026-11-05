@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { executeSql, withTransaction } from '../config/database.js';
 import { env } from '../config/env.js';
 import { MASTER_EXIT_QUESTIONNAIRE, type ExitQuestionnaireSchema } from '../config/master-exit-questionnaire.js';
@@ -874,7 +874,7 @@ export const exitInterviewService = {
       );
 
       // Save complete answers_json and granular rows
-      const submissionId = randomBytes(16).toString('hex');
+      const submissionId = randomUUID();
 
       await client.query(
         `INSERT INTO hr_exit_interview_responses (
@@ -885,10 +885,15 @@ export const exitInterviewService = {
           answers_json,
           submission_metadata,
           submitted_at
-        ) VALUES ($1, $2, 'all', $3::jsonb, $3::jsonb, $4::jsonb, CURRENT_TIMESTAMP)`,
+        ) VALUES ($1, $2, 'all', $3::jsonb, $3::jsonb, $4::jsonb, CURRENT_TIMESTAMP)
+        ON CONFLICT (submission_id, question_id) DO UPDATE
+        SET answer = EXCLUDED.answer,
+            answers_json = EXCLUDED.answers_json,
+            submission_metadata = EXCLUDED.submission_metadata,
+            submitted_at = CURRENT_TIMESTAMP`,
         [
           row.id,
-          '00000000-0000-0000-0000-000000000000',
+          submissionId,
           JSON.stringify(answers),
           JSON.stringify(metadata || {}),
         ]
@@ -903,10 +908,12 @@ export const exitInterviewService = {
             answer,
             submitted_at
           ) VALUES ($1, $2, $3, $4::jsonb, CURRENT_TIMESTAMP)
-          ON CONFLICT (submission_id, question_id) DO NOTHING`,
+          ON CONFLICT (submission_id, question_id) DO UPDATE
+          SET answer = EXCLUDED.answer,
+              submitted_at = CURRENT_TIMESTAMP`,
           [
             row.id,
-            '00000000-0000-0000-0000-000000000001',
+            submissionId,
             qId,
             JSON.stringify(val),
           ]

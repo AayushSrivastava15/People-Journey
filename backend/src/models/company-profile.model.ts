@@ -44,7 +44,7 @@ export interface CompanyOnboardingStatus {
 export const upsertCompanyProfileSchema = z.object({
   companyName: z.string().trim().min(1, 'Company name is required').max(255),
   displayName: z.string().trim().max(255).optional().nullable(),
-  logoUrl: z.string().trim().max(1000).optional().nullable(),
+  logoUrl: z.string().trim().max(5_000_000).optional().nullable(),
   brandPrimaryColor: z
     .string()
     .trim()

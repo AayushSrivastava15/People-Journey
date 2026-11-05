@@ -16,6 +16,10 @@ import {
   ShieldCheck,
   ExternalLink,
   Edit3,
+  Upload,
+  Image as ImageIcon,
+  Trash2,
+  Link2,
 } from 'lucide-react';
 import { useCompanyProfile, useUpdateCompanyProfile, useCompanyOnboardingStatus } from '@/api/queries';
 import { useToast } from '@/hooks/use-toast';
@@ -76,6 +80,104 @@ export function CompanyProfileCard({
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [showUrlInput, setShowUrlInput] = useState(false);
+  const [isProcessingImage, setIsProcessingImage] = useState(false);
+
+  const processAndSetImage = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      toast({
+        variant: 'destructive',
+        title: 'Invalid File',
+        description: 'Please upload an image file (PNG, JPG, SVG, WebP).',
+      });
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      toast({
+        variant: 'destructive',
+        title: 'File Too Large',
+        description: 'Please select an image smaller than 5MB.',
+      });
+      return;
+    }
+
+    setIsProcessingImage(true);
+
+    const reader = new FileReader();
+    reader.onload = e => {
+      const dataUri = e.target?.result as string;
+      if (!dataUri) {
+        setIsProcessingImage(false);
+        return;
+      }
+
+      // If SVG, save directly
+      if (file.type.includes('svg')) {
+        setFormData(prev => ({ ...prev, logoUrl: dataUri }));
+        setIsProcessingImage(false);
+        toast({ title: 'Company logo uploaded' });
+        return;
+      }
+
+      // Resize and optimize raster images using canvas
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 512;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const optimizedDataUri = canvas.toDataURL('image/png', 0.9);
+          setFormData(prev => ({ ...prev, logoUrl: optimizedDataUri }));
+          toast({ title: 'Company logo uploaded & optimized' });
+        } else {
+          setFormData(prev => ({ ...prev, logoUrl: dataUri }));
+        }
+        setIsProcessingImage(false);
+      };
+      img.onerror = () => {
+        setIsProcessingImage(false);
+        toast({ variant: 'destructive', title: 'Could not load image' });
+      };
+      img.src = dataUri;
+    };
+    reader.onerror = () => {
+      setIsProcessingImage(false);
+      toast({ variant: 'destructive', title: 'Could not read image file' });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processAndSetImage(file);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      processAndSetImage(file);
+    }
+  };
 
   useEffect(() => {
     if (profile) {
@@ -449,32 +551,113 @@ export function CompanyProfileCard({
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-[#3d2f38] mb-1.5">Company Logo URL</label>
-              <div className="flex items-start gap-4">
-                <input
-                  type="url"
-                  value={formData.logoUrl}
-                  onChange={e => setFormData({ ...formData, logoUrl: e.target.value })}
-                  placeholder="https://example.com/logo.png"
-                  className="flex-1 px-4 py-2.5 rounded-xl border border-[#e5d4d9] text-xs text-[#3d2f38] focus:outline-none focus:border-[#bd7b92]"
-                />
-                {formData.logoUrl && (
-                  <div className="w-12 h-12 rounded-xl border border-[#ebdce1] p-1 bg-white flex items-center justify-center shrink-0 overflow-hidden">
-                    <img
-                      src={formData.logoUrl}
-                      alt="Logo preview"
-                      className="max-h-full max-w-full object-contain"
-                      onError={e => {
-                        (e.target as HTMLImageElement).style.display = 'none';
-                      }}
-                    />
-                  </div>
-                )}
+            {/* Company Logo Picture Upload & Preview */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-bold text-[#3d2f38]">Company Logo</label>
+                <button
+                  type="button"
+                  onClick={() => setShowUrlInput(!showUrlInput)}
+                  className="text-[11px] text-[#8c5369] hover:underline inline-flex items-center gap-1 font-medium"
+                >
+                  <Link2 size={12} />
+                  {showUrlInput ? 'Hide URL input' : 'Enter logo URL instead'}
+                </button>
               </div>
-              <p className="text-[11px] text-[#72616c] mt-1">
-                Direct image link (PNG, SVG, or JPG). Displayed prominently atop the employee feedback form.
-              </p>
+
+              {formData.logoUrl ? (
+                /* Active Logo Preview Card with Change / Remove actions */
+                <div className="p-4 rounded-2xl border border-[#e5d4d9] bg-white flex flex-wrap items-center justify-between gap-4 shadow-2xs">
+                  <div className="flex items-center gap-4">
+                    <div className="w-16 h-16 rounded-xl border border-[#ebdce1] p-1.5 bg-[#faf7f5] flex items-center justify-center shrink-0 overflow-hidden">
+                      <img
+                        src={formData.logoUrl}
+                        alt="Company Logo Preview"
+                        className="max-h-full max-w-full object-contain"
+                        onError={e => {
+                          (e.target as HTMLImageElement).style.opacity = '0.3';
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <b className="text-xs text-[#3d2f38] block">Active Company Logo</b>
+                      <span className="text-[11px] text-[#72616c] block">
+                        Will appear on employee exit forms, portal header, and exported PDF reports.
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <label className="secondary-action text-xs px-3 py-1.5 cursor-pointer inline-flex items-center gap-1.5">
+                      <Upload size={13} />
+                      <span>{isProcessingImage ? 'Processing…' : 'Change Picture'}</span>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                        className="hidden"
+                        onChange={handleFileChange}
+                        disabled={isProcessingImage}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setFormData(prev => ({ ...prev, logoUrl: '' }))}
+                      className="p-1.5 text-stone-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
+                      title="Remove logo"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Drag & Drop Upload Box */
+                <div
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={handleDrop}
+                  className="p-6 rounded-2xl border-2 border-dashed border-[#e5d4d9] bg-[#fffdfb] hover:bg-[#fff7f9] hover:border-[#bd7b92] transition-colors text-center space-y-3"
+                >
+                  <div className="w-12 h-12 rounded-xl bg-[#fdf2f4] text-[#8c5369] mx-auto flex items-center justify-center">
+                    <ImageIcon size={24} />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-[#3d2f38]">
+                      Upload your company logo
+                    </p>
+                    <p className="text-[11px] text-[#72616c] mt-0.5">
+                      Drag and drop image here, or choose from your computer (PNG, JPG, SVG, WebP up to 5MB)
+                    </p>
+                  </div>
+                  <div>
+                    <label className="primary-action text-xs px-4 py-2 cursor-pointer inline-flex items-center gap-2">
+                      <Upload size={14} />
+                      <span>{isProcessingImage ? 'Optimizing image…' : 'Select Picture from Computer'}</span>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                        className="hidden"
+                        onChange={handleFileChange}
+                        disabled={isProcessingImage}
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              {/* Collapsible Direct URL Input */}
+              {showUrlInput && (
+                <div className="pt-2">
+                  <input
+                    type="url"
+                    value={formData.logoUrl}
+                    onChange={e => setFormData({ ...formData, logoUrl: e.target.value })}
+                    placeholder="https://example.com/logo.png"
+                    className="w-full px-4 py-2.5 rounded-xl border border-[#e5d4d9] text-xs text-[#3d2f38] focus:outline-none focus:border-[#bd7b92]"
+                  />
+                  <p className="text-[11px] text-[#72616c] mt-1">
+                    Direct image link. If pasted, it will be loaded directly from the web.
+                  </p>
+                </div>
+              )}
             </div>
 
             <div>
