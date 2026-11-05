@@ -23,6 +23,27 @@ export async function getCompanyProfile(req: Request, res: Response): Promise<vo
   }
 }
 
+export async function getOnboardingStatus(req: Request, res: Response): Promise<void> {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      res.status(401).json({ success: false, error: 'Unauthorized' });
+      return;
+    }
+
+    const status = await companyProfileService.getOnboardingStatus(userId);
+    res.json({
+      success: true,
+      data: status,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: (err as Error).message },
+    });
+  }
+}
+
 export async function updateCompanyProfile(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user?.id;

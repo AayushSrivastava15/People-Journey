@@ -3,8 +3,11 @@ import {
   Check,
   ClipboardCheck,
   Copy,
+  Download,
   ExternalLink,
+  FileSpreadsheet,
   FileText,
+  Layers,
   Link2,
   Loader2,
   Mail,
@@ -38,9 +41,12 @@ import type {
   ExitInterviewLinkResult,
   ExitInterviewRecord,
 } from '@/types/api';
-import { ApiError } from '@/api/client';
+import { ApiError, buildApiUrl } from '@/api/client';
+import { auth } from '@/lib/firebase';
 import { useToast } from '@/hooks/use-toast';
 import { EmailPreparationDialog } from '@/components/email-preparation-dialog';
+import { TemplateEditorDialog } from '@/components/template-editor-dialog';
+import { ResponseDetailDialog } from '@/components/exit-response-detail-dialog';
 import {
   Dialog,
   DialogContent,
@@ -92,7 +98,21 @@ const inviteLabel = (status: string) =>
     SENT_UNCONFIRMED: 'Manually sent',
   }[status] || status);
 
-function Heading({ responses, onCreate }: { responses: boolean; onCreate?: () => void }) {
+function Heading({
+  responses,
+  onCreate,
+  onCustomizeTemplate,
+  onExportExcel,
+  onExportCsv,
+  isExporting,
+}: {
+  responses: boolean;
+  onCreate?: () => void;
+  onCustomizeTemplate?: () => void;
+  onExportExcel?: () => void;
+  onExportCsv?: () => void;
+  isExporting?: boolean;
+}) {
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
       <div>
@@ -102,26 +122,65 @@ function Heading({ responses, onCreate }: { responses: boolean; onCreate?: () =>
         </h1>
         <p className="mt-1 text-sm text-stone-500">
           {responses
-            ? 'Review real submitted employee feedback collected via the Infravision Google Form.'
+            ? 'Review submitted employee feedback collected via our hosted People Journey questionnaire.'
             : 'Generate employee-specific survey links and track feedback collection through completion.'}
         </p>
       </div>
-      {onCreate && (
-        <button type="button" className="primary-action" onClick={onCreate}>
-          <Plus size={16} /> Create Exit Interview
-        </button>
-      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {responses ? (
+          <>
+            <button
+              type="button"
+              className="secondary-action text-xs"
+              disabled={isExporting}
+              onClick={onExportExcel}
+            >
+              {isExporting ? <Loader2 size={14} className="animate-spin mr-1" /> : <FileSpreadsheet size={14} className="mr-1" />}
+              Export Excel (.xlsx)
+            </button>
+            <button
+              type="button"
+              className="secondary-action text-xs"
+              disabled={isExporting}
+              onClick={onExportCsv}
+            >
+              {isExporting ? <Loader2 size={14} className="animate-spin mr-1" /> : <Download size={14} className="mr-1" />}
+              Export CSV
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="secondary-action text-xs"
+              onClick={onCustomizeTemplate}
+            >
+              <Layers size={14} className="mr-1" /> Customize Feedback Form
+            </button>
+            {onCreate && (
+              <button type="button" className="primary-action text-xs" onClick={onCreate}>
+                <Plus size={16} className="mr-1" /> Create Exit Interview
+              </button>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
 
 export function ExitManagementView({ mode }: { mode: 'records' | 'responses' }) {
+  const { toast } = useToast();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [departmentId, setDepartmentId] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
+  const [templateEditorMode, setTemplateEditorMode] = useState<'editor' | 'preview'>('editor');
+  const [isExporting, setIsExporting] = useState(false);
 
   const { data: departments = [] } = useDepartments();
   const { data, isLoading, isError } = useExitInterviews({
@@ -130,6 +189,42 @@ export function ExitManagementView({ mode }: { mode: 'records' | 'responses' }) 
     status: status || undefined,
     departmentId: departmentId ? Number(departmentId) : undefined,
   });
+
+  const handleExport = async (format: 'excel' | 'csv') => {
+    try {
+      setIsExporting(true);
+      const url = buildApiUrl(`/exit-interviews/export/${format}`);
+      const headers = new Headers();
+      if (auth.currentUser) {
+        const token = await auth.currentUser.getIdToken();
+        if (token) headers.set('Authorization', `Bearer ${token}`);
+      }
+      const res = await fetch(url, { headers });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      const ext = format === 'excel' ? 'xlsx' : 'csv';
+      a.download = `Exit_Interview_Responses_${new Date().toISOString().slice(0, 10)}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(blobUrl);
+      toast({
+        title: `${format === 'excel' ? 'Excel' : 'CSV'} export complete!`,
+        description: 'File downloaded successfully.',
+      });
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: 'Export failed',
+        description: err instanceof Error ? err.message : 'Could not generate export file.',
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const rows = useMemo(
     () =>
@@ -159,6 +254,13 @@ export function ExitManagementView({ mode }: { mode: 'records' | 'responses' }) 
       <Heading
         responses={mode === 'responses'}
         onCreate={mode === 'records' ? () => setCreateOpen(true) : undefined}
+        onCustomizeTemplate={() => {
+          setTemplateEditorMode('editor');
+          setTemplateEditorOpen(true);
+        }}
+        onExportExcel={() => handleExport('excel')}
+        onExportCsv={() => handleExport('csv')}
+        isExporting={isExporting}
       />
 
       {mode === 'records' && (
@@ -347,11 +449,24 @@ export function ExitManagementView({ mode }: { mode: 'records' | 'responses' }) 
       </section>
 
       <CreateInterviewDialog open={createOpen} onOpenChange={setCreateOpen} />
-      <InterviewDetailDialog
-        id={selectedId}
-        open={!!selectedId}
-        onOpenChange={open => !open && setSelectedId(null)}
-        initialTab={mode === 'responses' ? 'responses' : 'details'}
+      {mode === 'responses' ? (
+        <ResponseDetailDialog
+          id={selectedId}
+          open={!!selectedId}
+          onOpenChange={open => !open && setSelectedId(null)}
+        />
+      ) : (
+        <InterviewDetailDialog
+          id={selectedId}
+          open={!!selectedId}
+          onOpenChange={open => !open && setSelectedId(null)}
+          initialTab="details"
+        />
+      )}
+      <TemplateEditorDialog
+        open={templateEditorOpen}
+        onOpenChange={setTemplateEditorOpen}
+        initialMode={templateEditorMode}
       />
     </>
   );
@@ -367,15 +482,15 @@ function CreateInterviewDialog({
   const { toast } = useToast();
   const { data: employeeResponse, isLoading: employeesLoading, isError: employeesError } =
     useEmployees({ limit: 100 });
+  const { data: exitInterviewsList } = useExitInterviews({ limit: 100 });
   const {
     data: templates = [],
     isLoading: templatesLoading,
     isError: templatesError,
-    error: templatesQueryError,
-    refetch: refetchTemplates,
   } = useExitInterviewTemplates();
 
   const create = useCreateExitInterview();
+  const regenerate = useRegenerateExitInterview();
   const [employeeId, setEmployeeId] = useState('');
   const [templateId, setTemplateId] = useState('');
   const [responseDueDate, setResponseDueDate] = useState('');
@@ -390,19 +505,43 @@ function CreateInterviewDialog({
   const selectedEmployee = employees.find(e => String(e.employeeId) === employeeId);
   const selectedTemplate = templates.find(t => t.id === templateId);
 
+  const activeExistingInterview = useMemo(() => {
+    if (!employeeId || !exitInterviewsList?.data) return null;
+    return exitInterviewsList.data.find(
+      i =>
+        i.employeeId === Number(employeeId) &&
+        (i.status === 'PENDING' || i.status === 'OPENED') &&
+        (!i.expiresAt || new Date(i.expiresAt) > new Date())
+    );
+  }, [employeeId, exitInterviewsList]);
+
   useEffect(() => {
     if (!templateId && templates.length > 0) {
       setTemplateId(templates.find(t => t.isDefault)?.id || templates[0].id);
     }
   }, [templateId, templates]);
 
+  const isPendingAction = create.isPending || regenerate.isPending;
   const canCreate = Boolean(
-    employeeId && templateId && !create.isPending && !templatesLoading && !employeesLoading
+    employeeId && templateId && !isPendingAction && !templatesLoading && !employeesLoading
   );
 
   const submit = async () => {
     if (!canCreate || !selectedTemplate) return;
     try {
+      if (activeExistingInterview) {
+        const r = await regenerate.mutateAsync({
+          id: activeExistingInterview.id,
+          expiryDays,
+        });
+        setResult(r);
+        toast({
+          title: 'Survey link regenerated!',
+          description: 'Previous survey link was revoked. Your new survey link is ready to share.',
+        });
+        return;
+      }
+
       const r = await create.mutateAsync({
         employeeId: Number(employeeId),
         templateId: selectedTemplate.id,
@@ -410,19 +549,40 @@ function CreateInterviewDialog({
         responseDueDate: responseDueDate || null,
       });
       setResult(r);
+      toast({
+        title: 'Survey link generated!',
+        description: 'New employee feedback survey link is ready to share.',
+      });
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Please try again.';
+      const isConflict =
+        message.toLowerCase().includes('active exit interview') ||
+        message.toLowerCase().includes('active interview') ||
+        message.toLowerCase().includes('conflict') ||
+        message.includes('ACTIVE_INTERVIEW');
       toast({
         variant: 'destructive',
-        title: 'Could not create survey invitation',
-        description: message.includes('ACTIVE_INTERVIEW')
-          ? 'An active exit interview invitation already exists for this employee.'
-          : 'The survey link could not be generated. Please try again.',
+        title: isConflict ? 'Active survey link exists' : 'Could not create survey invitation',
+        description: isConflict
+          ? 'An active exit interview invitation already exists for this employee. Click "Revoke & Regenerate Fresh Link" to replace it with a new link.'
+          : message || 'The survey link could not be generated. Please try again.',
       });
     }
   };
 
-  const surveyUrl = result?.shortUrl || result?.publicUrl || '';
+  const surveyUrl = useMemo(() => {
+    let raw = result?.shortUrl || result?.publicUrl || '';
+    if (!raw && result?.shortCode) {
+      raw = `/e/${result.shortCode}`;
+    }
+    if (raw && typeof window !== 'undefined') {
+      raw = raw.replace(/^http:\/\/localhost:5000\b/, window.location.origin);
+      if (raw.startsWith('/')) {
+        raw = `${window.location.origin}${raw}`;
+      }
+    }
+    return raw;
+  }, [result]);
 
   const copy = async () => {
     if (surveyUrl) {
@@ -452,7 +612,7 @@ function CreateInterviewDialog({
               </DialogTitle>
               <DialogDescription>
                 {result
-                  ? 'Share this personalized short survey link with the departing employee. It redirects to the Infravision Google Form with their prefilled details.'
+                  ? 'Share this personalized short survey link with the departing employee. It opens their native confidential exit questionnaire.'
                   : 'Select an eligible departing employee, a response deadline, and survey link validity.'}
               </DialogDescription>
             </DialogHeader>
@@ -487,13 +647,13 @@ function CreateInterviewDialog({
                       type="button"
                       className="secondary-action whitespace-nowrap"
                       onClick={() => window.open(surveyUrl, '_blank')}
-                      title="Open Google Form in new tab"
+                      title="Open Feedback Survey in new tab"
                     >
                       <ExternalLink size={14} /> Open
                     </button>
                   </div>
                   <p className="mt-2 text-[11px] text-stone-500">
-                    This link redirects to the Infravision Google Form with the employee's ID and reference prefilled.
+                    This link opens their confidential feedback questionnaire, securely recorded in People Journey.
                   </p>
                 </div>
 
@@ -534,17 +694,68 @@ function CreateInterviewDialog({
                       className="w-full rounded-lg border border-stone-200 bg-[#fffdfb] p-2.5 text-xs font-medium text-stone-700 outline-none focus:border-[#b67c90]"
                     >
                       <option value="">Select an offboarding or exited employee</option>
-                      {employees.map(emp => (
-                        <option key={emp.employeeId} value={emp.employeeId}>
-                          {emp.name} · {emp.employeeCode} · {emp.departmentName || 'General'}
-                        </option>
-                      ))}
+                      {employees.map(emp => {
+                        const hasActive = exitInterviewsList?.data?.some(
+                          i =>
+                            i.employeeId === emp.employeeId &&
+                            (i.status === 'PENDING' || i.status === 'OPENED') &&
+                            (!i.expiresAt || new Date(i.expiresAt) > new Date())
+                        );
+                        return (
+                          <option key={emp.employeeId} value={emp.employeeId}>
+                            {emp.name} · {emp.employeeCode} · {emp.departmentName || 'General'}
+                            {hasActive ? ' (Active Survey in Progress)' : ''}
+                          </option>
+                        );
+                      })}
                     </select>
                   )}
                   {selectedEmployee && (
                     <div className="mt-3 rounded-lg bg-stone-50 p-2.5 text-xs text-stone-600 flex justify-between">
                       <span>Last Working Day: <b>{date(selectedEmployee.exitDate)}</b></span>
                       <span>Email: <b>{selectedEmployee.workEmail || 'None'}</b></span>
+                    </div>
+                  )}
+
+                  {/* Active interview notice & quick actions */}
+                  {activeExistingInterview && (
+                    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/80 p-3.5 text-xs text-amber-900 space-y-2">
+                      <div className="flex items-center gap-1.5 font-bold text-amber-950">
+                        <AlertTriangle size={15} className="text-amber-600 shrink-0" />
+                        <span>Active Survey Link Already Exists</span>
+                      </div>
+                      <p className="text-[11px] text-amber-800 leading-relaxed">
+                        An active survey link (<b>{activeExistingInterview.shortCode ? `/e/${activeExistingInterview.shortCode}` : 'active'}</b>) was already created for this employee and is valid until <b>{date(activeExistingInterview.expiresAt)}</b>.
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                        <button
+                          type="button"
+                          className="secondary-action text-xs px-2.5 py-1 bg-white hover:bg-stone-50"
+                          onClick={() => {
+                            const shortUrl = activeExistingInterview.shortCode
+                              ? `${window.location.origin}/e/${activeExistingInterview.shortCode}`
+                              : '';
+                            if (shortUrl) {
+                              navigator.clipboard.writeText(shortUrl);
+                              toast({ title: 'Active survey link copied to clipboard!' });
+                            }
+                          }}
+                        >
+                          <Copy size={12} className="mr-1" /> Copy Active Link
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-action text-xs px-2.5 py-1 bg-white hover:bg-stone-50"
+                          onClick={() => {
+                            const shortUrl = activeExistingInterview.shortCode
+                              ? `${window.location.origin}/e/${activeExistingInterview.shortCode}`
+                              : '';
+                            if (shortUrl) window.open(shortUrl, '_blank');
+                          }}
+                        >
+                          <ExternalLink size={12} className="mr-1" /> Open Form
+                        </button>
+                      </div>
                     </div>
                   )}
                 </section>
@@ -586,22 +797,26 @@ function CreateInterviewDialog({
                 </section>
 
                 <DialogFooter className="mt-6 flex justify-end gap-2">
-                  <button type="button" className="text-action" onClick={close}>
+                  <button type="button" className="text-action text-xs" onClick={close}>
                     Cancel
                   </button>
                   <button
                     type="button"
-                    className="primary-action"
+                    className="primary-action text-xs"
                     onClick={submit}
                     disabled={!canCreate}
                   >
-                    {create.isPending ? (
+                    {isPendingAction ? (
                       <>
-                        <Loader2 className="animate-spin" size={15} /> Generating Link…
+                        <Loader2 className="animate-spin mr-1" size={14} /> Generating Link…
+                      </>
+                    ) : activeExistingInterview ? (
+                      <>
+                        <RefreshCw size={14} className="mr-1" /> Revoke & Regenerate Fresh Link
                       </>
                     ) : (
                       <>
-                        <Link2 size={15} /> Generate Survey Link
+                        <Link2 size={14} className="mr-1" /> Generate Survey Link
                       </>
                     )}
                   </button>
@@ -654,14 +869,26 @@ function InterviewDetailDialog({
 
   const [tab, setTab] = useState<'details' | 'responses' | 'evaluation'>(initialTab);
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState<ExitInterviewEvaluation>({});
+  const [form, setForm] = useState<Partial<ExitInterviewEvaluation>>({});
   const [emailOpen, setEmailOpen] = useState(false);
 
   useEffect(() => {
     setTab(initialTab);
   }, [initialTab]);
 
-  const surveyUrl = detail?.shortUrl || detail?.publicUrl || '';
+  const surveyUrl = useMemo(() => {
+    let raw = detail?.shortUrl || detail?.publicUrl || '';
+    if (!raw && detail?.shortCode) {
+      raw = `/e/${detail.shortCode}`;
+    }
+    if (raw && typeof window !== 'undefined') {
+      raw = raw.replace(/^http:\/\/localhost:5000\b/, window.location.origin);
+      if (raw.startsWith('/')) {
+        raw = `${window.location.origin}${raw}`;
+      }
+    }
+    return raw;
+  }, [detail]);
 
   const copy = async (value: string) => {
     await navigator.clipboard.writeText(value);

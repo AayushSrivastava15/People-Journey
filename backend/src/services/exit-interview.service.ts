@@ -1,17 +1,36 @@
-import { createHash, randomBytes, timingSafeEqual, randomUUID } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { executeSql, withTransaction } from '../config/database.js';
 import { env } from '../config/env.js';
+import { MASTER_EXIT_QUESTIONNAIRE, type ExitQuestionnaireSchema } from '../config/master-exit-questionnaire.js';
+import type { ExportResponseItem } from '../utils/exit-interview-export.js';
+import { logger } from '../utils/logger.js';
 
-const hashToken = (token: string) => createHash('sha256').update(token, 'utf8').digest('hex');
+const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
+
+const BASE62_CHARS = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+function generateShortCode(length = 7): string {
+  const bytes = randomBytes(length);
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    result += BASE62_CHARS[bytes[i] % 62];
+  }
+  return result;
+}
+
+export function getShortUrl(shortCode: string): string {
+  const frontendBase = (env.FRONTEND_URL || env.CORS_ORIGIN || 'http://localhost:3000').replace(/\/$/, '');
+  return `${frontendBase}/e/${shortCode}`;
+}
 
 export interface ExitInterviewRow {
   id: string;
   employeeId: number;
   status: string;
-  expiresAt: string;
+  expiresAt: Date | string;
   invitationStatus: string;
-  completedAt: string | null;
-  createdAt: string;
+  completedAt: Date | string | null;
+  createdAt: Date | string;
   shortCode: string | null;
   responseDueDate: string | null;
   firstName: string;
@@ -20,173 +39,425 @@ export interface ExitInterviewRow {
   departmentName: string | null;
   designationName: string | null;
   templateName: string;
+  templateVersion?: number;
 }
 
 export interface ExitInterviewDetailRow extends ExitInterviewRow {
-  offboardingId: number | null;
+  offboardingId?: number | null;
   template: any;
-  reopenedAt: string | null;
-  workEmail: string | null;
-  googleFormResponseId: string | null;
-  rawResponsePayload: any;
-}
-
-/**
- * Generates a cryptographically random, collision-resistant 7-character short code.
- */
-export function generateShortCode(): string {
-  const chars = '23456789abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ';
-  const bytes = randomBytes(8);
-  let str = '';
-  for (let i = 0; i < 7; i++) {
-    str += chars[bytes[i] % chars.length];
-  }
-  return str;
-}
-
-/**
- * Builds the canonical employee-facing short URL.
- */
-export function getShortUrl(shortCode: string): string {
-  const base = env.APP_BASE_URL || env.PUBLIC_APP_URL || 'http://localhost:5000';
-  return `${base.replace(/\/$/, '')}/e/${shortCode}`;
-}
-
-/**
- * Builds the prefilled Google Forms URL with real entry IDs discovered on the Infravision form.
- */
-export function buildPrefilledGoogleFormsUrl(data: {
-  shortCode: string;
-  employeeName?: string;
-  employeeCode?: string;
-  designation?: string;
-  department?: string;
-  exitDate?: string | Date | null;
-  hireDate?: string | Date | null;
-}): string {
-  const baseUrl = env.GOOGLE_FORMS_URL;
-  const url = new URL(baseUrl);
-  url.searchParams.set('usp', 'pp_url');
-
-  // Real entry IDs on the Infravision Google Form
-  if (data.employeeName) {
-    url.searchParams.set('entry.146083293', data.employeeName);
-  }
-  if (data.employeeCode) {
-    url.searchParams.set('entry.1437116560', `${data.employeeCode} [Ref: ${data.shortCode}]`);
-  } else {
-    url.searchParams.set('entry.1437116560', `[Ref: ${data.shortCode}]`);
-  }
-  if (data.designation) {
-    url.searchParams.set('entry.2056942741', data.designation);
-  }
-  if (data.department) {
-    url.searchParams.set('entry.2060277361', data.department);
-  }
-  if (data.exitDate) {
-    const dStr = typeof data.exitDate === 'string'
-      ? data.exitDate.slice(0, 10)
-      : new Date(data.exitDate).toISOString().slice(0, 10);
-    url.searchParams.set('entry.1963555139', dStr);
-  }
-  if (data.hireDate) {
-    const dStr = typeof data.hireDate === 'string'
-      ? data.hireDate.slice(0, 10)
-      : new Date(data.hireDate).toISOString().slice(0, 10);
-    url.searchParams.set('entry.1034195049', dStr);
-  }
-
-  return url.toString();
+  reopenedAt?: Date | string | null;
+  workEmail?: string | null;
+  answersJson?: any;
 }
 
 function questionList(schema: any): any[] {
   if (!schema || !Array.isArray(schema.sections)) return [];
-  return schema.sections.flatMap((s: any) => Array.isArray(s.questions) ? s.questions : []);
+  return schema.sections.flatMap((s: any) => (Array.isArray(s.questions) ? s.questions : []));
 }
 
 export function validateExitInterviewAnswers(schema: any, answers: Record<string, unknown>): string | null {
   const questions = questionList(schema).filter(q => q && q.hrOnly !== true && q.visibility !== 'hr');
   const allowed = new Map(questions.map(q => [String(q.id), q]));
+
   for (const [id, answer] of Object.entries(answers)) {
     const q = allowed.get(id);
     if (!q) return 'Unknown or unauthorized question.';
+
     const type = String(q.type || '').toLowerCase();
+
     if (type === 'rating') {
-      if (!Number.isInteger(answer) || (answer as number) < (Number(q.min) || 1) || (answer as number) > (Number(q.max) || 5)) return 'Invalid answer value.';
+      const num = Number(answer);
+      if (!Number.isInteger(num) || num < (Number(q.min) || 1) || num > (Number(q.max) || 5)) {
+        return `Rating for "${q.label || q.id}" must be between ${q.min || 1} and ${q.max || 5}.`;
+      }
+    } else if (type === 'rating_matrix') {
+      if (typeof answer !== 'object' || answer === null) {
+        return `Answer for "${q.label || q.id}" must be a rating matrix.`;
+      }
+      const rowAnswers = answer as Record<string, unknown>;
+      if (Array.isArray(q.matrixRows)) {
+        for (const row of q.matrixRows) {
+          if (row.required && (rowAnswers[row.id] === undefined || rowAnswers[row.id] === null || rowAnswers[row.id] === '')) {
+            return `Please rate: "${row.label}" in section ${q.label || q.id}.`;
+          }
+          if (rowAnswers[row.id] !== undefined && rowAnswers[row.id] !== null && rowAnswers[row.id] !== '') {
+            const val = Number(rowAnswers[row.id]);
+            if (!Number.isInteger(val) || val < (Number(q.min) || 1) || val > (Number(q.max) || 5)) {
+              return `Rating for "${row.label}" must be between ${q.min || 1} and ${q.max || 5}.`;
+            }
+          }
+        }
+      }
     } else if (type === 'checkbox' || type === 'multiselect') {
-      if (!Array.isArray(answer) || (q.required && answer.length === 0) || answer.some(v => typeof v !== 'string') || (Array.isArray(q.options) && answer.some(v => !q.options.includes(v)))) return 'Invalid answer value.';
-    } else if (type === 'select' || type === 'radio') {
-      if (typeof answer !== 'string' || (Array.isArray(q.options) && !q.options.includes(answer))) return 'Invalid answer value.';
-    } else if (type === 'boolean' || type === 'declaration') {
-      if (typeof answer !== 'boolean' || (q.required && answer !== true)) return 'Invalid answer value.';
-    } else if (type === 'text' || type === 'textarea') {
-      if (typeof answer !== 'string' || answer.length > (Number(q.maxLength) || 10000)) return 'Invalid answer value.';
-    } else return 'Unsupported question type.';
+      if (!Array.isArray(answer)) {
+        return `Answer for "${q.label || q.id}" must be a list of choices.`;
+      }
+      if (q.required && answer.length === 0) {
+        return `Please select at least one option for "${q.label || q.id}".`;
+      }
+      if (Array.isArray(q.options) && answer.some((v: any) => !q.options.includes(v))) {
+        return `Invalid option selected for "${q.label || q.id}".`;
+      }
+    } else if (type === 'select' || type === 'radio' || type === 'dropdown') {
+      if (typeof answer !== 'string') {
+        return `Answer for "${q.label || q.id}" must be a selection.`;
+      }
+      if (q.required && answer.trim().length === 0) {
+        return `Please select an answer for "${q.label || q.id}".`;
+      }
+      if (Array.isArray(q.options) && !q.options.includes(answer)) {
+        return `Invalid option selected for "${q.label || q.id}".`;
+      }
+    } else if (type === 'boolean' || type === 'yes_no') {
+      if (q.required && answer !== true && answer !== 'Yes' && answer !== 'true') {
+        return `Confirmation is required for "${q.label}".`;
+      }
+    } else if (type === 'email') {
+      if (typeof answer !== 'string' || (q.required && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(answer))) {
+        return `Please enter a valid email address for "${q.label}".`;
+      }
+    } else if (type === 'text' || type === 'textarea' || type === 'phone' || type === 'date') {
+      if (typeof answer !== 'string') {
+        return `Invalid answer type for "${q.label}".`;
+      }
+      if (q.required && answer.trim().length === 0) {
+        return `Please answer "${q.label}".`;
+      }
+    }
   }
-  for (const q of questions) if (q.required && !Object.prototype.hasOwnProperty.call(answers, String(q.id))) return 'Required answers are missing.';
+
+  for (const q of questions) {
+    if (q.required && !Object.prototype.hasOwnProperty.call(answers, String(q.id))) {
+      return `Required question "${q.label}" has not been answered.`;
+    }
+  }
+
   return null;
 }
 
 export const exitInterviewService = {
-  async listTemplates(owner: string) {
-    const r = await executeSql(`SELECT id, name, description, version, is_default AS "isDefault", is_system_template AS "isSystemTemplate"
-      FROM hr_exit_interview_templates WHERE is_active = TRUE AND (is_system_template = TRUE OR owner_user_id = $1)
-      ORDER BY is_default DESC, name ASC`, [owner]);
+  // -------------------------------------------------------------------------
+  // MULTI-COMPANY TEMPLATE ARCHITECTURE & VERSIONING
+  // -------------------------------------------------------------------------
+
+  /**
+   * Retrieves or initializes the company's independent exit interview template and version history.
+   */
+  async getOrCreateCompanyTemplate(ownerUserId: string): Promise<{
+    id: string;
+    name: string;
+    description: string | null;
+    version: number;
+    schema: ExitQuestionnaireSchema;
+    isDefault: boolean;
+    updatedAt: string;
+    versions: Array<{
+      id: string;
+      versionNumber: number;
+      changeSummary: string | null;
+      publishedAt: string;
+    }>;
+  }> {
+    // 1. Check for company-owned template
+    let tmplRes = await executeSql<any>(
+      `SELECT id, name, description, version, schema_json, is_default, updated_at
+       FROM hr_exit_interview_templates
+       WHERE owner_user_id = $1 AND is_active = TRUE
+       ORDER BY is_default DESC, created_at ASC
+       LIMIT 1`,
+      [ownerUserId]
+    );
+
+    let templateId: string;
+    let templateName: string;
+    let description: string | null;
+    let version: number;
+    let schema: ExitQuestionnaireSchema;
+    let isDefault: boolean;
+    let updatedAt: string;
+
+    if (tmplRes.rows.length === 0) {
+      // Get company name for personalizing template title
+      const profRes = await executeSql<{ company_name: string }>(
+        `SELECT company_name FROM hr_company_profiles WHERE owner_user_id = $1 LIMIT 1`,
+        [ownerUserId]
+      );
+      const companyName = profRes.rows[0]?.company_name || 'Company';
+
+      templateName = `${companyName} Exit Feedback Questionnaire`;
+      description = `Official Exit Interview questionnaire for ${companyName}.`;
+      version = 1;
+      schema = MASTER_EXIT_QUESTIONNAIRE;
+      isDefault = true;
+
+      const insRes = await executeSql<{ id: string; updated_at: Date }>(
+        `INSERT INTO hr_exit_interview_templates (
+          owner_user_id,
+          name,
+          description,
+          version,
+          schema_json,
+          is_active,
+          is_default,
+          is_system_template
+        ) VALUES ($1, $2, $3, 1, $4, TRUE, TRUE, FALSE)
+        RETURNING id, updated_at`,
+        [ownerUserId, templateName, description, JSON.stringify(schema)]
+      );
+
+      templateId = insRes.rows[0].id;
+      updatedAt = new Date(insRes.rows[0].updated_at).toISOString();
+
+      // Create Version 1 snapshot
+      await executeSql(
+        `INSERT INTO hr_exit_interview_template_versions (
+          template_id,
+          version_number,
+          schema_json,
+          change_summary,
+          published_by
+        ) VALUES ($1, 1, $2, $3, $4)
+        ON CONFLICT (template_id, version_number) DO NOTHING`,
+        [templateId, JSON.stringify(schema), 'Initial master questionnaire setup.', ownerUserId]
+      );
+    } else {
+      const row = tmplRes.rows[0];
+      templateId = row.id;
+      templateName = row.name;
+      description = row.description;
+      version = row.version;
+      schema = row.schema_json;
+      isDefault = row.is_default;
+      updatedAt = new Date(row.updated_at).toISOString();
+    }
+
+    // 2. Fetch published version history
+    const versionsRes = await executeSql<{
+      id: string;
+      version_number: number;
+      change_summary: string | null;
+      published_at: Date;
+    }>(
+      `SELECT id, version_number, change_summary, published_at
+       FROM hr_exit_interview_template_versions
+       WHERE template_id = $1
+       ORDER BY version_number DESC`,
+      [templateId]
+    );
+
+    return {
+      id: templateId,
+      name: templateName,
+      description,
+      version,
+      schema,
+      isDefault,
+      updatedAt,
+      versions: versionsRes.rows.map(v => ({
+        id: v.id,
+        versionNumber: v.version_number,
+        changeSummary: v.change_summary,
+        publishedAt: new Date(v.published_at).toISOString(),
+      })),
+    };
+  },
+
+  /**
+   * Updates working draft of the company template without publishing a new version.
+   */
+  async updateTemplateDraft(
+    ownerUserId: string,
+    data: { name?: string; description?: string | null; schema: ExitQuestionnaireSchema }
+  ) {
+    const current = await this.getOrCreateCompanyTemplate(ownerUserId);
+
+    const updated = await executeSql(
+      `UPDATE hr_exit_interview_templates
+       SET name = COALESCE($1, name),
+           description = COALESCE($2, description),
+           schema_json = $3,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $4 AND owner_user_id = $5
+       RETURNING id, name, description, version, schema_json AS schema, updated_at`,
+      [
+        data.name ? data.name.trim() : null,
+        data.description !== undefined ? data.description : null,
+        JSON.stringify(data.schema),
+        current.id,
+        ownerUserId,
+      ]
+    );
+
+    return updated.rows[0];
+  },
+
+  /**
+   * Publishes the current draft as a new immutable version.
+   */
+  async publishTemplate(ownerUserId: string, changeSummary?: string | null) {
+    return withTransaction(async client => {
+      const tmplRes = await client.query(
+        `SELECT id, version, schema_json FROM hr_exit_interview_templates
+         WHERE owner_user_id = $1 AND is_active = TRUE
+         LIMIT 1
+         FOR UPDATE`,
+        [ownerUserId]
+      );
+
+      if (tmplRes.rows.length === 0) {
+        throw new Error('TEMPLATE_NOT_FOUND');
+      }
+
+      const tmpl = tmplRes.rows[0];
+      const newVersion = Number(tmpl.version) + 1;
+
+      // 1. Increment version on template
+      await client.query(
+        `UPDATE hr_exit_interview_templates
+         SET version = $1, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2`,
+        [newVersion, tmpl.id]
+      );
+
+      // 2. Insert new version snapshot
+      const verRes = await client.query(
+        `INSERT INTO hr_exit_interview_template_versions (
+          template_id,
+          version_number,
+          schema_json,
+          change_summary,
+          published_by
+        ) VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, version_number, change_summary, published_at`,
+        [
+          tmpl.id,
+          newVersion,
+          JSON.stringify(tmpl.schema_json),
+          changeSummary ? changeSummary.trim() : `Published version ${newVersion}.`,
+          ownerUserId,
+        ]
+      );
+
+      logger.info({ ownerUserId, templateId: tmpl.id, newVersion }, 'Published new exit interview template version');
+
+      return {
+        templateId: tmpl.id,
+        version: newVersion,
+        versionId: verRes.rows[0].id,
+        changeSummary: verRes.rows[0].change_summary,
+        publishedAt: verRes.rows[0].published_at,
+      };
+    });
+  },
+
+  /**
+   * Resets the company questionnaire draft back to the canonical master template.
+   */
+  async resetTemplateToDefault(ownerUserId: string) {
+    const current = await this.getOrCreateCompanyTemplate(ownerUserId);
+
+    await executeSql(
+      `UPDATE hr_exit_interview_templates
+       SET schema_json = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2 AND owner_user_id = $3`,
+      [JSON.stringify(MASTER_EXIT_QUESTIONNAIRE), current.id, ownerUserId]
+    );
+
+    return this.getOrCreateCompanyTemplate(ownerUserId);
+  },
+
+  /**
+   * Lists all available templates for selection (system master + company templates).
+   */
+  async listTemplates(ownerUserId: string) {
+    await this.getOrCreateCompanyTemplate(ownerUserId);
+
+    const r = await executeSql(
+      `SELECT id, name, description, version, is_default AS "isDefault", is_system_template AS "isSystemTemplate"
+       FROM hr_exit_interview_templates
+       WHERE is_active = TRUE AND (is_system_template = TRUE OR owner_user_id = $1)
+       ORDER BY is_system_template ASC, is_default DESC, name ASC`,
+      [ownerUserId]
+    );
     return r.rows;
   },
 
-  async list(owner: string, f: {page:number;limit:number;employeeId?:number;status?:string;departmentId?:number;from?:string;to?:string}) {
-    const params: unknown[] = [owner];
-    let where = 'i.owner_user_id = $1';
-    const clause = (sql: string, value: unknown) => { params.push(value); where += ` AND ${sql.replace('?', `$${params.length}`)}`; };
-    if (f.employeeId) clause('i.employee_id = ?', f.employeeId);
-    if (f.status === 'EXPIRED') where += " AND i.status IN ('PENDING','OPENED') AND i.expires_at <= CURRENT_TIMESTAMP";
-    else if (f.status) clause('i.status = ?', f.status);
-    if (f.departmentId) clause('e.department_id = ?', f.departmentId);
-    if (f.from) clause('i.created_at >= ?::date', f.from);
-    if (f.to) clause("i.created_at < (?::date + INTERVAL '1 day')", f.to);
+  // -------------------------------------------------------------------------
+  // INVITATION WORKFLOW & SECURE SHORT LINKS
+  // -------------------------------------------------------------------------
 
-    const count = await executeSql(`SELECT COUNT(*)::int AS total FROM hr_exit_interviews i JOIN hr_employees e ON e.employee_id=i.employee_id AND e.owner_user_id=i.owner_user_id WHERE ${where}`, params);
-    const limit = f.limit, offset = (f.page - 1) * f.limit;
-
-    const rows = await executeSql<ExitInterviewRow>(`SELECT i.id, i.employee_id AS "employeeId",
-        CASE WHEN i.status IN ('PENDING','OPENED') AND i.expires_at<=CURRENT_TIMESTAMP THEN 'EXPIRED' ELSE i.status END AS status,
-        i.expires_at AS "expiresAt", i.invitation_status AS "invitationStatus", i.completed_at AS "completedAt", i.created_at AS "createdAt",
-        i.short_code AS "shortCode", i.response_due_date AS "responseDueDate",
-        e.first_name AS "firstName", e.last_name AS "lastName", e.employee_code AS "employeeCode",
-        d.department_name AS "departmentName", des.designation_name AS "designationName", t.name AS "templateName"
-      FROM hr_exit_interviews i
-      JOIN hr_employees e ON e.employee_id=i.employee_id AND e.owner_user_id=i.owner_user_id
-      LEFT JOIN hr_departments d ON d.department_id=e.department_id
-      LEFT JOIN hr_designations des ON des.designation_id=e.designation_id
-      LEFT JOIN hr_exit_interview_templates t ON t.id=i.template_id
-      WHERE ${where} ORDER BY i.created_at DESC LIMIT $${params.length+1} OFFSET $${params.length+2}`,[...params,limit,offset]);
-
-    const data = rows.rows.map(r => ({
-      ...r,
-      shortUrl: r.shortCode ? getShortUrl(r.shortCode) : '',
-      publicUrl: r.shortCode ? getShortUrl(r.shortCode) : '',
-    }));
-
-    return { data, total: count.rows[0].total, page: f.page, limit };
-  },
-
-  async create(owner: string, input: {employeeId:number;offboardingId?:number;templateId:string;expiryDays:number;responseDueDate?:string|null}) {
+  async create(
+    owner: string,
+    input: {
+      employeeId: number;
+      offboardingId?: number;
+      templateId?: string;
+      expiryDays: number;
+      responseDueDate?: string | null;
+    }
+  ) {
     const raw = randomBytes(32).toString('hex');
     const tokenHash = hashToken(raw);
 
     const result = await withTransaction(async client => {
-      const emp = await client.query(`SELECT employee_id FROM hr_employees WHERE employee_id=$1 AND owner_user_id=$2 FOR UPDATE`, [input.employeeId,owner]);
+      // 1. Verify employee belongs to owner
+      const emp = await client.query(
+        'SELECT employee_id, employment_status FROM hr_employees WHERE employee_id = $1 AND owner_user_id = $2',
+        [input.employeeId, owner]
+      );
       if (!emp.rowCount) throw new Error('EMPLOYEE_NOT_FOUND');
-      if (input.offboardingId) {
-        const ob = await client.query(`SELECT offboarding_id FROM hr_offboarding WHERE offboarding_id=$1 AND employee_id=$2 AND owner_user_id=$3`, [input.offboardingId,input.employeeId,owner]);
-        if (!ob.rowCount) throw new Error('OFFBOARDING_NOT_FOUND');
+
+      let eventParam = input.offboardingId ?? null;
+      if (!eventParam) {
+        const off = await client.query(
+          'SELECT offboarding_id FROM hr_offboarding WHERE employee_id = $1 AND owner_user_id = $2 ORDER BY created_at DESC LIMIT 1',
+          [input.employeeId, owner]
+        );
+        eventParam = off.rows[0]?.offboarding_id ?? null;
       }
-      const t = await client.query(`SELECT id,name,description,version,schema_json,is_system_template FROM hr_exit_interview_templates WHERE id=$1 AND is_active=TRUE AND (is_system_template=TRUE OR owner_user_id=$2)`, [input.templateId,owner]);
+
+      // Check duplicate active invitation
+      const dup = await client.query(
+        `SELECT id FROM hr_exit_interviews
+         WHERE employee_id = $1 AND owner_user_id = $2 AND status IN ('PENDING', 'OPENED') AND expires_at > CURRENT_TIMESTAMP`,
+        [input.employeeId, owner]
+      );
+      if (dup.rowCount) throw new Error('ACTIVE_INTERVIEW_EXISTS');
+
+      // Resolve template
+      let templateId = input.templateId;
+      if (!templateId) {
+        const companyTmpl = await client.query(
+          `SELECT id FROM hr_exit_interview_templates WHERE owner_user_id = $1 AND is_active = TRUE LIMIT 1`,
+          [owner]
+        );
+        templateId = companyTmpl.rows[0]?.id;
+      }
+
+      const t = await client.query(
+        'SELECT id, name, description, version, schema_json FROM hr_exit_interview_templates WHERE id = $1 AND is_active = TRUE',
+        [templateId]
+      );
       if (!t.rowCount) throw new Error('TEMPLATE_NOT_FOUND');
-      const eventParam = input.offboardingId || null;
-      const duplicate = await client.query(`SELECT 1 FROM hr_exit_interviews WHERE owner_user_id=$1 AND employee_id=$2 AND status IN ('PENDING','OPENED') AND expires_at>CURRENT_TIMESTAMP AND offboarding_id IS NOT DISTINCT FROM $3 FOR UPDATE`, [owner,input.employeeId,eventParam]);
-      if (duplicate.rowCount) throw new Error('ACTIVE_INTERVIEW_EXISTS');
+
+      const template = t.rows[0];
+
+      // Get or create latest version id
+      let verRes = await client.query(
+        `SELECT id FROM hr_exit_interview_template_versions WHERE template_id = $1 AND version_number = $2 LIMIT 1`,
+        [template.id, template.version]
+      );
+      let templateVersionId = verRes.rows[0]?.id;
+      if (!templateVersionId) {
+        const insVer = await client.query(
+          `INSERT INTO hr_exit_interview_template_versions (template_id, version_number, schema_json, published_at)
+           VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+           ON CONFLICT (template_id, version_number) DO UPDATE SET schema_json = EXCLUDED.schema_json
+           RETURNING id`,
+          [template.id, template.version, JSON.stringify(template.schema_json)]
+        );
+        templateVersionId = insVer.rows[0]?.id;
+      }
 
       let shortCode = generateShortCode();
       for (let attempt = 0; attempt < 5; attempt++) {
@@ -195,17 +466,45 @@ export const exitInterviewService = {
         shortCode = generateShortCode();
       }
 
-      const template = t.rows[0];
-      const snapshot = { id: template.id, name: template.name, description: template.description, version: template.version, schema: template.schema_json };
+      const snapshot = {
+        id: template.id,
+        name: template.name,
+        description: template.description,
+        version: template.version,
+        schema: template.schema_json,
+      };
       const dueDate = input.responseDueDate ? input.responseDueDate.slice(0, 10) : null;
 
-      const inserted = await client.query(`INSERT INTO hr_exit_interviews(
-          owner_user_id,employee_id,offboarding_id,template_id,template_snapshot,template_version,token_hash,short_code,response_due_date,expires_at
-        )
-        VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,CURRENT_TIMESTAMP + ($10::int * INTERVAL '1 day'))
-        RETURNING id,status,expires_at AS "expiresAt",short_code AS "shortCode",response_due_date AS "responseDueDate"`,
-        [owner,input.employeeId,eventParam,input.templateId,JSON.stringify(snapshot),template.version,tokenHash,shortCode,dueDate,input.expiryDays]
+      const inserted = await client.query(
+        `INSERT INTO hr_exit_interviews (
+          owner_user_id,
+          employee_id,
+          offboarding_id,
+          template_id,
+          template_version_id,
+          template_snapshot,
+          template_version,
+          token_hash,
+          short_code,
+          response_due_date,
+          expires_at
+        ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, CURRENT_TIMESTAMP + ($11::int * INTERVAL '1 day'))
+        RETURNING id, status, expires_at AS "expiresAt", short_code AS "shortCode", response_due_date AS "responseDueDate"`,
+        [
+          owner,
+          input.employeeId,
+          eventParam,
+          template.id,
+          templateVersionId,
+          JSON.stringify(snapshot),
+          template.version,
+          tokenHash,
+          shortCode,
+          dueDate,
+          input.expiryDays,
+        ]
       );
+
       return inserted.rows[0];
     });
 
@@ -251,28 +550,6 @@ export const exitInterviewService = {
     });
   },
 
-  async get(owner: string, id: string): Promise<(ExitInterviewDetailRow & { shortUrl: string; publicUrl: string }) | null> {
-    const r = await executeSql<ExitInterviewDetailRow>(`SELECT i.id, i.employee_id AS "employeeId", i.offboarding_id AS "offboardingId",
-        i.template_snapshot AS "template",
-        CASE WHEN i.status IN ('PENDING','OPENED') AND i.expires_at<=CURRENT_TIMESTAMP THEN 'EXPIRED' ELSE i.status END AS status,
-        i.expires_at AS "expiresAt", i.invitation_status AS "invitationStatus", i.completed_at AS "completedAt",
-        i.created_at AS "createdAt", i.reopened_at AS "reopenedAt",
-        i.short_code AS "shortCode", i.response_due_date AS "responseDueDate",
-        i.google_form_response_id AS "googleFormResponseId", i.raw_response_payload AS "rawResponsePayload",
-        e.first_name AS "firstName", e.last_name AS "lastName", e.employee_code AS "employeeCode", e.work_email AS "workEmail",
-        d.department_name AS "departmentName", des.designation_name AS "designationName"
-      FROM hr_exit_interviews i
-      JOIN hr_employees e ON e.employee_id=i.employee_id AND e.owner_user_id=i.owner_user_id
-      LEFT JOIN hr_departments d ON d.department_id=e.department_id
-      LEFT JOIN hr_designations des ON des.designation_id=e.designation_id
-      WHERE i.id=$1 AND i.owner_user_id=$2`, [id,owner]);
-
-    const row = r.rows[0];
-    if (!row) return null;
-    const shortUrl = row.shortCode ? getShortUrl(row.shortCode) : '';
-    return { ...row, shortUrl, publicUrl: shortUrl };
-  },
-
   async revoke(owner: string, id: string, actor: string) {
     return withTransaction(async client => {
       const r = await client.query(
@@ -282,10 +559,14 @@ export const exitInterviewService = {
              updated_at=CURRENT_TIMESTAMP
          WHERE id=$1 AND owner_user_id=$2 AND status IN ('PENDING','OPENED')
          RETURNING id`,
-        [id,owner]
+        [id, owner]
       );
       if (!r.rowCount) return false;
-      await client.query(`INSERT INTO hr_audit_logs(user_id,action_type,entity_type,entity_id,details) VALUES($1,'EXIT_INTERVIEW_REVOKED','EXIT_INTERVIEW',$2,'{}'::jsonb)`,[actor,id]);
+      await client.query(
+        `INSERT INTO hr_audit_logs(user_id,action_type,entity_type,entity_id,details)
+         VALUES($1,'EXIT_INTERVIEW_REVOKED','EXIT_INTERVIEW',$2,'{}'::jsonb)`,
+        [actor, id]
+      );
       return true;
     });
   },
@@ -311,11 +592,15 @@ export const exitInterviewService = {
              reopened_at=CURRENT_TIMESTAMP,
              updated_at=CURRENT_TIMESTAMP
          WHERE id=$1 AND owner_user_id=$6 AND status='COMPLETED'
-         RETURNING id,expires_at AS "expiresAt",short_code AS "shortCode"`,
-        [id,actor,hashToken(raw),shortCode,days,owner]
+         RETURNING id, expires_at AS "expiresAt", short_code AS "shortCode"`,
+        [id, actor, hashToken(raw), shortCode, days, owner]
       );
       if (!updated.rowCount) return null;
-      await client.query(`INSERT INTO hr_audit_logs(user_id,action_type,entity_type,entity_id,details) VALUES($1,'EXIT_INTERVIEW_REOPENED','EXIT_INTERVIEW',$2,$3::jsonb)`,[actor,id,JSON.stringify({expiryDays:days,shortCode})]);
+      await client.query(
+        `INSERT INTO hr_audit_logs(user_id,action_type,entity_type,entity_id,details)
+         VALUES($1,'EXIT_INTERVIEW_REOPENED','EXIT_INTERVIEW',$2,$3::jsonb)`,
+        [actor, id, JSON.stringify({ expiryDays: days, shortCode })]
+      );
       return updated.rows[0];
     });
 
@@ -324,12 +609,141 @@ export const exitInterviewService = {
     return { ...r, shortUrl, publicUrl: shortUrl, token: raw };
   },
 
+  async get(owner: string, id: string): Promise<(ExitInterviewDetailRow & { shortUrl: string; publicUrl: string }) | null> {
+    const r = await executeSql<ExitInterviewDetailRow>(
+      `SELECT i.id, i.employee_id AS "employeeId", i.offboarding_id AS "offboardingId",
+        i.template_snapshot AS "template",
+        CASE WHEN i.status IN ('PENDING','OPENED') AND i.expires_at<=CURRENT_TIMESTAMP THEN 'EXPIRED' ELSE i.status END AS status,
+        i.expires_at AS "expiresAt", i.invitation_status AS "invitationStatus", i.completed_at AS "completedAt",
+        i.created_at AS "createdAt", i.reopened_at AS "reopenedAt",
+        i.short_code AS "shortCode", i.response_due_date AS "responseDueDate",
+        e.first_name AS "firstName", e.last_name AS "lastName", e.employee_code AS "employeeCode", e.work_email AS "workEmail",
+        d.department_name AS "departmentName", des.designation_name AS "designationName"
+      FROM hr_exit_interviews i
+      JOIN hr_employees e ON e.employee_id=i.employee_id AND e.owner_user_id=i.owner_user_id
+      LEFT JOIN hr_departments d ON d.department_id=e.department_id
+      LEFT JOIN hr_designations des ON des.designation_id=e.designation_id
+      WHERE i.id=$1 AND i.owner_user_id=$2`,
+      [id, owner]
+    );
+
+    const row = r.rows[0];
+    if (!row) return null;
+    const shortUrl = row.shortCode ? getShortUrl(row.shortCode) : '';
+    return { ...row, shortUrl, publicUrl: shortUrl };
+  },
+
+  async list(
+    owner: string,
+    f: {
+      page: number;
+      limit: number;
+      employeeId?: number;
+      status?: string;
+      departmentId?: number;
+      search?: string;
+      from?: string;
+      to?: string;
+    }
+  ) {
+    const params: unknown[] = [owner];
+    let where = 'i.owner_user_id = $1';
+    const clause = (sql: string, value: unknown) => {
+      params.push(value);
+      where += ` AND ${sql.replace('?', `$${params.length}`)}`;
+    };
+
+    if (f.employeeId) clause('i.employee_id = ?', f.employeeId);
+    if (f.status === 'EXPIRED') where += " AND i.status IN ('PENDING','OPENED') AND i.expires_at <= CURRENT_TIMESTAMP";
+    else if (f.status) clause('i.status = ?', f.status);
+    if (f.departmentId) clause('e.department_id = ?', f.departmentId);
+    if (f.search) {
+      params.push(`%${f.search}%`);
+      where += ` AND (e.first_name ILIKE $${params.length} OR e.last_name ILIKE $${params.length} OR e.employee_code ILIKE $${params.length})`;
+    }
+    if (f.from) clause('i.created_at >= ?::date', f.from);
+    if (f.to) clause("i.created_at < (?::date + INTERVAL '1 day')", f.to);
+
+    const count = await executeSql<{ total: number }>(
+      `SELECT COUNT(*)::int AS total FROM hr_exit_interviews i JOIN hr_employees e ON e.employee_id=i.employee_id AND e.owner_user_id=i.owner_user_id WHERE ${where}`,
+      params
+    );
+    const limit = f.limit,
+      offset = (f.page - 1) * f.limit;
+
+    params.push(limit, offset);
+    const rows = await executeSql<ExitInterviewRow>(
+      `SELECT i.id, i.employee_id AS "employeeId",
+        CASE WHEN i.status IN ('PENDING','OPENED') AND i.expires_at<=CURRENT_TIMESTAMP THEN 'EXPIRED' ELSE i.status END AS status,
+        i.expires_at AS "expiresAt", i.invitation_status AS "invitationStatus", i.completed_at AS "completedAt", i.created_at AS "createdAt",
+        i.short_code AS "shortCode", i.response_due_date AS "responseDueDate",
+        e.first_name AS "firstName", e.last_name AS "lastName", e.employee_code AS "employeeCode",
+        d.department_name AS "departmentName", des.designation_name AS "designationName", t.name AS "templateName",
+        i.template_version AS "templateVersion"
+      FROM hr_exit_interviews i
+      JOIN hr_employees e ON e.employee_id=i.employee_id AND e.owner_user_id=i.owner_user_id
+      LEFT JOIN hr_departments d ON d.department_id=e.department_id
+      LEFT JOIN hr_designations des ON des.designation_id=e.designation_id
+      LEFT JOIN hr_exit_interview_templates t ON t.id=i.template_id
+      WHERE ${where}
+      ORDER BY i.created_at DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+
+    return {
+      total: count.rows[0]?.total ?? 0,
+      page: f.page,
+      limit: f.limit,
+      data: rows.rows.map(r => ({
+        ...r,
+        shortUrl: r.shortCode ? getShortUrl(r.shortCode) : '',
+        publicUrl: r.shortCode ? getShortUrl(r.shortCode) : '',
+      })),
+    };
+  },
+
+  // -------------------------------------------------------------------------
+  // HOSTED FORM RESOLUTION & SUBMISSION
+  // -------------------------------------------------------------------------
+
   /**
-   * Resolves a short code: checks active, unexpired, non-revoked state, updates status to OPENED if PENDING,
-   * and generates the prefilled Google Forms redirection URL.
+   * Resolves a public short code for native People Journey dynamic form rendering.
+   * Loads company branding, employee details, and questionnaire schema snapshot.
    */
   async resolveShortCode(shortCode: string): Promise<
-    | { status: 'ACTIVE'; redirectUrl: string; invitationId: string; employee: { name: string; code: string } }
+    | {
+        status: 'ACTIVE';
+        invitationId: string;
+        shortCode: string;
+        expiresAt: string;
+        responseDueDate: string | null;
+        company: {
+          companyName: string;
+          displayName: string | null;
+          logoUrl: string | null;
+          brandPrimaryColor: string;
+          hrContactName: string | null;
+          hrContactEmail: string | null;
+          departmentTeam: string | null;
+          companyWebsite: string | null;
+        };
+        employee: {
+          name: string;
+          employeeCode: string;
+          designation: string;
+          department: string;
+          hireDate: string | null;
+          exitDate: string | null;
+          workEmail: string | null;
+        };
+        template: {
+          id: string;
+          name: string;
+          version: number;
+          schema: ExitQuestionnaireSchema;
+        };
+      }
     | { status: 'NOT_FOUND' }
     | { status: 'CANCELLED' }
     | { status: 'EXPIRED'; expiresAt: Date }
@@ -337,14 +751,18 @@ export const exitInterviewService = {
   > {
     return withTransaction(async client => {
       const q = await client.query(
-        `SELECT i.id, i.status, i.expires_at, i.short_code, i.completed_at,
+        `SELECT i.id, i.owner_user_id, i.status, i.expires_at, i.short_code, i.response_due_date, i.completed_at,
+                i.template_snapshot, i.template_version,
                 (i.expires_at > CURRENT_TIMESTAMP) AS is_valid,
-                e.first_name, e.last_name, e.employee_code, e.hire_date, e.exit_date,
-                d.department_name, des.designation_name
+                e.first_name, e.last_name, e.employee_code, e.hire_date, e.exit_date, e.work_email,
+                d.department_name, des.designation_name,
+                p.company_name, p.display_name, p.logo_url, p.brand_primary_color,
+                p.hr_contact_name, p.hr_contact_email, p.department_team, p.company_website
          FROM hr_exit_interviews i
          JOIN hr_employees e ON e.employee_id = i.employee_id AND e.owner_user_id = i.owner_user_id
          LEFT JOIN hr_departments d ON d.department_id = e.department_id
          LEFT JOIN hr_designations des ON des.designation_id = e.designation_id
+         LEFT JOIN hr_company_profiles p ON p.owner_user_id = i.owner_user_id
          WHERE i.short_code = $1
          FOR UPDATE OF i`,
         [shortCode]
@@ -363,7 +781,7 @@ export const exitInterviewService = {
         return { status: 'EXPIRED' as const, expiresAt: row.expires_at };
       }
 
-      // Mark as OPENED on first link access
+      // Mark as OPENED on link access
       if (row.status === 'PENDING') {
         await client.query(
           `UPDATE hr_exit_interviews SET status = 'OPENED', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
@@ -372,216 +790,416 @@ export const exitInterviewService = {
       }
 
       const fullName = `${row.first_name}${row.last_name ? ' ' + row.last_name : ''}`.trim();
-      const redirectUrl = buildPrefilledGoogleFormsUrl({
-        shortCode: row.short_code,
-        employeeName: fullName,
-        employeeCode: row.employee_code,
-        designation: row.designation_name || undefined,
-        department: row.department_name || undefined,
-        exitDate: row.exit_date || undefined,
-        hireDate: row.hire_date || undefined,
-      });
+      const templateSnapshot = row.template_snapshot || {};
+      const questionnaireSchema = templateSnapshot.schema || templateSnapshot.schema_json || MASTER_EXIT_QUESTIONNAIRE;
 
       return {
         status: 'ACTIVE' as const,
-        redirectUrl,
         invitationId: row.id,
-        employee: { name: fullName, code: row.employee_code },
+        shortCode: row.short_code,
+        expiresAt: new Date(row.expires_at).toISOString(),
+        responseDueDate: row.response_due_date ? String(row.response_due_date).slice(0, 10) : null,
+        company: {
+          companyName: row.company_name || 'Our Company',
+          displayName: row.display_name || row.company_name || 'Our Company',
+          logoUrl: row.logo_url || null,
+          brandPrimaryColor: row.brand_primary_color || '#59424f',
+          hrContactName: row.hr_contact_name || 'HR Team',
+          hrContactEmail: row.hr_contact_email || null,
+          departmentTeam: row.department_team || 'Human Resources',
+          companyWebsite: row.company_website || null,
+        },
+        employee: {
+          name: fullName,
+          employeeCode: row.employee_code,
+          designation: row.designation_name || 'Team Member',
+          department: row.department_name || 'General',
+          hireDate: row.hire_date ? new Date(row.hire_date).toISOString().slice(0, 10) : null,
+          exitDate: row.exit_date ? new Date(row.exit_date).toISOString().slice(0, 10) : null,
+          workEmail: row.work_email || null,
+        },
+        template: {
+          id: templateSnapshot.id || row.id,
+          name: templateSnapshot.name || 'Exit Feedback Questionnaire',
+          version: Number(row.template_version || 1),
+          schema: questionnaireSchema,
+        },
       };
     });
   },
 
   /**
-   * Processes Google Forms response webhook payload from Apps Script.
-   * Enforces idempotency via google_form_response_id, updates status to COMPLETED,
-   * stores submitted answers, and logs audit events.
+   * Submits answers from native hosted People Journey employee form.
+   * Enforces schema validation, updates status to COMPLETED, stores answers in PostgreSQL.
    */
-  async handleGoogleFormsWebhook(payload: {
-    responseId?: string;
-    timestamp?: string;
-    invitationReference?: string;
-    employeeId?: string;
-    employeeName?: string;
-    answers: Record<string, unknown>;
-  }): Promise<{ success: boolean; code?: string; message: string; interviewId?: string }> {
-    let ref = payload.invitationReference?.trim();
-
-    if (!ref && payload.answers) {
-      const empIdField = String(
-        payload.answers['Employee ID'] ||
-        payload.answers['entry.1437116560'] ||
-        payload.answers['employee_id'] ||
-        payload.answers['Employee id'] ||
-        ''
-      );
-      const match = empIdField.match(/(?:\[Ref:\s*|Ref:\s*|\b)([a-zA-Z0-9_-]{6,12})\b/);
-      if (match) ref = match[1];
-    }
-
+  async submitPublicFeedback(
+    shortCode: string,
+    answers: Record<string, unknown>,
+    metadata?: Record<string, unknown>
+  ): Promise<{ ok: boolean; reason?: string }> {
     return withTransaction(async client => {
-      let q;
-      if (ref) {
-        q = await client.query(
-          `SELECT id, owner_user_id, status, expires_at, google_form_response_id
-           FROM hr_exit_interviews
-           WHERE short_code = $1 OR id::text = $1
-           FOR UPDATE`,
-          [ref]
-        );
+      const q = await client.query(
+        `SELECT id, owner_user_id, status, expires_at, template_snapshot, (expires_at > CURRENT_TIMESTAMP) AS is_valid
+         FROM hr_exit_interviews
+         WHERE short_code = $1
+         FOR UPDATE`,
+        [shortCode]
+      );
+
+      if (!q.rowCount) return { ok: false, reason: 'NOT_FOUND' };
+      const row = q.rows[0];
+
+      if (row.status === 'COMPLETED') return { ok: false, reason: 'ALREADY_SUBMITTED' };
+      if (row.status === 'REVOKED') return { ok: false, reason: 'CANCELLED' };
+      if (!row.is_valid) return { ok: false, reason: 'EXPIRED' };
+
+      const snapshot = row.template_snapshot || {};
+      const schema = snapshot.schema || snapshot.schema_json || MASTER_EXIT_QUESTIONNAIRE;
+
+      const validationError = validateExitInterviewAnswers(schema, answers);
+      if (validationError) {
+        return { ok: false, reason: validationError };
       }
 
-      // Fallback matching by employee code if reference was cleared or omitted
-      if ((!q || !q.rowCount) && (payload.employeeId || payload.answers['Employee ID'])) {
-        const rawCode = String(payload.employeeId || payload.answers['Employee ID']).replace(/\s*\[Ref:.*\]/i, '').trim();
-        if (rawCode) {
-          q = await client.query(
-            `SELECT i.id, i.owner_user_id, i.status, i.expires_at, i.google_form_response_id
-             FROM hr_exit_interviews i
-             JOIN hr_employees e ON e.employee_id = i.employee_id AND e.owner_user_id = i.owner_user_id
-             WHERE e.employee_code = $1 AND i.status IN ('PENDING', 'OPENED')
-             ORDER BY i.created_at DESC
-             LIMIT 1
-             FOR UPDATE OF i`,
-            [rawCode]
-          );
-        }
-      }
-
-      if (!q || !q.rowCount) {
-        return { success: false, code: 'INVITATION_NOT_FOUND', message: 'No matching exit interview invitation found.' };
-      }
-
-      const interview = q.rows[0];
-
-      // Idempotency: response already processed
-      if (interview.status === 'COMPLETED') {
-        if (payload.responseId && interview.google_form_response_id === payload.responseId) {
-          return { success: true, message: 'Response already recorded (idempotent)', interviewId: interview.id };
-        }
-        return { success: true, message: 'Interview already completed; duplicate submission ignored', interviewId: interview.id };
-      }
-
-      if (interview.status === 'REVOKED') {
-        return { success: false, code: 'INVITATION_CANCELLED', message: 'This interview invitation was cancelled.' };
-      }
-
-      const submissionId = randomUUID();
-      const respId = payload.responseId || `gform_${submissionId}`;
-
-      // Update invitation state to COMPLETED
+      // Mark invitation as COMPLETED
       await client.query(
         `UPDATE hr_exit_interviews
          SET status = 'COMPLETED',
              completed_at = CURRENT_TIMESTAMP,
-             google_form_response_id = $2,
-             raw_response_payload = $3::jsonb,
              updated_at = CURRENT_TIMESTAMP
          WHERE id = $1`,
-        [interview.id, respId, JSON.stringify(payload)]
+        [row.id]
       );
 
-      // Store responses
-      if (payload.answers && typeof payload.answers === 'object') {
-        for (const [question, answer] of Object.entries(payload.answers)) {
-          await client.query(
-            `INSERT INTO hr_exit_interview_responses (interview_id, submission_id, question_id, answer, submitted_at)
-             VALUES ($1, $2, $3, $4::jsonb, CURRENT_TIMESTAMP)
-             ON CONFLICT (submission_id, question_id) DO NOTHING`,
-            [interview.id, submissionId, question, JSON.stringify(answer)]
-          );
-        }
+      // Save complete answers_json and granular rows
+      const submissionId = randomBytes(16).toString('hex');
+
+      await client.query(
+        `INSERT INTO hr_exit_interview_responses (
+          interview_id,
+          submission_id,
+          question_id,
+          answer,
+          answers_json,
+          submission_metadata,
+          submitted_at
+        ) VALUES ($1, $2, 'all', $3::jsonb, $3::jsonb, $4::jsonb, CURRENT_TIMESTAMP)`,
+        [
+          row.id,
+          '00000000-0000-0000-0000-000000000000',
+          JSON.stringify(answers),
+          JSON.stringify(metadata || {}),
+        ]
+      );
+
+      for (const [qId, val] of Object.entries(answers)) {
+        await client.query(
+          `INSERT INTO hr_exit_interview_responses (
+            interview_id,
+            submission_id,
+            question_id,
+            answer,
+            submitted_at
+          ) VALUES ($1, $2, $3, $4::jsonb, CURRENT_TIMESTAMP)
+          ON CONFLICT (submission_id, question_id) DO NOTHING`,
+          [
+            row.id,
+            '00000000-0000-0000-0000-000000000001',
+            qId,
+            JSON.stringify(val),
+          ]
+        );
       }
 
       await client.query(
         `INSERT INTO hr_audit_logs(user_id, action_type, entity_type, entity_id, details)
-         VALUES($1, 'EXIT_INTERVIEW_COMPLETED', 'EXIT_INTERVIEW', $2, $3::jsonb)`,
-        [interview.owner_user_id, interview.id, JSON.stringify({ googleFormResponseId: respId })]
+         VALUES($1, 'EXIT_INTERVIEW_SUBMITTED', 'EXIT_INTERVIEW', $2, $3::jsonb)`,
+        [row.owner_user_id, row.id, JSON.stringify({ shortCode, submissionId })]
       );
 
-      return { success: true, interviewId: interview.id, message: 'Exit interview response recorded successfully.' };
+      logger.info({ interviewId: row.id, shortCode }, 'Exit interview feedback successfully submitted and saved.');
+      return { ok: true };
     });
   },
 
-  async responses(owner: string, id: string) {
-    const r = await executeSql(
-      `SELECT r.submission_id AS "submissionId", r.question_id AS "questionId", r.answer, r.submitted_at AS "submittedAt"
-       FROM hr_exit_interview_responses r
-       JOIN hr_exit_interviews i ON i.id=r.interview_id
-       WHERE i.id=$1 AND i.owner_user_id=$2
-       ORDER BY r.submitted_at, r.id`,
-      [id, owner]
+  // -------------------------------------------------------------------------
+  // RESPONSE DETAILS & EXPORT REPORTING
+  // -------------------------------------------------------------------------
+
+  /**
+   * Retrieves full structured response for HR review, with question hierarchy.
+   */
+  async getResponseDetail(ownerUserId: string, interviewId: string) {
+    const q = await executeSql<any>(
+      `SELECT i.id, i.employee_id, i.completed_at, i.created_at, i.short_code, i.response_due_date,
+              i.template_version, i.template_snapshot,
+              e.first_name, e.last_name, e.employee_code, e.hire_date, e.exit_date, e.work_email,
+              d.department_name, des.designation_name,
+              p.company_name, p.display_name, p.logo_url, p.brand_primary_color,
+              r.answers_json
+       FROM hr_exit_interviews i
+       JOIN hr_employees e ON e.employee_id = i.employee_id AND e.owner_user_id = i.owner_user_id
+       LEFT JOIN hr_departments d ON d.department_id = e.department_id
+       LEFT JOIN hr_designations des ON des.designation_id = e.designation_id
+       LEFT JOIN hr_company_profiles p ON p.owner_user_id = i.owner_user_id
+       LEFT JOIN hr_exit_interview_responses r ON r.interview_id = i.id AND r.question_id = 'all'
+       WHERE i.id = $1 AND i.owner_user_id = $2`,
+      [interviewId, ownerUserId]
     );
-    return r.rows;
+
+    if (!q.rows.length) return null;
+    const row = q.rows[0];
+
+    const snapshot = row.template_snapshot || {};
+    const schema: ExitQuestionnaireSchema = snapshot.schema || snapshot.schema_json || MASTER_EXIT_QUESTIONNAIRE;
+    const answers: Record<string, any> = row.answers_json || {};
+
+    // Organize response by sections and questions
+    const organizedSections = schema.sections.map(sec => ({
+      id: sec.id,
+      title: sec.title,
+      description: sec.description,
+      questions: sec.questions.map(quest => {
+        const rawAnswer = answers[quest.id];
+        let displayAnswer = '—';
+        if (rawAnswer !== undefined && rawAnswer !== null) {
+          if (quest.type === 'rating_matrix' && typeof rawAnswer === 'object') {
+            displayAnswer = JSON.stringify(rawAnswer);
+          } else if (Array.isArray(rawAnswer)) {
+            displayAnswer = rawAnswer.join(', ');
+          } else {
+            displayAnswer = String(rawAnswer);
+          }
+        }
+        return {
+          id: quest.id,
+          label: quest.label,
+          type: quest.type,
+          matrixRows: quest.matrixRows,
+          rawAnswer,
+          displayAnswer,
+        };
+      }),
+    }));
+
+    return {
+      interviewId: row.id,
+      employee: {
+        id: row.employee_id,
+        name: `${row.first_name}${row.last_name ? ' ' + row.last_name : ''}`.trim(),
+        code: row.employee_code,
+        designation: row.designation_name || 'Team Member',
+        department: row.department_name || 'General',
+        hireDate: row.hire_date ? String(row.hire_date).slice(0, 10) : '—',
+        exitDate: row.exit_date ? String(row.exit_date).slice(0, 10) : '—',
+        workEmail: row.work_email,
+      },
+      company: {
+        name: row.display_name || row.company_name || 'Company',
+        logoUrl: row.logo_url,
+        brandPrimaryColor: row.brand_primary_color || '#59424f',
+      },
+      template: {
+        name: snapshot.name || 'Exit Feedback Questionnaire',
+        version: Number(row.template_version || 1),
+      },
+      submissionDate: row.completed_at ? new Date(row.completed_at).toISOString() : null,
+      sections: organizedSections,
+      rawAnswers: answers,
+    };
   },
 
-  async getEvaluation(owner: string, id: string) {
+  /**
+   * Generates normalized data for multi-sheet Excel / CSV exports.
+   */
+  async getExportData(ownerUserId: string, filters?: { departmentId?: number; from?: string; to?: string }): Promise<{
+    companyName: string;
+    items: ExportResponseItem[];
+  }> {
+    const profRes = await executeSql<{ company_name: string }>(
+      `SELECT company_name FROM hr_company_profiles WHERE owner_user_id = $1 LIMIT 1`,
+      [ownerUserId]
+    );
+    const companyName = profRes.rows[0]?.company_name || 'Company';
+
+    const params: unknown[] = [ownerUserId];
+    let where = "i.owner_user_id = $1 AND i.status = 'COMPLETED'";
+    if (filters?.departmentId) {
+      params.push(filters.departmentId);
+      where += ` AND e.department_id = $${params.length}`;
+    }
+    if (filters?.from) {
+      params.push(filters.from);
+      where += ` AND i.completed_at >= $${params.length}::date`;
+    }
+    if (filters?.to) {
+      params.push(filters.to);
+      where += ` AND i.completed_at < ($${params.length}::date + INTERVAL '1 day')`;
+    }
+
+    const q = await executeSql<any>(
+      `SELECT i.id, i.completed_at, i.status, i.template_snapshot,
+              e.first_name, e.last_name, e.employee_code, e.hire_date, e.exit_date,
+              d.department_name, des.designation_name,
+              r.answers_json
+       FROM hr_exit_interviews i
+       JOIN hr_employees e ON e.employee_id = i.employee_id AND e.owner_user_id = i.owner_user_id
+       LEFT JOIN hr_departments d ON d.department_id = e.department_id
+       LEFT JOIN hr_designations des ON des.designation_id = e.designation_id
+       LEFT JOIN hr_exit_interview_responses r ON r.interview_id = i.id AND r.question_id = 'all'
+       WHERE ${where}
+       ORDER BY i.completed_at DESC`,
+      params
+    );
+
+    const items: ExportResponseItem[] = q.rows.map(row => {
+      const answers = row.answers_json || {};
+      const snapshot = row.template_snapshot || {};
+      const schema: ExitQuestionnaireSchema = snapshot.schema || snapshot.schema_json || MASTER_EXIT_QUESTIONNAIRE;
+
+      const employeeName = `${row.first_name}${row.last_name ? ' ' + row.last_name : ''}`.trim();
+      const hireDateStr = row.hire_date ? String(row.hire_date).slice(0, 10) : '—';
+      const exitDateStr = row.exit_date ? String(row.exit_date).slice(0, 10) : '—';
+      const submissionDateStr = row.completed_at ? String(row.completed_at).slice(0, 10) : '—';
+
+      const secItems = schema.sections.map(sec => ({
+        sectionTitle: sec.title,
+        questions: sec.questions.map(quest => {
+          const val = answers[quest.id];
+          let answerText = '—';
+          if (val !== undefined && val !== null) {
+            if (quest.type === 'rating_matrix' && typeof val === 'object') {
+              const rows = quest.matrixRows || [];
+              answerText = rows
+                .map(r => `${r.label}: ${val[r.id] ?? '—'}`)
+                .join('; ');
+            } else if (Array.isArray(val)) {
+              answerText = val.join(', ');
+            } else {
+              answerText = String(val);
+            }
+          }
+          return {
+            questionLabel: quest.label,
+            answerText,
+          };
+        }),
+      }));
+
+      return {
+        interviewId: row.id,
+        employeeCode: row.employee_code,
+        employeeName,
+        department: row.department_name || 'General',
+        designation: row.designation_name || 'Team Member',
+        hireDate: hireDateStr,
+        exitDate: exitDateStr,
+        submissionDate: submissionDateStr,
+        status: row.status,
+        overallSatisfaction: answers.overall_satisfaction || '—',
+        primaryReason: answers.primary_reason || '—',
+        reasonsForLeaving: Array.isArray(answers.reasons_for_leaving) ? answers.reasons_for_leaving.join(', ') : '—',
+        recommendEmployer: answers.recommend_employer || '—',
+        rejoiningConsideration: answers.consider_rejoining || '—',
+        sections: secItems,
+      };
+    });
+
+    return { companyName, items };
+  },
+
+  // Legacy public token endpoints preserved for backward compatibility
+  async publicForm(rawToken: string) {
     const r = await executeSql(
-      `SELECT v.interviewer_name AS "interviewerName", v.interview_date AS "interviewDate",
-              v.interview_mode AS "interviewMode", v.reason_category AS "reasonCategory",
-              v.regrettable_exit AS "regrettableExit", v.rehire_eligibility AS "rehireEligibility",
-              v.hr_observations AS "hrObservations", v.action_items AS "actionItems",
-              v.hr_signature AS "hrSignature", v.updated_at AS "updatedAt"
-       FROM hr_exit_interview_evaluations v
-       JOIN hr_exit_interviews i ON i.id=v.interview_id
-       WHERE i.id=$1 AND i.owner_user_id=$2`,
-      [id, owner]
+      `SELECT i.id, i.template_snapshot AS template, (i.expires_at > CURRENT_TIMESTAMP) AS is_valid,
+        e.first_name AS "firstName", e.last_name AS "lastName", e.employee_code AS "employeeCode",
+        d.department_name AS "departmentName", des.designation_name AS "designationName",
+        p.company_name AS "companyName", p.brand_primary_color AS "brandPrimaryColor", p.logo_url AS "logoUrl"
+      FROM hr_exit_interviews i
+      JOIN hr_employees e ON e.employee_id=i.employee_id AND e.owner_user_id=i.owner_user_id
+      LEFT JOIN hr_departments d ON d.department_id=e.department_id
+      LEFT JOIN hr_designations des ON des.designation_id=e.designation_id
+      LEFT JOIN hr_company_profiles p ON p.owner_user_id=i.owner_user_id
+      WHERE i.token_hash = $1 AND i.status IN ('PENDING','OPENED')`,
+      [hashToken(rawToken)]
+    );
+    const row = r.rows[0];
+    if (!row || !row.is_valid) return null;
+    return row;
+  },
+
+  async submit(rawToken: string, answers: Record<string, unknown>) {
+    return withTransaction(async client => {
+      const q = await client.query(
+        `SELECT id, status, expires_at, template_snapshot, (expires_at > CURRENT_TIMESTAMP) AS is_valid
+         FROM hr_exit_interviews WHERE token_hash = $1 FOR UPDATE`,
+        [hashToken(rawToken)]
+      );
+      if (!q.rowCount) return { ok: false, reason: 'UNAVAILABLE' };
+      const row = q.rows[0];
+      if (row.status !== 'PENDING' && row.status !== 'OPENED') return { ok: false, reason: 'UNAVAILABLE' };
+      if (!row.is_valid) return { ok: false, reason: 'UNAVAILABLE' };
+
+      const v = validateExitInterviewAnswers(row.template_snapshot?.schema || MASTER_EXIT_QUESTIONNAIRE, answers);
+      if (v) return { ok: false, reason: v };
+
+      await client.query(`UPDATE hr_exit_interviews SET status='COMPLETED', completed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=$1`, [row.id]);
+      await client.query(
+        `INSERT INTO hr_exit_interview_responses (interview_id, submission_id, question_id, answer, answers_json)
+         VALUES ($1, gen_random_uuid(), 'all', $2::jsonb, $2::jsonb)`,
+        [row.id, JSON.stringify(answers)]
+      );
+
+      return { ok: true };
+    });
+  },
+
+  async getEvaluation(owner: string, interviewId: string) {
+    const r = await executeSql(
+      `SELECT e.* FROM hr_exit_interview_evaluations e
+       JOIN hr_exit_interviews i ON i.id = e.interview_id
+       WHERE e.interview_id = $1 AND i.owner_user_id = $2`,
+      [interviewId, owner]
     );
     return r.rows[0] || null;
   },
 
-  async updateEvaluation(owner: string, id: string, actor: string, v: any) {
-    return withTransaction(async client => {
-      const exists = await client.query(`SELECT id FROM hr_exit_interviews WHERE id=$1 AND owner_user_id=$2`, [id, owner]);
-      if (!exists.rowCount) return false;
-      const current = await client.query(`SELECT interviewer_name,interview_date,interview_mode,reason_category,regrettable_exit,rehire_eligibility,hr_observations,action_items,hr_signature FROM hr_exit_interview_evaluations WHERE interview_id=$1 FOR UPDATE`, [id]);
-      const old = current.rows[0] || {};
-      const value = (camel: string, snake: string) => v[camel] !== undefined ? v[camel] : (old[snake] ?? null);
-      await client.query(`INSERT INTO hr_exit_interview_evaluations(interview_id,interviewer_name,interview_date,interview_mode,reason_category,regrettable_exit,rehire_eligibility,hr_observations,action_items,hr_signature,updated_by,updated_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,CURRENT_TIMESTAMP) ON CONFLICT(interview_id) DO UPDATE SET interviewer_name=EXCLUDED.interviewer_name,interview_date=EXCLUDED.interview_date,interview_mode=EXCLUDED.interview_mode,reason_category=EXCLUDED.reason_category,regrettable_exit=EXCLUDED.regrettable_exit,rehire_eligibility=EXCLUDED.rehire_eligibility,hr_observations=EXCLUDED.hr_observations,action_items=EXCLUDED.action_items,hr_signature=EXCLUDED.hr_signature,updated_by=EXCLUDED.updated_by,updated_at=CURRENT_TIMESTAMP`, [id, value('interviewerName', 'interviewer_name'), value('interviewDate', 'interview_date'), value('interviewMode', 'interview_mode'), value('reasonCategory', 'reason_category'), value('regrettableExit', 'regrettable_exit'), value('rehireEligibility', 'rehire_eligibility'), value('hrObservations', 'hr_observations'), JSON.stringify(value('actionItems', 'action_items') ?? []), value('hrSignature', 'hr_signature'), actor]);
-      return true;
-    });
-  },
+  async saveEvaluation(owner: string, interviewId: string, actor: string, data: any) {
+    const chk = await executeSql('SELECT id FROM hr_exit_interviews WHERE id = $1 AND owner_user_id = $2', [interviewId, owner]);
+    if (!chk.rowCount) return null;
 
-  // Preserved for backward-compatibility with public form testing
-  async publicForm(token: string) {
-    const h = hashToken(token);
-    const row = await withTransaction(async client => {
-      const r = await client.query(`SELECT i.id,i.token_hash,i.status,i.expires_at,(i.expires_at>CURRENT_TIMESTAMP) AS is_valid,i.template_snapshot,e.first_name,e.last_name,e.employee_code,e.hire_date,e.exit_date,c.company_name,c.logo_url
-        FROM hr_exit_interviews i JOIN hr_employees e ON e.employee_id=i.employee_id AND e.owner_user_id=i.owner_user_id LEFT JOIN hr_company_profiles c ON c.owner_user_id=i.owner_user_id WHERE i.token_hash=$1 FOR UPDATE OF i`,[h]);
-      const found = r.rows[0] as any;
-      if (!found || !timingSafeEqual(Buffer.from(h,'hex'),Buffer.from(found.token_hash,'hex')) || found.status === 'REVOKED' || found.status === 'COMPLETED' || !found.is_valid) return null;
-      if (found.status === 'PENDING') {
-        const opened=await client.query(`UPDATE hr_exit_interviews SET status='OPENED',updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND status='PENDING' AND expires_at>CURRENT_TIMESTAMP RETURNING id`,[found.id]);
-        if (!opened.rowCount) return null;
-      }
-      return found;
-    });
-    if (!row) return null;
-    const snap = row.template_snapshot || {};
-    const schema = snap.schema || {};
-    const sections = Array.isArray(schema.sections) ? schema.sections.map((s: any) => ({
-      id: s.id, title: s.title, description: s.description,
-      questions: (s.questions || []).filter((q:any)=>q && q.hrOnly !== true && q.visibility !== 'hr').map((q:any) => {
-        const publicQuestion: Record<string, unknown> = {};
-        for (const key of ['id','type','label','required','options','min','max','placeholder','maxLength']) if (q[key] !== undefined) publicQuestion[key] = q[key];
-        return publicQuestion;
-      }),
-    })) : [];
-    return { company: { name: row.company_name || null, logoUrl: row.logo_url || null }, introduction: schema.introduction || '', template: { name: snap.name, version: snap.version, sections }, employee: { firstName: row.first_name, lastName: row.last_name || null, employeeCode: row.employee_code, hireDate: row.hire_date, exitDate: row.exit_date }, expiresAt: row.expires_at, status: row.status === 'PENDING' ? 'OPENED' : row.status };
-  },
-
-  async submit(token: string, answers: Record<string, unknown>) {
-    const h = hashToken(token), submissionId = randomUUID();
-    return withTransaction(async client => {
-      const r = await client.query(`SELECT id,token_hash,status,expires_at,(expires_at>CURRENT_TIMESTAMP) AS is_valid,template_snapshot FROM hr_exit_interviews WHERE token_hash=$1 FOR UPDATE`,[h]);
-      const row = r.rows[0] as any;
-      if (!row || !timingSafeEqual(Buffer.from(h,'hex'),Buffer.from(row.token_hash,'hex')) || row.status==='REVOKED' || row.status==='COMPLETED' || !row.is_valid) return { ok:false as const, reason:'UNAVAILABLE' };
-      const msg = validateExitInterviewAnswers(row.template_snapshot?.schema,answers);
-      if (msg) return { ok:false as const, reason:msg };
-      const status = await client.query(`UPDATE hr_exit_interviews SET status='COMPLETED',completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND status IN ('PENDING','OPENED') AND expires_at>CURRENT_TIMESTAMP RETURNING id`,[row.id]);
-      if (!status.rowCount) return {ok:false as const,reason:'UNAVAILABLE'};
-      for (const [questionId,answer] of Object.entries(answers)) await client.query(`INSERT INTO hr_exit_interview_responses(interview_id,submission_id,question_id,answer) VALUES($1,$2,$3,$4::jsonb)`,[row.id,submissionId,questionId,JSON.stringify(answer)]);
-      return {ok:true as const};
-    });
+    const r = await executeSql(
+      `INSERT INTO hr_exit_interview_evaluations(
+        interview_id, interviewer_name, interview_date, interview_mode, reason_category,
+        regrettable_exit, rehire_eligibility, hr_observations, action_items, hr_signature, updated_by
+      ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)
+      ON CONFLICT(interview_id) DO UPDATE SET
+        interviewer_name = EXCLUDED.interviewer_name,
+        interview_date = EXCLUDED.interview_date,
+        interview_mode = EXCLUDED.interview_mode,
+        reason_category = EXCLUDED.reason_category,
+        regrettable_exit = EXCLUDED.regrettable_exit,
+        rehire_eligibility = EXCLUDED.rehire_eligibility,
+        hr_observations = EXCLUDED.hr_observations,
+        action_items = EXCLUDED.action_items,
+        hr_signature = EXCLUDED.hr_signature,
+        updated_by = EXCLUDED.updated_by,
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING *`,
+      [
+        interviewId,
+        data.interviewerName ?? null,
+        data.interviewDate ?? null,
+        data.interviewMode ?? null,
+        data.reasonCategory ?? null,
+        data.regrettableExit ?? null,
+        data.rehireEligibility ?? null,
+        data.hrObservations ?? null,
+        JSON.stringify(data.actionItems || []),
+        data.hrSignature ?? null,
+        actor,
+      ]
+    );
+    return r.rows[0];
   },
 };

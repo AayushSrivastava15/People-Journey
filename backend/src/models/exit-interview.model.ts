@@ -3,13 +3,31 @@ import { z } from 'zod';
 export const createExitInterviewSchema = z.object({
   employeeId: z.coerce.number().int().positive(),
   offboardingId: z.coerce.number().int().positive().optional(),
-  templateId: z.string().uuid(),
+  templateId: z.string().uuid().optional(),
   expiryDays: z.coerce.number().int().min(1).max(90).default(14),
   responseDueDate: z.string().nullable().optional(),
 }).strict();
 
 export const regenerateExitInterviewSchema = z.object({
   expiryDays: z.coerce.number().int().min(1).max(90).default(14),
+}).strict();
+
+export const updateTemplateDraftSchema = z.object({
+  name: z.string().trim().min(1, 'Template name is required').max(255).optional(),
+  description: z.string().trim().max(2000).nullable().optional(),
+  schema: z.object({
+    introduction: z.string().optional(),
+    sections: z.array(z.any()).min(1, 'At least one section is required'),
+  }),
+}).strict();
+
+export const publishTemplateSchema = z.object({
+  changeSummary: z.string().trim().max(1000).nullable().optional(),
+}).strict();
+
+export const publicSubmitExitInterviewSchema = z.object({
+  answers: z.record(z.unknown()),
+  metadata: z.record(z.unknown()).optional(),
 }).strict();
 
 export const googleFormsWebhookSchema = z.object({
@@ -27,6 +45,7 @@ export const listExitInterviewsSchema = z.object({
   employeeId: z.coerce.number().int().positive().optional(),
   status: z.enum(['PENDING', 'OPENED', 'COMPLETED', 'REVOKED', 'EXPIRED']).optional(),
   departmentId: z.coerce.number().int().positive().optional(),
+  search: z.string().trim().optional(),
   from: z.string().date().optional(),
   to: z.string().date().optional(),
 }).strict();

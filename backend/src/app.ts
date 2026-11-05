@@ -8,7 +8,7 @@ import { errorHandler } from './middleware/error-handler.js';
 import routes from './routes/index.js';
 import { env } from './config/env.js';
 
-import { resolveShortLink, handleGoogleFormsWebhook } from './controllers/exit-interview.controller.js';
+import { resolveShortLink } from './controllers/exit-interview.controller.js';
 
 const app: Express = express();
 
@@ -53,9 +53,19 @@ app.use(cookieParser());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-// Short URL direct redirect for departing employees
-app.get('/e/:code', resolveShortLink);
-app.post('/api/webhooks/google-forms', handleGoogleFormsWebhook);
+// Short URL direct resolver for departing employees (redirects browser hits to frontend hosted form)
+app.get('/e/:code', (req, res, next) => {
+  const code = encodeURIComponent(String(req.params.code || '').trim());
+  if (req.accepts(['html', 'json']) === 'html' || !req.headers.accept?.includes('application/json')) {
+    const frontendBase = (
+      env.FRONTEND_URL ||
+      env.CORS_ORIGIN ||
+      (env.NODE_ENV === 'production' ? 'https://people-journey-frontend.onrender.com' : 'http://localhost:3000')
+    ).replace(/\/$/, '');
+    return res.redirect(302, `${frontendBase}/e/${code}`);
+  }
+  return resolveShortLink(req, res);
+});
 
 app.use('/api', routes);
 

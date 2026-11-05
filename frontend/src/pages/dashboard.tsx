@@ -23,6 +23,8 @@ import { z } from 'zod';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { useAuth } from '@/context';
 import { CompanyProfileCard } from '@/components/company-profile-card';
+import { CompanyOnboardingBanner } from '@/components/company-onboarding-banner';
+import { TemplateEditorDialog } from '@/components/template-editor-dialog';
 import { EmailTemplatesView } from '@/components/email-templates-view';
 import { EmailNotificationsView } from '@/components/email-notifications-view';
 import { EmailDraftHistoryView } from '@/components/email-draft-history-view';
@@ -707,6 +709,8 @@ function NotificationTable({ rows }: { rows: WorkspaceNotificationItem[] }) {
 function Overview() {
   const [activityFilter, setActivityFilter] = useState('All');
   const [page, setPage] = useState(0);
+  const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
+  const [templateEditorMode, setTemplateEditorMode] = useState<'editor' | 'preview'>('editor');
   const today = dateFromToday(0);
 
   // Fetch live workspace stats & derived lifecycle data
@@ -754,6 +758,18 @@ function Overview() {
 
   return (
     <>
+      <div className="mb-4">
+        <CompanyOnboardingBanner
+          onOpenTemplateEditor={() => {
+            setTemplateEditorMode('editor');
+            setTemplateEditorOpen(true);
+          }}
+          onPreviewTemplate={() => {
+            setTemplateEditorMode('preview');
+            setTemplateEditorOpen(true);
+          }}
+        />
+      </div>
       <PageHeading
         eyebrow="Workspace Overview"
         title="Your People Overview"
@@ -924,6 +940,11 @@ function Overview() {
           </div>
         </div>
       </section>
+      <TemplateEditorDialog
+        open={templateEditorOpen}
+        onOpenChange={setTemplateEditorOpen}
+        initialMode={templateEditorMode}
+      />
     </>
   );
 }

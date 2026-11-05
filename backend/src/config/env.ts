@@ -25,6 +25,7 @@ export const env = {
   PORT: Number(process.env.PORT) || 5000,
   NODE_ENV: process.env.NODE_ENV || 'development',
   CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  FRONTEND_URL: process.env.FRONTEND_URL || process.env.CORS_ORIGIN || (process.env.NODE_ENV === 'production' ? 'https://people-journey-frontend.onrender.com' : 'http://localhost:3000'),
   PUBLIC_APP_URL: process.env.PUBLIC_APP_URL || (process.env.NODE_ENV === 'development' ? 'http://localhost:5000' : ''),
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
 

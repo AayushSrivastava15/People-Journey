@@ -1,6 +1,6 @@
 export type LifecycleStatus = 'Active' | 'Onboarding' | 'Offboarding' | 'Exited';
 export type NoticeStatus = 'Pending' | 'Processing' | 'Sent' | 'Failed' | 'Cancelled';
-export type AppRole = 'user';
+export type AppRole = 'user' | 'hr_staff' | 'hr_admin' | 'admin';
 
 export interface AppUser {
   id: string;
@@ -27,6 +27,7 @@ export interface Employee {
   lastName: string | null;
   name: string;
   workEmail: string | null;
+  personalEmail?: string | null;
   phone: string | null;
   departmentId: number | null;
   designationId: number | null;
@@ -61,6 +62,8 @@ export interface Department {
 export interface Designation {
   designationId: number;
   designationName: string;
+  departmentId?: number | null;
+  departmentName?: string | null;
   description: string | null;
 }
 
@@ -88,19 +91,23 @@ export interface DashboardStats {
 
 export interface UserNotificationItem {
   id: number;
-  userId: string;
+  userId?: string;
   title: string;
   message: string;
   type: 'offboarding' | 'onboarding' | 'exit_management' | 'info' | string;
   isRead: boolean;
   createdAt: string;
+  actionUrl?: string | null;
 }
 
 export interface UserNotificationsResponse {
   notifications: UserNotificationItem[];
   unreadCount: number;
-  total: number;
+  total?: number;
 }
+
+export type NotificationItem = UserNotificationItem;
+export type NotificationsResponse = UserNotificationsResponse;
 
 export interface PersonalDashboardData {
   user: {
@@ -145,67 +152,106 @@ export interface CreateEmployeePayload {
   workEmail?: string;
   personalEmail?: string;
   phone?: string;
-  departmentId?: number;
+  departmentId?: number | null;
   department?: string;
-  designationId?: number;
+  designationId?: number | null;
   designation?: string;
   manager?: string;
   employmentStatus?: string;
   hireDate: string;
   joiningDate?: string;
   exitDate?: string | null;
-  lastWorkingDay?: string | null;
+  lastWorkingDay?: string;
+  notes?: string;
 }
 
 export interface UpdateEmployeePayload {
   firstName?: string;
   lastName?: string;
   workEmail?: string;
+  personalEmail?: string;
   phone?: string;
   departmentId?: number | null;
   designationId?: number | null;
   employmentStatus?: string;
   hireDate?: string;
   exitDate?: string | null;
+  lastWorkingDay?: string;
+  notes?: string;
 }
 
 export interface OffboardEmployeePayload {
   plannedExitDate: string;
   lastWorkingDay?: string;
-  noticeDate?: string;
-  exitReason?: string;
-  notes?: string;
   contactEmail?: string;
+  reason?: string;
+  handoverNotes?: string;
+  notes?: string;
+  regrettable?: boolean;
 }
 
 export interface CompanyProfile {
   id: string;
   ownerUserId: string;
   companyName: string;
-  hrContactName?: string | null;
-  hrContactEmail?: string | null;
+  displayName?: string | null;
+  logoUrl?: string | null;
+  brandPrimaryColor?: string | null;
+  industry?: string | null;
+  companyWebsite?: string | null;
   companyAddress?: string | null;
   officeLocation?: string | null;
+  companyEmail?: string | null;
+  companyPhone?: string | null;
+  country?: string | null;
+  timezone?: string | null;
+  hrContactName?: string | null;
+  hrContactEmail?: string | null;
   hrContactPhone?: string | null;
+  departmentTeam?: string | null;
   defaultSenderName?: string | null;
   defaultEmailSignature?: string | null;
-  companyWebsite?: string | null;
-  departmentTeam?: string | null;
+  setupCompleted?: boolean;
+  setupStep?: number;
   createdAt?: string;
   updatedAt?: string;
 }
 
+export interface CompanyOnboardingStatus {
+  setupCompleted: boolean;
+  setupStep: number;
+  stepsCompleted: number;
+  totalSteps: number;
+  steps: {
+    details: boolean;
+    branding: boolean;
+    hrContact: boolean;
+    exitForm: boolean;
+  };
+  hasDefaultTemplate: boolean;
+}
+
 export interface UpsertCompanyProfileInput {
   companyName: string;
-  hrContactName?: string;
-  hrContactEmail?: string;
+  displayName?: string;
+  logoUrl?: string;
+  brandPrimaryColor?: string;
+  industry?: string;
+  companyWebsite?: string;
   companyAddress?: string;
   officeLocation?: string;
+  companyEmail?: string;
+  companyPhone?: string;
+  country?: string;
+  timezone?: string;
+  hrContactName?: string;
+  hrContactEmail?: string;
   hrContactPhone?: string;
+  departmentTeam?: string;
   defaultSenderName?: string;
   defaultEmailSignature?: string;
-  companyWebsite?: string;
-  departmentTeam?: string;
+  setupCompleted?: boolean;
+  setupStep?: number;
 }
 
 export type EmailTemplateCategory =
@@ -289,6 +335,20 @@ export interface PreviewDraftInput {
   customValues?: Record<string, string>;
 }
 
+export interface CreateDraftInput {
+  employeeId?: number;
+  candidateName?: string;
+  candidateEmail?: string;
+  templateId?: string | null;
+  lifecycleEvent?: string;
+  recipientEmail?: string;
+  recipientName?: string;
+  subjectSnapshot: string;
+  bodySnapshot: string;
+  status?: EmailDraftStatus;
+  customValues?: Record<string, string>;
+}
+
 export interface PreviewDraftResult {
   recipientEmail: string;
   recipientName: string;
@@ -298,21 +358,57 @@ export interface PreviewDraftResult {
   missingPlaceholders: string[];
   unresolvedPlaceholders: string[];
   hasCompanyProfile: boolean;
-  companyName?: string;
-}
-
-export interface CreateDraftInput {
-  employeeId?: number;
-  templateId?: string;
-  lifecycleEvent: string;
-  recipientEmail: string;
-  recipientName?: string;
-  subjectSnapshot: string;
-  bodySnapshot: string;
-  status?: EmailDraftStatus;
 }
 
 export type ExitInterviewStatus = 'PENDING' | 'OPENED' | 'COMPLETED' | 'REVOKED' | 'EXPIRED';
+
+export interface QuestionnaireMatrixRow {
+  id: string;
+  label: string;
+  required?: boolean;
+}
+
+export interface QuestionnaireQuestion {
+  id: string;
+  label: string;
+  description?: string;
+  type:
+    | 'text'
+    | 'textarea'
+    | 'email'
+    | 'phone'
+    | 'number'
+    | 'date'
+    | 'radio'
+    | 'checkbox'
+    | 'dropdown'
+    | 'rating'
+    | 'rating_matrix'
+    | 'declaration'
+    | 'yes_no';
+  required: boolean;
+  options?: string[];
+  min?: number;
+  max?: number;
+  minLabel?: string;
+  maxLabel?: string;
+  matrixRows?: QuestionnaireMatrixRow[];
+  placeholder?: string;
+  orderIndex?: number;
+}
+
+export interface QuestionnaireSection {
+  id: string;
+  title: string;
+  description?: string;
+  orderIndex?: number;
+  questions: QuestionnaireQuestion[];
+}
+
+export interface ExitQuestionnaireSchema {
+  introduction?: string;
+  sections: QuestionnaireSection[];
+}
 
 export interface ExitInterviewTemplate {
   id: string;
@@ -321,6 +417,22 @@ export interface ExitInterviewTemplate {
   version: number;
   isDefault: boolean;
   isSystemTemplate: boolean;
+}
+
+export interface CompanyExitTemplateDetail {
+  id: string;
+  name: string;
+  description: string | null;
+  version: number;
+  schema: ExitQuestionnaireSchema;
+  isDefault: boolean;
+  updatedAt: string;
+  versions: Array<{
+    id: string;
+    versionNumber: number;
+    changeSummary: string | null;
+    publishedAt: string;
+  }>;
 }
 
 export interface ExitInterviewRecord {
@@ -338,6 +450,7 @@ export interface ExitInterviewRecord {
   departmentName: string | null;
   designationName?: string | null;
   templateName: string;
+  templateVersion?: number;
   shortCode?: string | null;
   shortUrl?: string;
   publicUrl?: string;
@@ -345,24 +458,86 @@ export interface ExitInterviewRecord {
 }
 
 export interface ExitInterviewDetail extends ExitInterviewRecord {
-  template: { name: string; version: number; description?: string | null; schema?: ExitInterviewSchema };
+  template: { name: string; version: number; description?: string | null; schema?: ExitQuestionnaireSchema };
   workEmail: string | null;
   reopenedAt?: string | null;
-  googleFormResponseId?: string | null;
+  answersJson?: any;
   rawResponsePayload?: any;
 }
 
-export interface ExitInterviewQuestion {
+export interface ExitResponseQuestionDetail {
   id: string;
   label: string;
   type: string;
-  required?: boolean;
-  options?: string[];
+  matrixRows?: QuestionnaireMatrixRow[];
+  rawAnswer: any;
+  displayAnswer: string;
 }
 
-export interface ExitInterviewSchema {
-  introduction?: string;
-  sections?: Array<{ id: string; title: string; description?: string; questions: ExitInterviewQuestion[] }>;
+export interface ExitResponseSectionDetail {
+  id: string;
+  title: string;
+  description?: string;
+  questions: ExitResponseQuestionDetail[];
+}
+
+export interface ExitResponseDetail {
+  interviewId: string;
+  employee: {
+    id: number;
+    name: string;
+    code: string;
+    designation: string;
+    department: string;
+    hireDate: string;
+    exitDate: string;
+    workEmail?: string | null;
+  };
+  company: {
+    name: string;
+    logoUrl?: string | null;
+    brandPrimaryColor: string;
+  };
+  template: {
+    name: string;
+    version: number;
+  };
+  submissionDate: string | null;
+  sections: ExitResponseSectionDetail[];
+  rawAnswers: Record<string, any>;
+}
+
+export interface PublicFormPayload {
+  status: 'ACTIVE' | 'NOT_FOUND' | 'CANCELLED' | 'EXPIRED' | 'COMPLETED';
+  invitationId?: string;
+  shortCode?: string;
+  expiresAt?: string;
+  responseDueDate?: string | null;
+  company?: {
+    companyName: string;
+    displayName: string | null;
+    logoUrl: string | null;
+    brandPrimaryColor: string;
+    hrContactName: string | null;
+    hrContactEmail: string | null;
+    departmentTeam: string | null;
+    companyWebsite: string | null;
+  };
+  employee?: {
+    name: string;
+    employeeCode: string;
+    designation: string;
+    department: string;
+    hireDate: string | null;
+    exitDate: string | null;
+    workEmail: string | null;
+  };
+  template?: {
+    id: string;
+    name: string;
+    version: number;
+    schema: ExitQuestionnaireSchema;
+  };
 }
 
 export interface ExitInterviewLinkResult {
@@ -373,17 +548,17 @@ export interface ExitInterviewLinkResult {
   token: string;
   shortCode?: string;
   shortUrl?: string;
-  responseDueDate?: string | null;
 }
 
 export interface ExitInterviewResponse {
-  submissionId: string;
+  id: string;
   questionId: string;
-  answer: unknown;
+  answer: any;
   submittedAt: string;
 }
 
 export interface ExitInterviewEvaluation {
+  interviewId?: string;
   interviewerName?: string | null;
   interviewDate?: string | null;
   interviewMode?: 'in_person' | 'video' | 'phone' | 'other' | null;
@@ -393,6 +568,6 @@ export interface ExitInterviewEvaluation {
   hrObservations?: string | null;
   actionItems?: string[];
   hrSignature?: string | null;
+  updatedBy?: string | null;
   updatedAt?: string;
 }
-

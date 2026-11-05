@@ -12,6 +12,7 @@ import type {
   UpdateEmployeePayload,
   OffboardEmployeePayload,
   CompanyProfile,
+  CompanyOnboardingStatus,
   UpsertCompanyProfileInput,
   EmailTemplate,
   CreateEmailTemplateInput,
@@ -22,8 +23,11 @@ import type {
   CreateDraftInput,
   EmailDraftStatus,
   ExitInterviewTemplate,
+  CompanyExitTemplateDetail,
+  ExitQuestionnaireSchema,
   ExitInterviewRecord,
   ExitInterviewDetail,
+  ExitResponseDetail,
   ExitInterviewLinkResult,
   ExitInterviewResponse,
   ExitInterviewEvaluation,
@@ -40,11 +44,14 @@ export const QUERY_KEYS = {
   departments: ['departments'] as const,
   designations: ['designations'] as const,
   companyProfile: ['company-profile'] as const,
+  companyOnboardingStatus: ['company-profile', 'onboarding-status'] as const,
   emailTemplates: (category?: string) => ['email-templates', category || 'all'] as const,
   emailDrafts: (params?: Record<string, unknown>) => ['email-drafts', params || {}] as const,
   exitInterviewTemplates: ['exit-interviews', 'templates'] as const,
+  companyExitTemplate: ['exit-interviews', 'company-template'] as const,
   exitInterviews: (params?: Record<string, unknown>) => ['exit-interviews', params || {}] as const,
   exitInterview: (id: string) => ['exit-interviews', id] as const,
+  exitResponseDetail: (id: string) => ['exit-interviews', 'responses', id] as const,
   notifications: ['notifications'] as const,
 };
 
@@ -143,6 +150,72 @@ export function useExitInterviewTemplates() {
   return useQuery({
     queryKey: QUERY_KEYS.exitInterviewTemplates,
     queryFn: async () => (await apiClient<{ success: boolean; data: ExitInterviewTemplate[] }>('/exit-interviews/templates')).data,
+  });
+}
+
+export function useCompanyExitTemplate() {
+  return useQuery({
+    queryKey: QUERY_KEYS.companyExitTemplate,
+    queryFn: async () => {
+      const res = await apiClient<{ success: boolean; data: CompanyExitTemplateDetail }>('/exit-interviews/template');
+      return res.data;
+    },
+    staleTime: 30000,
+  });
+}
+
+export function useUpdateTemplateDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { name?: string; description?: string | null; schema: ExitQuestionnaireSchema }) =>
+      (await apiClient<{ success: boolean; data: any }>('/exit-interviews/template', {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      })).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.companyExitTemplate });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.exitInterviewTemplates });
+    },
+  });
+}
+
+export function usePublishTemplate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { changeSummary?: string | null }) =>
+      (await apiClient<{ success: boolean; data: any }>('/exit-interviews/template/publish', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.companyExitTemplate });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.exitInterviewTemplates });
+    },
+  });
+}
+
+export function useResetTemplateToDefault() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () =>
+      (await apiClient<{ success: boolean; data: CompanyExitTemplateDetail }>('/exit-interviews/template/reset-default', {
+        method: 'POST',
+      })).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.companyExitTemplate });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.exitInterviewTemplates });
+    },
+  });
+}
+
+export function useExitResponseDetail(interviewId?: string) {
+  return useQuery({
+    queryKey: QUERY_KEYS.exitResponseDetail(interviewId || ''),
+    enabled: !!interviewId,
+    queryFn: async () => {
+      const res = await apiClient<{ success: boolean; data: ExitResponseDetail }>(`/exit-interviews/responses/${interviewId}`);
+      return res.data;
+    },
   });
 }
 
@@ -389,6 +462,17 @@ export function useCompanyProfile() {
   });
 }
 
+export function useCompanyOnboardingStatus() {
+  return useQuery({
+    queryKey: QUERY_KEYS.companyOnboardingStatus,
+    queryFn: async () => {
+      const res = await apiClient<{ success: boolean; data: CompanyOnboardingStatus }>('/company-profile/onboarding-status');
+      return res.data;
+    },
+    staleTime: 30000,
+  });
+}
+
 export function useUpdateCompanyProfile() {
   const queryClient = useQueryClient();
 
@@ -400,6 +484,9 @@ export function useUpdateCompanyProfile() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.companyProfile });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.companyOnboardingStatus });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.companyExitTemplate });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.exitInterviewTemplates });
     },
   });
 }
