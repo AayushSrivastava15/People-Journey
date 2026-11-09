@@ -245,7 +245,7 @@ function invalidateExitInterviews(queryClient: ReturnType<typeof useQueryClient>
 export function useCreateExitInterview() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (payload: { employeeId: number; offboardingId?: number; templateId: string; expiryDays: number; responseDueDate?: string | null }) =>
+    mutationFn: async (payload: { employeeId: number; offboardingId?: number; templateId?: string; expiryDays: number; responseDueDate?: string | null }) =>
       (await apiClient<{ success: boolean; data: ExitInterviewLinkResult }>('/exit-interviews', { method: 'POST', body: JSON.stringify(payload) })).data,
     onSuccess: () => invalidateExitInterviews(queryClient),
   });
@@ -320,7 +320,7 @@ export function useUpdateUserProfile() {
 
   return useMutation({
     mutationFn: (payload: { displayName?: string; photoUrl?: string; preferences?: Record<string, unknown> }) =>
-      apiClient<{ success: boolean; data: AppUser }>('/users/me', {
+      apiClient<{ success: boolean; data: AppUser }>('/auth/me', {
         method: 'PATCH',
         body: JSON.stringify(payload),
       }),

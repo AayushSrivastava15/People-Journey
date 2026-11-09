@@ -25,6 +25,7 @@ import type {
   QuestionnaireQuestion,
   QuestionnaireSection,
 } from '@/types/api';
+import { DatePicker } from '@/components/ui/date-picker';
 import { buildApiUrl } from '@/api/client';
 
 interface ResolveData {
@@ -786,23 +787,30 @@ export function ShortLinkRedirectPage() {
                             <label className="block text-xs font-semibold text-stone-700 mb-1">
                               Date of Signature
                             </label>
-                            <input
-                              type="date"
+                            <DatePicker
                               value={value?.date || new Date().toISOString().slice(0, 10)}
-                              onChange={e =>
+                              onChange={newDate =>
                                 updateAnswer(q.id, {
                                   ...value,
-                                  date: e.target.value,
+                                  date: newDate,
                                 })
                               }
-                              className="w-full text-xs p-2.5 rounded-lg border border-stone-200 bg-white outline-none focus:border-[#59424f]"
+                              placeholder="Select signature date"
+                              className="w-full text-xs"
                             />
                           </div>
                         </div>
                       </div>
+                    ) : q.type === 'date' ? (
+                      <DatePicker
+                        value={value || ''}
+                        onChange={newDate => updateAnswer(q.id, newDate)}
+                        placeholder={q.placeholder || 'Select date'}
+                        className="w-full text-xs"
+                      />
                     ) : (
                       <input
-                        type={q.type === 'email' ? 'email' : q.type === 'date' ? 'date' : 'text'}
+                        type={q.type === 'email' ? 'email' : 'text'}
                         value={value || ''}
                         onChange={e => updateAnswer(q.id, e.target.value)}
                         placeholder={q.placeholder || 'Type your answer...'}

@@ -8,7 +8,6 @@ import {
   User,
   Check,
   Loader2,
-  Sparkles,
   AlertCircle,
   Palette,
   FileText,
@@ -20,9 +19,13 @@ import {
   Image as ImageIcon,
   Trash2,
   Link2,
+  X,
+  Sparkles,
 } from 'lucide-react';
 import { useCompanyProfile, useUpdateCompanyProfile, useCompanyOnboardingStatus } from '@/api/queries';
 import { useToast } from '@/hooks/use-toast';
+import { CompanyProfileOverview } from '@/components/company-profile-overview';
+import { TimezoneSelect, getBrowserTimezone } from '@/components/ui/timezone-select';
 
 interface CompanyProfileCardProps {
   onOpenTemplateEditor?: () => void;
@@ -31,21 +34,16 @@ interface CompanyProfileCardProps {
 
 const PRESET_COLORS = ['#59424f', '#2563eb', '#0d9488', '#4f46e5', '#7c3aed', '#b91c1c', '#ea580c', '#334155'];
 
-const TIMEZONES = [
-  'UTC',
-  'America/New_York',
-  'America/Chicago',
-  'America/Denver',
-  'America/Los_Angeles',
-  'Europe/London',
-  'Europe/Berlin',
-  'Europe/Paris',
-  'Asia/Dubai',
-  'Asia/Kolkata',
-  'Asia/Singapore',
-  'Asia/Tokyo',
-  'Australia/Sydney',
-];
+export type TabKey = 'details' | 'branding' | 'hr' | 'exit';
+
+const FIELD_TO_TAB: Record<string, { tab: TabKey; tabLabel: string; fieldLabel: string }> = {
+  companyName: { tab: 'details', tabLabel: '1. Company Details', fieldLabel: 'Company Legal Name' },
+  companyEmail: { tab: 'details', tabLabel: '1. Company Details', fieldLabel: 'Company Email' },
+  companyWebsite: { tab: 'details', tabLabel: '1. Company Details', fieldLabel: 'Company Website' },
+  brandPrimaryColor: { tab: 'branding', tabLabel: '2. Branding', fieldLabel: 'Brand Primary Color' },
+  hrContactName: { tab: 'hr', tabLabel: '3. HR Contact', fieldLabel: 'HR Contact Name' },
+  hrContactEmail: { tab: 'hr', tabLabel: '3. HR Contact', fieldLabel: 'HR Contact Email' },
+};
 
 export function CompanyProfileCard({
   onOpenTemplateEditor,
@@ -57,6 +55,7 @@ export function CompanyProfileCard({
   const { toast } = useToast();
 
   const [activeTab, setActiveTab] = useState<'details' | 'branding' | 'hr' | 'exit'>('details');
+  const [isEditing, setIsEditing] = useState(false);
 
   const [formData, setFormData] = useState({
     companyName: '',
@@ -82,6 +81,40 @@ export function CompanyProfileCard({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [isProcessingImage, setIsProcessingImage] = useState(false);
+
+  // Sync profile when loaded
+  useEffect(() => {
+    if (profile) {
+      setFormData({
+        companyName: profile.companyName || '',
+        displayName: profile.displayName || profile.companyName || '',
+        logoUrl: profile.logoUrl || '',
+        brandPrimaryColor: profile.brandPrimaryColor || '#59424f',
+        industry: profile.industry || '',
+        companyWebsite: profile.companyWebsite || '',
+        companyAddress: profile.companyAddress || '',
+        officeLocation: profile.officeLocation || profile.companyAddress || '',
+        companyEmail: profile.companyEmail || '',
+        companyPhone: profile.companyPhone || '',
+        country: profile.country || '',
+        timezone: profile.timezone || getBrowserTimezone(),
+        hrContactName: profile.hrContactName || '',
+        hrContactEmail: profile.hrContactEmail || '',
+        hrContactPhone: profile.hrContactPhone || '',
+        departmentTeam: profile.departmentTeam || '',
+        defaultSenderName: profile.defaultSenderName || profile.hrContactName || '',
+        defaultEmailSignature: profile.defaultEmailSignature || '',
+      });
+    } else {
+      // For a brand new workspace, initialize timezone with browser timezone
+      setFormData(prev => ({ ...prev, timezone: getBrowserTimezone() }));
+    }
+  }, [profile]);
+
+  // Determine if setup is complete
+  const isConfigured = Boolean(
+    profile && (profile.setupCompleted || (profile.companyName && profile.hrContactEmail))
+  );
 
   const processAndSetImage = (file: File) => {
     if (!file.type.startsWith('image/')) {
@@ -179,8 +212,88 @@ export function CompanyProfileCard({
     }
   };
 
-  useEffect(() => {
+  const runValidation = (dataToValidate = formData) => {
+    const newErrors: Record<string, string> = {};
+
+    // 1. Company Legal Name is required
+    if (!dataToValidate.companyName.trim()) {
+      newErrors.companyName = 'Company legal name is required.';
+    }
+
+    // 2. Company Email (optional, but must be valid format if entered)
+    const compEmail = dataToValidate.companyEmail.trim();
+    if (compEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(compEmail)) {
+      newErrors.companyEmail = 'Enter a valid company email address (e.g. contact@company.com).';
+    }
+
+    // 3. Company Website (optional, but must be valid URL if entered)
+    const website = dataToValidate.companyWebsite.trim();
+    if (website) {
+      try {
+        const urlToTest = /^https?:\/\//i.test(website) ? website : `https://${website}`;
+        new URL(urlToTest);
+      } catch {
+        newErrors.companyWebsite = 'Enter a valid website URL (e.g. https://company.com).';
+      }
+    }
+
+    // 4. Brand Primary Color (must be a valid hex code)
+    let color = dataToValidate.brandPrimaryColor.trim();
+    if (color && !color.startsWith('#') && /^[A-Fa-f0-9]{3,8}$/.test(color)) {
+      color = '#' + color;
+    }
+    if (color && !/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3}|[A-Fa-f0-9]{8})$/.test(color)) {
+      newErrors.brandPrimaryColor = 'Enter a valid hex color code (e.g. #59424f).';
+    }
+
+    // 5. HR Contact Email (optional, but must be valid format if entered)
+    const hrEmail = dataToValidate.hrContactEmail.trim();
+    if (hrEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(hrEmail)) {
+      newErrors.hrContactEmail = 'Enter a valid HR contact email (e.g. hr@company.com).';
+    }
+
+    setErrors(newErrors);
+
+    const firstErrorField = Object.keys(newErrors)[0];
+    const firstErrorTab = firstErrorField ? FIELD_TO_TAB[firstErrorField]?.tab : undefined;
+
+    return {
+      isValid: Object.keys(newErrors).length === 0,
+      errors: newErrors,
+      firstErrorField,
+      firstErrorTab,
+    };
+  };
+
+  const validate = () => {
+    return runValidation().isValid;
+  };
+
+  const validateStep = (tab: TabKey): boolean => {
+    const result = runValidation();
+    const stepErrors = Object.keys(result.errors).filter(k => FIELD_TO_TAB[k]?.tab === tab);
+    if (stepErrors.length > 0) {
+      const msgs = stepErrors.map(k => `${FIELD_TO_TAB[k]?.fieldLabel}: ${result.errors[k]}`);
+      toast({
+        variant: 'destructive',
+        title: `Validation Error on ${FIELD_TO_TAB[stepErrors[0]]?.tabLabel || 'this step'}`,
+        description: msgs.join(' · '),
+      });
+      return false;
+    }
+    return true;
+  };
+
+  const tabErrors = {
+    details: Object.keys(errors).filter(k => FIELD_TO_TAB[k]?.tab === 'details').length,
+    branding: Object.keys(errors).filter(k => FIELD_TO_TAB[k]?.tab === 'branding').length,
+    hr: Object.keys(errors).filter(k => FIELD_TO_TAB[k]?.tab === 'hr').length,
+    exit: 0,
+  };
+
+  const handleCancelEdit = () => {
     if (profile) {
+      // Revert to saved profile
       setFormData({
         companyName: profile.companyName || '',
         displayName: profile.displayName || profile.companyName || '',
@@ -202,65 +315,83 @@ export function CompanyProfileCard({
         defaultEmailSignature: profile.defaultEmailSignature || '',
       });
     }
-  }, [profile]);
-
-  const validate = () => {
-    const newErrors: Record<string, string> = {};
-    if (!formData.companyName.trim()) {
-      newErrors.companyName = 'Company legal name is required';
-    }
-    if (formData.companyEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.companyEmail)) {
-      newErrors.companyEmail = 'Invalid company email format';
-    }
-    if (formData.hrContactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.hrContactEmail)) {
-      newErrors.hrContactEmail = 'Invalid HR contact email format';
-    }
-    if (formData.brandPrimaryColor && !/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/.test(formData.brandPrimaryColor)) {
-      newErrors.brandPrimaryColor = 'Color must be a valid hex code (e.g. #59424f)';
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    setErrors({});
+    setIsEditing(false);
   };
 
   const handleSave = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!validate()) {
+
+    // Auto-normalize website URL protocol if missing
+    let normalizedWebsite = formData.companyWebsite.trim();
+    if (normalizedWebsite && !/^https?:\/\//i.test(normalizedWebsite) && !normalizedWebsite.includes('://')) {
+      normalizedWebsite = 'https://' + normalizedWebsite;
+    }
+
+    // Auto-normalize brandPrimaryColor '#' prefix if missing
+    let normalizedColor = formData.brandPrimaryColor.trim();
+    if (normalizedColor && !normalizedColor.startsWith('#') && /^[A-Fa-f0-9]{3,8}$/.test(normalizedColor)) {
+      normalizedColor = '#' + normalizedColor;
+    }
+
+    const payload = {
+      ...formData,
+      companyWebsite: normalizedWebsite,
+      brandPrimaryColor: normalizedColor,
+    };
+
+    setFormData(payload);
+
+    const result = runValidation(payload);
+    if (!result.isValid) {
+      // Automatically switch to the tab that has the first error so user sees the problem!
+      if (result.firstErrorTab) {
+        setActiveTab(result.firstErrorTab);
+      }
+
+      const errorItems = Object.entries(result.errors).map(([field, msg]) => {
+        const info = FIELD_TO_TAB[field];
+        return `${info ? info.fieldLabel : field}: ${msg}`;
+      });
+
       toast({
         variant: 'destructive',
-        title: 'Validation Error',
-        description: 'Please correct the highlighted fields before saving.',
+        title: `Validation Error (${errorItems.length} ${errorItems.length === 1 ? 'issue' : 'issues'})`,
+        description: errorItems.join(' · '),
       });
       return;
     }
 
     try {
       await updateMutation.mutateAsync({
-        companyName: formData.companyName.trim(),
-        displayName: formData.displayName.trim() || undefined,
-        logoUrl: formData.logoUrl.trim() || undefined,
-        brandPrimaryColor: formData.brandPrimaryColor.trim() || '#59424f',
-        industry: formData.industry.trim() || undefined,
-        companyWebsite: formData.companyWebsite.trim() || undefined,
-        companyAddress: formData.companyAddress.trim() || undefined,
-        officeLocation: formData.officeLocation.trim() || undefined,
-        companyEmail: formData.companyEmail.trim() || undefined,
-        companyPhone: formData.companyPhone.trim() || undefined,
-        country: formData.country.trim() || undefined,
-        timezone: formData.timezone || 'UTC',
-        hrContactName: formData.hrContactName.trim() || undefined,
-        hrContactEmail: formData.hrContactEmail.trim() || undefined,
-        hrContactPhone: formData.hrContactPhone.trim() || undefined,
-        departmentTeam: formData.departmentTeam.trim() || undefined,
-        defaultSenderName: formData.defaultSenderName.trim() || formData.hrContactName.trim() || undefined,
-        defaultEmailSignature: formData.defaultEmailSignature.trim() || undefined,
+        companyName: payload.companyName.trim(),
+        displayName: payload.displayName.trim() || undefined,
+        logoUrl: payload.logoUrl.trim() || undefined,
+        brandPrimaryColor: payload.brandPrimaryColor.trim() || '#59424f',
+        industry: payload.industry.trim() || undefined,
+        companyWebsite: payload.companyWebsite.trim() || undefined,
+        companyAddress: payload.companyAddress.trim() || undefined,
+        officeLocation: payload.officeLocation.trim() || undefined,
+        companyEmail: payload.companyEmail.trim() || undefined,
+        companyPhone: payload.companyPhone.trim() || undefined,
+        country: payload.country.trim() || undefined,
+        timezone: payload.timezone || 'UTC',
+        hrContactName: payload.hrContactName.trim() || undefined,
+        hrContactEmail: payload.hrContactEmail.trim() || undefined,
+        hrContactPhone: payload.hrContactPhone.trim() || undefined,
+        departmentTeam: payload.departmentTeam.trim() || undefined,
+        defaultSenderName: payload.defaultSenderName.trim() || payload.hrContactName.trim() || undefined,
+        defaultEmailSignature: payload.defaultEmailSignature.trim() || undefined,
         setupCompleted: true,
       });
 
+      setErrors({});
       toast({
         title: 'Company Workspace Saved',
         description: 'Your company details and branding will now dynamically personalize employee exit forms.',
       });
+
+      setIsEditing(false);
     } catch (err) {
       toast({
         variant: 'destructive',
@@ -279,93 +410,166 @@ export function CompanyProfileCard({
     );
   }
 
+  // STATE B: If setup completed and not currently in edit mode -> Render compact overview card!
+  if (isConfigured && !isEditing && profile) {
+    return (
+      <CompanyProfileOverview
+        profile={profile}
+        onEdit={() => setIsEditing(true)}
+        onOpenTemplateEditor={onOpenTemplateEditor}
+        onPreviewTemplate={onPreviewTemplate}
+      />
+    );
+  }
+
+  // STATE A or EDIT MODE: Render full 4-step configuration editor with responsive navigation
   return (
-    <div className="bg-white rounded-3xl border border-[#eadfe0] shadow-sm overflow-hidden mb-8">
-      {/* Header */}
+    <div className="bg-white rounded-3xl border border-[#eadfe0] shadow-xs overflow-hidden mb-8 transition-all">
+      {/* Header Bar */}
       <div className="p-6 md:p-8 bg-[#faf4f6] border-b border-[#f0e4e7] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <span className="text-xs font-bold uppercase tracking-wider text-[#935269]">
-            Company Configuration
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold uppercase tracking-wider text-[#935269]">
+              Company Configuration
+            </span>
+            {isConfigured && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#ebdada] text-[#59424f]">
+                Editing Mode
+              </span>
+            )}
+          </div>
           <h2 className="text-xl md:text-2xl font-bold text-[#3d2f38] mt-0.5">
             {formData.displayName || formData.companyName || 'Company Workspace Settings'}
           </h2>
           <p className="text-xs md:text-sm text-[#72616c] mt-1">
-            Manage your company details, brand appearance, HR contacts, and hosted feedback questionnaires.
+            Configure your company profile, brand appearance, HR contacts, and hosted feedback questionnaires.
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => handleSave()}
-          disabled={updateMutation.isPending}
-          className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-[#59424f] hover:bg-[#46333e] text-white text-xs font-semibold shadow-sm transition-all shrink-0 disabled:opacity-50"
-        >
-          {updateMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-          <span>Save Changes</span>
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
+          {isConfigured && (
+            <button
+              type="button"
+              onClick={handleCancelEdit}
+              disabled={updateMutation.isPending}
+              className="px-4 py-2.5 rounded-xl border border-[#ebdce1] bg-white hover:bg-stone-50 text-[#3d2f38] text-xs font-semibold shadow-2xs transition-all"
+            >
+              Cancel
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => handleSave()}
+            disabled={updateMutation.isPending}
+            className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-[#59424f] hover:bg-[#46333e] text-white text-xs font-semibold shadow-sm transition-all disabled:opacity-50"
+          >
+            {updateMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+            <span>Save Changes</span>
+          </button>
+        </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex border-b border-[#f0e4e7] bg-[#fffafb] px-6 overflow-x-auto">
-        <button
-          type="button"
-          onClick={() => setActiveTab('details')}
-          className={`py-3.5 px-4 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all shrink-0 ${
-            activeTab === 'details'
-              ? 'border-[#bd7b92] text-[#8c5369]'
-              : 'border-transparent text-[#72616c] hover:text-[#3d2f38]'
-          }`}
-        >
-          <Building2 size={15} />
-          <span>Step 1: Company Details</span>
-        </button>
+      {/* Responsive Stepper Navigation */}
+      <div className="border-b border-[#f0e4e7] bg-[#fffafb] px-4 sm:px-6">
+        <div className="flex flex-wrap items-center gap-1 sm:gap-2 py-2">
+          <button
+            type="button"
+            onClick={() => setActiveTab('details')}
+            className={`py-2 px-3 sm:px-4 text-xs font-semibold rounded-xl flex items-center gap-2 transition-all ${
+              activeTab === 'details'
+                ? 'bg-[#f4e6ec] text-[#8c5369] shadow-2xs font-bold'
+                : 'text-[#72616c] hover:text-[#3d2f38] hover:bg-stone-50'
+            } ${tabErrors.details > 0 ? 'ring-1 ring-rose-300 bg-rose-50/50 text-rose-800' : ''}`}
+          >
+            <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+              tabErrors.details > 0
+                ? 'bg-rose-500 text-white'
+                : activeTab === 'details'
+                ? 'bg-[#8c5369] text-white'
+                : 'bg-stone-200 text-stone-600'
+            }`}>
+              {tabErrors.details > 0 ? '!' : '1'}
+            </div>
+            <span>Company Details</span>
+            {tabErrors.details > 0 && (
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" title={`${tabErrors.details} field requires attention`} />
+            )}
+          </button>
 
-        <button
-          type="button"
-          onClick={() => setActiveTab('branding')}
-          className={`py-3.5 px-4 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all shrink-0 ${
-            activeTab === 'branding'
-              ? 'border-[#bd7b92] text-[#8c5369]'
-              : 'border-transparent text-[#72616c] hover:text-[#3d2f38]'
-          }`}
-        >
-          <Palette size={15} />
-          <span>Step 2: Company Branding</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('branding')}
+            className={`py-2 px-3 sm:px-4 text-xs font-semibold rounded-xl flex items-center gap-2 transition-all ${
+              activeTab === 'branding'
+                ? 'bg-[#f4e6ec] text-[#8c5369] shadow-2xs font-bold'
+                : 'text-[#72616c] hover:text-[#3d2f38] hover:bg-stone-50'
+            } ${tabErrors.branding > 0 ? 'ring-1 ring-rose-300 bg-rose-50/50 text-rose-800' : ''}`}
+          >
+            <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+              tabErrors.branding > 0
+                ? 'bg-rose-500 text-white'
+                : activeTab === 'branding'
+                ? 'bg-[#8c5369] text-white'
+                : 'bg-stone-200 text-stone-600'
+            }`}>
+              {tabErrors.branding > 0 ? '!' : '2'}
+            </div>
+            <span>Branding</span>
+            {tabErrors.branding > 0 && (
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" title={`${tabErrors.branding} field requires attention`} />
+            )}
+          </button>
 
-        <button
-          type="button"
-          onClick={() => setActiveTab('hr')}
-          className={`py-3.5 px-4 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all shrink-0 ${
-            activeTab === 'hr'
-              ? 'border-[#bd7b92] text-[#8c5369]'
-              : 'border-transparent text-[#72616c] hover:text-[#3d2f38]'
-          }`}
-        >
-          <User size={15} />
-          <span>Step 3: HR Contact Details</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('hr')}
+            className={`py-2 px-3 sm:px-4 text-xs font-semibold rounded-xl flex items-center gap-2 transition-all ${
+              activeTab === 'hr'
+                ? 'bg-[#f4e6ec] text-[#8c5369] shadow-2xs font-bold'
+                : 'text-[#72616c] hover:text-[#3d2f38] hover:bg-stone-50'
+            } ${tabErrors.hr > 0 ? 'ring-1 ring-rose-300 bg-rose-50/50 text-rose-800' : ''}`}
+          >
+            <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+              tabErrors.hr > 0
+                ? 'bg-rose-500 text-white'
+                : activeTab === 'hr'
+                ? 'bg-[#8c5369] text-white'
+                : 'bg-stone-200 text-stone-600'
+            }`}>
+              {tabErrors.hr > 0 ? '!' : '3'}
+            </div>
+            <span>HR Contact</span>
+            {tabErrors.hr > 0 && (
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" title={`${tabErrors.hr} field requires attention`} />
+            )}
+          </button>
 
-        <button
-          type="button"
-          onClick={() => setActiveTab('exit')}
-          className={`py-3.5 px-4 text-xs font-semibold flex items-center gap-2 border-b-2 transition-all shrink-0 ${
-            activeTab === 'exit'
-              ? 'border-[#bd7b92] text-[#8c5369]'
-              : 'border-transparent text-[#72616c] hover:text-[#3d2f38]'
-          }`}
-        >
-          <FileText size={15} />
-          <span>Step 4: Exit Feedback Setup</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('exit')}
+            className={`py-2 px-3 sm:px-4 text-xs font-semibold rounded-xl flex items-center gap-2 transition-all ${
+              activeTab === 'exit'
+                ? 'bg-[#f4e6ec] text-[#8c5369] shadow-2xs font-bold'
+                : 'text-[#72616c] hover:text-[#3d2f38] hover:bg-stone-50'
+            }`}
+          >
+            <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+              activeTab === 'exit' ? 'bg-[#8c5369] text-white' : 'bg-stone-200 text-stone-600'
+            }`}>
+              4
+            </div>
+            <span>Exit Feedback Form</span>
+          </button>
+        </div>
       </div>
 
       {/* Tab Panels */}
       <form onSubmit={handleSave} className="p-6 md:p-8">
+        {/* Step 1: Company Details */}
         {activeTab === 'details' && (
           <div className="space-y-6 max-w-4xl">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 sm:gap-6">
               <div>
                 <label className="block text-xs font-bold text-[#3d2f38] mb-1.5">
                   Company Legal Name <span className="text-rose-500">*</span>
@@ -375,14 +579,22 @@ export function CompanyProfileCard({
                   <input
                     type="text"
                     value={formData.companyName}
-                    onChange={e => setFormData({ ...formData, companyName: e.target.value })}
+                    onChange={e => {
+                      setFormData({ ...formData, companyName: e.target.value });
+                      if (errors.companyName) setErrors(prev => ({ ...prev, companyName: '' }));
+                    }}
                     placeholder="e.g. Infravision Transmission Solutions Pvt. Ltd."
                     className={`w-full pl-10 pr-4 py-2.5 rounded-xl border text-xs text-[#3d2f38] focus:outline-none transition-colors ${
                       errors.companyName ? 'border-rose-400 bg-rose-50/30' : 'border-[#e5d4d9] focus:border-[#bd7b92]'
                     }`}
                   />
                 </div>
-                {errors.companyName && <p className="text-[11px] text-rose-500 mt-1">{errors.companyName}</p>}
+                {errors.companyName && (
+                  <p className="text-[11px] text-rose-500 mt-1 flex items-center gap-1">
+                    <AlertCircle size={12} />
+                    {errors.companyName}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -401,13 +613,30 @@ export function CompanyProfileCard({
                 <div className="relative">
                   <Globe size={16} className="absolute left-3.5 top-3 text-[#a8959d]" />
                   <input
-                    type="url"
+                    type="text"
                     value={formData.companyWebsite}
-                    onChange={e => setFormData({ ...formData, companyWebsite: e.target.value })}
+                    onChange={e => {
+                      setFormData({ ...formData, companyWebsite: e.target.value });
+                      if (errors.companyWebsite) setErrors(prev => ({ ...prev, companyWebsite: '' }));
+                    }}
+                    onBlur={() => {
+                      const site = formData.companyWebsite.trim();
+                      if (site && !/^https?:\/\//i.test(site) && !site.includes('://')) {
+                        setFormData(prev => ({ ...prev, companyWebsite: `https://${site}` }));
+                      }
+                    }}
                     placeholder="https://example.com"
-                    className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-[#e5d4d9] text-xs text-[#3d2f38] focus:outline-none focus:border-[#bd7b92]"
+                    className={`w-full pl-10 pr-4 py-2.5 rounded-xl border text-xs text-[#3d2f38] focus:outline-none transition-colors ${
+                      errors.companyWebsite ? 'border-rose-400 bg-rose-50/30' : 'border-[#e5d4d9] focus:border-[#bd7b92]'
+                    }`}
                   />
                 </div>
+                {errors.companyWebsite && (
+                  <p className="text-[11px] text-rose-500 mt-1 flex items-center gap-1">
+                    <AlertCircle size={12} />
+                    {errors.companyWebsite}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -417,12 +646,22 @@ export function CompanyProfileCard({
                   <input
                     type="email"
                     value={formData.companyEmail}
-                    onChange={e => setFormData({ ...formData, companyEmail: e.target.value })}
+                    onChange={e => {
+                      setFormData({ ...formData, companyEmail: e.target.value });
+                      if (errors.companyEmail) setErrors(prev => ({ ...prev, companyEmail: '' }));
+                    }}
                     placeholder="contact@company.com"
-                    className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-[#e5d4d9] text-xs text-[#3d2f38] focus:outline-none focus:border-[#bd7b92]"
+                    className={`w-full pl-10 pr-4 py-2.5 rounded-xl border text-xs text-[#3d2f38] focus:outline-none transition-colors ${
+                      errors.companyEmail ? 'border-rose-400 bg-rose-50/30' : 'border-[#e5d4d9] focus:border-[#bd7b92]'
+                    }`}
                   />
                 </div>
-                {errors.companyEmail && <p className="text-[11px] text-rose-500 mt-1">{errors.companyEmail}</p>}
+                {errors.companyEmail && (
+                  <p className="text-[11px] text-rose-500 mt-1 flex items-center gap-1">
+                    <AlertCircle size={12} />
+                    {errors.companyEmail}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -450,19 +689,13 @@ export function CompanyProfileCard({
                 />
               </div>
 
+              {/* Styled Timezone Select */}
               <div>
                 <label className="block text-xs font-bold text-[#3d2f38] mb-1.5">Time Zone</label>
-                <select
+                <TimezoneSelect
                   value={formData.timezone}
-                  onChange={e => setFormData({ ...formData, timezone: e.target.value })}
-                  className="w-full px-4 py-2.5 rounded-xl border border-[#e5d4d9] text-xs text-[#3d2f38] focus:outline-none focus:border-[#bd7b92] bg-white"
-                >
-                  {TIMEZONES.map(tz => (
-                    <option key={tz} value={tz}>
-                      {tz}
-                    </option>
-                  ))}
-                </select>
+                  onChange={tz => setFormData({ ...formData, timezone: tz })}
+                />
               </div>
 
               <div>
@@ -494,8 +727,10 @@ export function CompanyProfileCard({
             <div className="flex justify-end pt-4">
               <button
                 type="button"
-                onClick={() => setActiveTab('branding')}
-                className="px-5 py-2.5 rounded-xl bg-[#59424f] hover:bg-[#46333e] text-white text-xs font-semibold transition-colors"
+                onClick={() => {
+                  if (validateStep('details')) setActiveTab('branding');
+                }}
+                className="px-5 py-2.5 rounded-xl bg-[#59424f] hover:bg-[#46333e] text-white text-xs font-semibold transition-colors shadow-xs"
               >
                 Proceed to Branding →
               </button>
@@ -503,9 +738,10 @@ export function CompanyProfileCard({
           </div>
         )}
 
+        {/* Step 2: Company Branding */}
         {activeTab === 'branding' && (
           <div className="space-y-6 max-w-4xl">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 sm:gap-6">
               <div>
                 <label className="block text-xs font-bold text-[#3d2f38] mb-1.5">Company Display Name</label>
                 <input
@@ -523,31 +759,54 @@ export function CompanyProfileCard({
                 <div className="flex items-center gap-3">
                   <input
                     type="color"
-                    value={formData.brandPrimaryColor}
-                    onChange={e => setFormData({ ...formData, brandPrimaryColor: e.target.value })}
-                    className="w-10 h-10 rounded-xl cursor-pointer border border-[#e5d4d9] p-1 bg-white"
+                    value={formData.brandPrimaryColor.startsWith('#') && formData.brandPrimaryColor.length === 7 ? formData.brandPrimaryColor : '#59424f'}
+                    onChange={e => {
+                      setFormData({ ...formData, brandPrimaryColor: e.target.value });
+                      if (errors.brandPrimaryColor) setErrors(prev => ({ ...prev, brandPrimaryColor: '' }));
+                    }}
+                    className="w-10 h-10 rounded-xl cursor-pointer border border-[#e5d4d9] p-1 bg-white shrink-0"
                   />
                   <input
                     type="text"
                     value={formData.brandPrimaryColor}
-                    onChange={e => setFormData({ ...formData, brandPrimaryColor: e.target.value })}
+                    onChange={e => {
+                      setFormData({ ...formData, brandPrimaryColor: e.target.value });
+                      if (errors.brandPrimaryColor) setErrors(prev => ({ ...prev, brandPrimaryColor: '' }));
+                    }}
+                    onBlur={() => {
+                      let c = formData.brandPrimaryColor.trim();
+                      if (c && !c.startsWith('#') && /^[A-Fa-f0-9]{3,8}$/.test(c)) {
+                        setFormData(prev => ({ ...prev, brandPrimaryColor: '#' + c }));
+                      }
+                    }}
                     placeholder="#59424f"
-                    className="w-32 px-3 py-2.5 rounded-xl border border-[#e5d4d9] text-xs text-[#3d2f38] font-mono focus:outline-none focus:border-[#bd7b92]"
+                    className={`w-28 sm:w-32 px-3 py-2.5 rounded-xl border text-xs text-[#3d2f38] font-mono focus:outline-none transition-colors ${
+                      errors.brandPrimaryColor ? 'border-rose-400 bg-rose-50/30' : 'border-[#e5d4d9] focus:border-[#bd7b92]'
+                    }`}
                   />
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     {PRESET_COLORS.map(c => (
                       <button
                         key={c}
                         type="button"
-                        onClick={() => setFormData({ ...formData, brandPrimaryColor: c })}
+                        onClick={() => {
+                          setFormData({ ...formData, brandPrimaryColor: c });
+                          if (errors.brandPrimaryColor) setErrors(prev => ({ ...prev, brandPrimaryColor: '' }));
+                        }}
                         style={{ backgroundColor: c }}
                         className={`w-6 h-6 rounded-full border transition-transform ${
-                          formData.brandPrimaryColor === c ? 'scale-125 border-black/40' : 'border-transparent'
+                          formData.brandPrimaryColor.toLowerCase() === c.toLowerCase() ? 'scale-125 border-black/40 ring-2 ring-[#bd7b92]/30' : 'border-transparent'
                         }`}
                       />
                     ))}
                   </div>
                 </div>
+                {errors.brandPrimaryColor && (
+                  <p className="text-[11px] text-rose-500 mt-1 flex items-center gap-1">
+                    <AlertCircle size={12} />
+                    {errors.brandPrimaryColor}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -566,7 +825,7 @@ export function CompanyProfileCard({
               </div>
 
               {formData.logoUrl ? (
-                /* Active Logo Preview Card with Change / Remove actions */
+                /* Active Logo Preview Card */
                 <div className="p-4 rounded-2xl border border-[#e5d4d9] bg-white flex flex-wrap items-center justify-between gap-4 shadow-2xs">
                   <div className="flex items-center gap-4">
                     <div className="w-16 h-16 rounded-xl border border-[#ebdce1] p-1.5 bg-[#faf7f5] flex items-center justify-center shrink-0 overflow-hidden">
@@ -582,7 +841,7 @@ export function CompanyProfileCard({
                     <div>
                       <b className="text-xs text-[#3d2f38] block">Active Company Logo</b>
                       <span className="text-[11px] text-[#72616c] block">
-                        Will appear on employee exit forms, portal header, and exported PDF reports.
+                        Will appear on employee exit forms, portal header, and exported reports.
                       </span>
                     </div>
                   </div>
@@ -624,7 +883,7 @@ export function CompanyProfileCard({
                       Upload your company logo
                     </p>
                     <p className="text-[11px] text-[#72616c] mt-0.5">
-                      Drag and drop image here, or choose from your computer (PNG, JPG, SVG, WebP up to 5MB)
+                      Drag and drop image here, or select from your computer (PNG, JPG, SVG, WebP up to 5MB)
                     </p>
                   </div>
                   <div>
@@ -681,8 +940,10 @@ export function CompanyProfileCard({
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab('hr')}
-                className="px-5 py-2.5 rounded-xl bg-[#59424f] hover:bg-[#46333e] text-white text-xs font-semibold transition-colors"
+                onClick={() => {
+                  if (validateStep('branding')) setActiveTab('hr');
+                }}
+                className="px-5 py-2.5 rounded-xl bg-[#59424f] hover:bg-[#46333e] text-white text-xs font-semibold transition-colors shadow-xs"
               >
                 Proceed to HR Contact →
               </button>
@@ -690,39 +951,62 @@ export function CompanyProfileCard({
           </div>
         )}
 
+        {/* Step 3: HR Contact Details */}
         {activeTab === 'hr' && (
           <div className="space-y-6 max-w-4xl">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 sm:gap-6">
               <div>
                 <label className="block text-xs font-bold text-[#3d2f38] mb-1.5">
-                  HR Contact Name <span className="text-rose-500">*</span>
+                  HR Contact Name <span className="text-[11px] font-normal text-stone-500">(Recommended)</span>
                 </label>
                 <div className="relative">
                   <User size={16} className="absolute left-3.5 top-3 text-[#a8959d]" />
                   <input
                     type="text"
                     value={formData.hrContactName}
-                    onChange={e => setFormData({ ...formData, hrContactName: e.target.value })}
+                    onChange={e => {
+                      setFormData({ ...formData, hrContactName: e.target.value });
+                      if (errors.hrContactName) setErrors(prev => ({ ...prev, hrContactName: '' }));
+                    }}
                     placeholder="e.g. Shruti Patel"
-                    className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-[#e5d4d9] text-xs text-[#3d2f38] focus:outline-none focus:border-[#bd7b92]"
+                    className={`w-full pl-10 pr-4 py-2.5 rounded-xl border text-xs text-[#3d2f38] focus:outline-none transition-colors ${
+                      errors.hrContactName ? 'border-rose-400 bg-rose-50/30' : 'border-[#e5d4d9] focus:border-[#bd7b92]'
+                    }`}
                   />
                 </div>
+                {errors.hrContactName && (
+                  <p className="text-[11px] text-rose-500 mt-1 flex items-center gap-1">
+                    <AlertCircle size={12} />
+                    {errors.hrContactName}
+                  </p>
+                )}
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-[#3d2f38] mb-1.5">
-                  HR Contact Email <span className="text-rose-500">*</span>
+                  HR Contact Email <span className="text-[11px] font-normal text-stone-500">(Recommended)</span>
                 </label>
                 <div className="relative">
                   <Mail size={16} className="absolute left-3.5 top-3 text-[#a8959d]" />
                   <input
                     type="email"
                     value={formData.hrContactEmail}
-                    onChange={e => setFormData({ ...formData, hrContactEmail: e.target.value })}
+                    onChange={e => {
+                      setFormData({ ...formData, hrContactEmail: e.target.value });
+                      if (errors.hrContactEmail) setErrors(prev => ({ ...prev, hrContactEmail: '' }));
+                    }}
                     placeholder="hr@company.com"
-                    className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-[#e5d4d9] text-xs text-[#3d2f38] focus:outline-none focus:border-[#bd7b92]"
+                    className={`w-full pl-10 pr-4 py-2.5 rounded-xl border text-xs text-[#3d2f38] focus:outline-none transition-colors ${
+                      errors.hrContactEmail ? 'border-rose-400 bg-rose-50/30' : 'border-[#e5d4d9] focus:border-[#bd7b92]'
+                    }`}
                   />
                 </div>
+                {errors.hrContactEmail && (
+                  <p className="text-[11px] text-rose-500 mt-1 flex items-center gap-1">
+                    <AlertCircle size={12} />
+                    {errors.hrContactEmail}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -761,8 +1045,10 @@ export function CompanyProfileCard({
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab('exit')}
-                className="px-5 py-2.5 rounded-xl bg-[#59424f] hover:bg-[#46333e] text-white text-xs font-semibold transition-colors"
+                onClick={() => {
+                  if (validateStep('hr')) setActiveTab('exit');
+                }}
+                className="px-5 py-2.5 rounded-xl bg-[#59424f] hover:bg-[#46333e] text-white text-xs font-semibold transition-colors shadow-xs"
               >
                 Proceed to Exit Form →
               </button>
@@ -770,6 +1056,7 @@ export function CompanyProfileCard({
           </div>
         )}
 
+        {/* Step 4: Exit Feedback Setup */}
         {activeTab === 'exit' && (
           <div className="space-y-6 max-w-4xl">
             <div className="p-6 rounded-2xl bg-gradient-to-br from-[#fffbfa] to-[#fff3f6] border border-[#ebdce1]">
@@ -783,7 +1070,7 @@ export function CompanyProfileCard({
                   </h3>
                   <p className="text-xs text-[#72616c] mt-1 leading-relaxed">
                     People Journey has prepared the official 9-section master Exit Interview questionnaire for your company.
-                    It covers role satisfaction, management, culture, growth, compensation, and transition formalities.
+                    It covers reasons for leaving, role satisfaction, manager feedback, culture, compensation, and exit formalities.
                   </p>
 
                   <div className="flex flex-wrap items-center gap-3 mt-5">
@@ -791,7 +1078,7 @@ export function CompanyProfileCard({
                       <button
                         type="button"
                         onClick={onPreviewTemplate}
-                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-[#ebdce1] bg-white hover:bg-stone-50 text-xs font-semibold text-[#3d2f38] transition-colors shadow-sm"
+                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-[#ebdce1] bg-white hover:bg-stone-50 text-xs font-semibold text-[#3d2f38] transition-colors shadow-xs"
                       >
                         <ExternalLink size={14} />
                         <span>Preview Default Form</span>
@@ -801,7 +1088,7 @@ export function CompanyProfileCard({
                       <button
                         type="button"
                         onClick={onOpenTemplateEditor}
-                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#59424f] hover:bg-[#46333e] text-white text-xs font-semibold transition-colors shadow-sm"
+                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#59424f] hover:bg-[#46333e] text-white text-xs font-semibold transition-colors shadow-xs"
                       >
                         <Edit3 size={14} />
                         <span>Customize Form Questions</span>
@@ -811,6 +1098,38 @@ export function CompanyProfileCard({
                 </div>
               </div>
             </div>
+
+            {/* Validation Attention Banner on Step 4 if earlier steps have invalid fields */}
+            {Object.keys(errors).length > 0 && (
+              <div className="p-4 rounded-2xl border border-rose-200 bg-rose-50/90 text-xs text-rose-900 space-y-2.5 shadow-xs">
+                <div className="flex items-center gap-2 font-bold text-rose-950">
+                  <AlertCircle size={17} className="text-rose-600 shrink-0" />
+                  <span>Please correct {Object.keys(errors).length} {Object.keys(errors).length === 1 ? 'issue' : 'issues'} before saving:</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-rose-800">
+                  {Object.entries(errors).map(([field, msg]) => {
+                    const info = FIELD_TO_TAB[field];
+                    return (
+                      <div
+                        key={field}
+                        onClick={() => {
+                          if (info?.tab) setActiveTab(info.tab);
+                        }}
+                        className="p-2.5 rounded-xl bg-white/90 border border-rose-200 hover:bg-white cursor-pointer transition-colors flex items-center justify-between gap-2 shadow-2xs"
+                      >
+                        <div>
+                          <span className="font-semibold text-rose-950 block">{info?.fieldLabel || field}</span>
+                          <span className="text-stone-600">{msg}</span>
+                        </div>
+                        <span className="text-[10px] text-rose-600 font-semibold underline shrink-0">
+                          Fix on {info?.tabLabel.replace(/^\d+\.\s*/, '') || 'step'} →
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div className="flex justify-between pt-4">
               <button

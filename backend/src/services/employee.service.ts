@@ -17,6 +17,7 @@ interface RawEmployeeRow {
   first_name: string;
   last_name: string | null;
   work_email: string | null;
+  personal_email: string | null;
   phone: string | null;
   department_id: number | null;
   designation_id: number | null;
@@ -25,6 +26,9 @@ interface RawEmployeeRow {
   employment_status: EmploymentStatus;
   hire_date: Date | string;
   exit_date: Date | string | null;
+  last_working_day: Date | string | null;
+  exit_reason: string | null;
+  exit_notes: string | null;
   created_at?: Date | string;
   updated_at?: Date | string;
   created_by?: string | null;
@@ -44,7 +48,10 @@ function normalizeStatusForFrontend(status: string): 'Active' | 'Onboarding' | '
 function formatDateOnly(val: Date | string | null | undefined): string {
   if (!val) return '';
   if (val instanceof Date) {
-    return val.toISOString().slice(0, 10);
+    const year = val.getFullYear();
+    const month = String(val.getMonth() + 1).padStart(2, '0');
+    const day = String(val.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   }
   return String(val).slice(0, 10);
 }
@@ -61,6 +68,7 @@ function mapRowToEmployee(row: RawEmployeeRow): Employee {
     lastName: row.last_name,
     name: fullName,
     workEmail: row.work_email,
+    personalEmail: row.personal_email,
     phone: row.phone,
     departmentId: row.department_id ? Number(row.department_id) : null,
     designationId: row.designation_id ? Number(row.designation_id) : null,
@@ -70,6 +78,9 @@ function mapRowToEmployee(row: RawEmployeeRow): Employee {
     status: normalizeStatusForFrontend(row.employment_status),
     hireDate: formatDateOnly(row.hire_date),
     exitDate: row.exit_date ? formatDateOnly(row.exit_date) : null,
+    lastWorkingDay: row.last_working_day ? formatDateOnly(row.last_working_day) : null,
+    exitReason: row.exit_reason,
+    exitNotes: row.exit_notes,
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : undefined,
     updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined,
     createdBy: row.created_by ? String(row.created_by) : null,
@@ -159,12 +170,16 @@ export const employeeService = {
         e.first_name,
         e.last_name,
         e.work_email,
+        e.personal_email,
         e.phone,
         e.department_id,
         e.designation_id,
         e.employment_status,
         e.hire_date,
         e.exit_date,
+        e.last_working_day,
+        e.exit_reason,
+        e.exit_notes,
         e.created_at,
         e.updated_at,
         e.created_by,
@@ -210,12 +225,16 @@ export const employeeService = {
         e.first_name,
         e.last_name,
         e.work_email,
+        e.personal_email,
         e.phone,
         e.department_id,
         e.designation_id,
         e.employment_status,
         e.hire_date,
         e.exit_date,
+        e.last_working_day,
+        e.exit_reason,
+        e.exit_notes,
         e.created_at,
         e.updated_at,
         e.created_by,
@@ -282,19 +301,51 @@ export const employeeService = {
       lastName = parts.slice(1).join(' ') || '';
     }
 
-    // 4. Resolve hire date and exit date
+    // 4. Resolve hire date and lifecycle status
     const hireDateStr = data.hireDate || data.joiningDate;
     if (!hireDateStr) {
-      throw new Error('Hire/joining date is required.');
+      throw new Error('Joining/hire date is required.');
     }
-    const exitDateStr = data.exitDate || data.lastWorkingDay || null;
+    const hireOnly = hireDateStr.slice(0, 10);
+
+    const status = (data.employmentStatus || 'ONBOARDING').toUpperCase() as EmploymentStatus;
+    let lastWorkingDayStr: string | null = null;
+    let exitDateStr: string | null = null;
+
+    if (status === 'ONBOARDING') {
+      lastWorkingDayStr = null;
+      exitDateStr = null;
+    } else if (status === 'ACTIVE') {
+      lastWorkingDayStr = null;
+      exitDateStr = null;
+    } else if (status === 'OFFBOARDING') {
+      const rawLwd = data.lastWorkingDay || data.exitDate;
+      if (!rawLwd) {
+        throw new Error('Last working day is required for offboarding employees.');
+      }
+      lastWorkingDayStr = rawLwd.slice(0, 10);
+      if (lastWorkingDayStr < hireOnly) {
+        throw new Error('Last working day cannot precede the joining date.');
+      }
+      exitDateStr = lastWorkingDayStr;
+    } else if (status === 'EXITED') {
+      const rawExit = data.exitDate || data.lastWorkingDay;
+      if (!rawExit) {
+        throw new Error('Exit date is required for exited employees.');
+      }
+      exitDateStr = rawExit.slice(0, 10);
+      if (exitDateStr < hireOnly) {
+        throw new Error('Exit date cannot precede the joining date.');
+      }
+      lastWorkingDayStr = data.lastWorkingDay ? data.lastWorkingDay.slice(0, 10) : exitDateStr;
+    }
 
     // 5. Auto-generate employee code if missing
     const employeeCode = data.employeeCode || `EMP-${Date.now().toString().slice(-6)}`;
 
-    // 6. Normalize status
-    const status = (data.employmentStatus || 'ONBOARDING').toUpperCase();
-    const email = data.workEmail || data.personalEmail || null;
+    // 6. Emails
+    const workEmail = data.workEmail && data.workEmail.trim() ? data.workEmail.trim() : null;
+    const personalEmail = data.personalEmail && data.personalEmail.trim() ? data.personalEmail.trim() : null;
 
     const sql = `
       INSERT INTO hr_employees (
@@ -303,14 +354,18 @@ export const employeeService = {
         first_name,
         last_name,
         work_email,
+        personal_email,
         phone,
         department_id,
         designation_id,
         employment_status,
         hire_date,
         exit_date,
+        last_working_day,
+        exit_reason,
+        exit_notes,
         created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING employee_id;
     `;
 
@@ -320,19 +375,53 @@ export const employeeService = {
         employeeCode,
         firstName,
         lastName || null,
-        email,
+        workEmail,
+        personalEmail,
         data.phone || null,
         departmentId,
         designationId,
         status,
-        hireDateStr.slice(0, 10),
-        exitDateStr ? exitDateStr.slice(0, 10) : null,
+        hireOnly,
+        exitDateStr,
+        lastWorkingDayStr,
+        data.exitReason || null,
+        data.exitNotes || null,
         ownerUserId,
       ]);
 
       const outId = result.rows?.[0]?.employee_id;
       if (!outId) {
         throw new Error('Failed to retrieve generated employee_id from insert.');
+      }
+
+      // If offboarding, ensure initial record in hr_offboarding
+      if (status === 'OFFBOARDING' && lastWorkingDayStr) {
+        try {
+          await executeSql(
+            `INSERT INTO hr_offboarding (
+              owner_user_id,
+              employee_id,
+              notice_date,
+              planned_exit_date,
+              exit_reason,
+              clearance_status,
+              notes,
+              contact_email,
+              created_by
+            ) VALUES ($1, $2, CURRENT_DATE, $3, $4, 'PENDING', $5, $6, $1)
+            ON CONFLICT DO NOTHING`,
+            [
+              ownerUserId,
+              outId,
+              lastWorkingDayStr,
+              data.exitReason || 'Scheduled departure',
+              data.exitNotes || null,
+              personalEmail || workEmail || null,
+            ]
+          );
+        } catch (offboardErr) {
+          logger.warn({ err: offboardErr, employeeId: outId }, 'Auto-creation of offboarding record skipped or failed');
+        }
       }
 
       const created = (await this.getEmployeeById(outId, ownerUserId))!;
@@ -357,7 +446,7 @@ export const employeeService = {
   },
 
   /**
-   * Update permitted employee fields scoped to owner's workspace.
+   * Update permitted employee fields scoped to owner's workspace with lifecycle state validation.
    */
   async updateEmployee(employeeId: number, data: UpdateEmployeeInput, ownerUserId: string): Promise<Employee> {
     const existing = await this.getEmployeeById(employeeId, ownerUserId);
@@ -384,6 +473,11 @@ export const employeeService = {
       params.push(data.workEmail || null);
     }
 
+    if (data.personalEmail !== undefined) {
+      updates.push(`personal_email = $${paramIndex++}`);
+      params.push(data.personalEmail || null);
+    }
+
     if (data.phone !== undefined) {
       updates.push(`phone = $${paramIndex++}`);
       params.push(data.phone || null);
@@ -399,14 +493,40 @@ export const employeeService = {
       params.push(data.designationId);
     }
 
+    let targetStatus: EmploymentStatus = existing.employmentStatus;
     if (data.employmentStatus !== undefined) {
+      const newUpper = data.employmentStatus.toUpperCase() as EmploymentStatus;
+      const currentUpper = existing.employmentStatus.toUpperCase();
+
+      if (currentUpper !== newUpper) {
+        const allowedTransitions: Record<string, string[]> = {
+          ONBOARDING: ['ONBOARDING', 'ACTIVE', 'EXITED'],
+          ACTIVE: ['ACTIVE', 'OFFBOARDING', 'EXITED'],
+          OFFBOARDING: ['OFFBOARDING', 'ACTIVE', 'EXITED'],
+          EXITED: ['EXITED'],
+        };
+        const allowed = allowedTransitions[currentUpper] || [currentUpper];
+        if (!allowed.includes(newUpper)) {
+          throw new Error(`Invalid lifecycle transition from ${currentUpper} to ${newUpper}.`);
+        }
+        targetStatus = newUpper;
+      }
       updates.push(`employment_status = $${paramIndex++}`);
-      params.push(data.employmentStatus.toUpperCase());
+      params.push(newUpper);
     }
 
     if (data.hireDate !== undefined) {
       updates.push(`hire_date = $${paramIndex++}`);
       params.push(data.hireDate.slice(0, 10));
+    }
+
+    if (data.lastWorkingDay !== undefined) {
+      if (data.lastWorkingDay) {
+        updates.push(`last_working_day = $${paramIndex++}`);
+        params.push(data.lastWorkingDay.slice(0, 10));
+      } else {
+        updates.push('last_working_day = NULL');
+      }
     }
 
     if (data.exitDate !== undefined) {
@@ -418,6 +538,16 @@ export const employeeService = {
       }
     }
 
+    if (data.exitReason !== undefined) {
+      updates.push(`exit_reason = $${paramIndex++}`);
+      params.push(data.exitReason || null);
+    }
+
+    if (data.exitNotes !== undefined) {
+      updates.push(`exit_notes = $${paramIndex++}`);
+      params.push(data.exitNotes || null);
+    }
+
     const sql = `
       UPDATE hr_employees
       SET ${updates.join(', ')}
@@ -425,6 +555,48 @@ export const employeeService = {
     `;
 
     await executeSql(sql, params);
+
+    // If transitioned to OFFBOARDING, ensure offboarding record exists
+    if (targetStatus === 'OFFBOARDING') {
+      const lwd = data.lastWorkingDay || data.exitDate || existing.lastWorkingDay || existing.exitDate || new Date().toISOString().slice(0, 10);
+      try {
+        await executeSql(
+          `INSERT INTO hr_offboarding (
+            owner_user_id,
+            employee_id,
+            notice_date,
+            planned_exit_date,
+            exit_reason,
+            clearance_status,
+            notes,
+            created_by
+          ) VALUES ($1, $2, CURRENT_DATE, $3, $4, 'PENDING', $5, $1)
+          ON CONFLICT DO NOTHING`,
+          [
+            ownerUserId,
+            employeeId,
+            lwd.slice(0, 10),
+            data.exitReason || existing.exitReason || 'Scheduled departure',
+            data.exitNotes || existing.exitNotes || null,
+          ]
+        );
+      } catch (err) {
+        logger.warn({ err, employeeId }, 'Sync to hr_offboarding upon status update skipped');
+      }
+    } else if (targetStatus === 'ACTIVE' && existing.employmentStatus === 'OFFBOARDING') {
+      // Cancelled offboarding
+      try {
+        await executeSql(
+          `UPDATE hr_offboarding
+           SET clearance_status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP
+           WHERE employee_id = $1 AND owner_user_id = $2 AND clearance_status = 'PENDING'`,
+          [employeeId, ownerUserId]
+        );
+      } catch (err) {
+        logger.warn({ err, employeeId }, 'Failed to cancel offboarding record');
+      }
+    }
+
     const updated = (await this.getEmployeeById(employeeId, ownerUserId))!;
 
     await auditService.log({
@@ -432,7 +604,7 @@ export const employeeService = {
       actionType: 'UPDATE_EMPLOYEE',
       entityType: 'HR_EMPLOYEES',
       entityId: String(employeeId),
-      details: { updatedFields: Object.keys(data) },
+      details: { updatedFields: Object.keys(data), previousStatus: existing.employmentStatus, newStatus: targetStatus },
     });
 
     return updated;

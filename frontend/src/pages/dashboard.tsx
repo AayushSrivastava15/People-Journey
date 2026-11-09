@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, useEffect, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
@@ -16,7 +16,14 @@ import {
   useDashboardStats, useEmployees, useDepartments, useDesignations,
   useCreateEmployee, useOffboardEmployee,
   usePersonalDashboard, useNotifications, useExitInterviews,
+  useUpdateUserProfile,
 } from '@/api/queries';
+import {
+  getStoredPreferences,
+  saveStoredPreferences,
+  getDefaultLandingPath,
+  formatDateWithPattern,
+} from '@/utils/workspace-preferences';
 import type { Employee as ApiEmployee } from '@/types/api';
 import { useToast } from '@/hooks/use-toast';
 import { z } from 'zod';
@@ -31,10 +38,12 @@ import { EmailDraftHistoryView } from '@/components/email-draft-history-view';
 import { EditEmployeeDialog } from '@/components/edit-employee-dialog';
 import { ExitManagementView } from '@/components/exit-management-view';
 import { NotificationBellDropdown } from '@/components/notification-bell-dropdown';
+import { AddEmployeeWizard } from '@/components/add-employee-wizard';
+import { triggerCookiePreferencesModal } from '@/components/cookie-consent-banner';
 
 
 const navGroups = [
-  { label: 'Overview', links: [{ label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard }] },
+  { label: 'Overview', links: [{ label: 'Dashboard', path: '/dashboard/overview', icon: LayoutDashboard }] },
   { label: 'People', links: [
     { label: 'All Employees', path: '/dashboard/employees', icon: UsersRound },
     { label: 'Add Employee', path: '/dashboard/add-employee', icon: Users },
@@ -58,6 +67,7 @@ const navGroups = [
 
 const titles: Record<string, string> = {
   '/dashboard': 'Your People Overview',
+  '/dashboard/overview': 'Your People Overview',
   '/dashboard/employees': 'All Employees',
   '/dashboard/add-employee': 'Add an employee',
   '/dashboard/schedule-offboarding': 'Record an exit',
@@ -278,7 +288,7 @@ function Shell({
     <div className="dashboard-frame">
       <div className="dashboard-shell">
         <aside className={`dash-sidebar ${collapsed ? 'is-collapsed' : ''} ${menuOpen ? 'is-open' : ''}`} aria-label="Workspace navigation">
-          <Link href="/dashboard" className="dash-brand">
+          <Link href={getDefaultLandingPath((appUser?.preferences?.defaultView as string) || getStoredPreferences().defaultView)} className="dash-brand">
             <span className="dash-brand-symbol" aria-hidden="true"><i /><i /><i /></span>
             <span className="dash-brand-name">people<span>journey</span><small>WORKSPACE</small></span>
           </Link>
@@ -289,7 +299,7 @@ function Shell({
                 <p>{group.label}</p>
                 {group.links.map(item => {
                   const Icon = item.icon;
-                  const active = item.path === path;
+                  const active = item.path === path || (item.path === '/dashboard/overview' && path === '/dashboard');
                   return (
                     <Link
                       key={item.path}
@@ -373,7 +383,7 @@ function Shell({
             </label>
             <NotificationBellDropdown onNavigate={onNavigate} />
             <span className="topbar-date">
-              {new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date())}
+              {formatDateWithPattern(new Date(), (appUser?.preferences?.dateFormat as string) || getStoredPreferences().dateFormat)}
             </span>
 
             {/* Authenticated user pill & logout button */}
@@ -965,6 +975,7 @@ function ListingPage({
 
   const { notifications } = useWorkspaceLifecycleData();
 
+  if (path === '/dashboard/overview') return <Overview />;
   if (path === '/dashboard/add-employee') return <AddEmployee />;
   if (path === '/dashboard/schedule-offboarding') return <ScheduleOffboarding />;
   if (path === '/dashboard/settings') return <SettingsPage />;
@@ -1168,240 +1179,21 @@ function ExitTable({ rows }: { rows: WorkspaceExitItem[] }) {
   );
 }
 
-const employeeFormSchema = z.object({
-  fullName: z.string().trim().min(1, 'Enter employee name.'),
-  personalEmail: z.union([z.string().email('Invalid email format'), z.literal('')]),
-  workEmail: z.union([z.string().email('Invalid email format'), z.literal('')]),
-  department: z.string().min(1, 'Choose a department.'),
-  designation: z.string().optional(),
-  manager: z.string().optional(),
-  joiningDate: z.string().min(1, 'Select a joining date.'),
-  lastWorkingDay: z.string().optional(),
-  status: z.enum(['Active', 'Onboarding', 'Offboarding', 'Exited']),
-});
-type EmployeeFormValues = z.infer<typeof employeeFormSchema>;
-
 function AddEmployee() {
-  const [createdEmployee, setCreatedEmployee] = useState<ApiEmployee | null>(null);
   const { data: departments } = useDepartments();
   const { data: designations } = useDesignations();
-  const createMutation = useCreateEmployee();
-  const { toast } = useToast();
-
-  const defaultDepartments = ['Engineering', 'Design', 'Product', 'People', 'Operations', 'Finance', 'Marketing'];
-  const deptList = departments && departments.length > 0
-    ? departments.map(d => d.departmentName)
-    : defaultDepartments;
-
-  const form = useForm<EmployeeFormValues>({
-    resolver: zodResolver(employeeFormSchema),
-    defaultValues: {
-      fullName: '',
-      personalEmail: '',
-      workEmail: '',
-      department: '',
-      designation: '',
-      manager: '',
-      joiningDate: '',
-      lastWorkingDay: '',
-      status: 'Onboarding',
-    },
-  });
-
-  const onSubmit = async (values: EmployeeFormValues) => {
-    try {
-      const parts = values.fullName.trim().split(/\s+/);
-      const firstName = parts[0] || 'Unknown';
-      const lastName = parts.slice(1).join(' ') || '';
-
-      const created = await createMutation.mutateAsync({
-        firstName,
-        lastName,
-        fullName: values.fullName,
-        personalEmail: values.personalEmail || undefined,
-        workEmail: values.workEmail || undefined,
-        department: values.department,
-        designation: values.designation || undefined,
-        manager: values.manager || undefined,
-        hireDate: values.joiningDate,
-        joiningDate: values.joiningDate,
-        lastWorkingDay: values.lastWorkingDay || undefined,
-        employmentStatus: values.status,
-      });
-
-      toast({
-        title: 'Employee Added',
-        description: `${created.name} has been successfully added to your workspace.`,
-      });
-
-      setCreatedEmployee(created);
-      form.reset();
-    } catch (err) {
-      toast({
-        variant: 'destructive',
-        title: 'Failed to Add Employee',
-        description: (err as Error).message || 'An error occurred while creating the employee.',
-      });
-    }
-  };
 
   return (
     <>
       <PageHeading
-        eyebrow="Create Employee Record"
-        title="Add an employee"
-        text="Register a new team member and begin their journey in your workspace."
+        eyebrow="Lifecycle Operations"
+        title="Add Employee"
+        text="Enroll team members into tailored lifecycle workflows with automated milestones and compliance tracking."
       />
-      <div className="form-preview-layout">
-        <section className="panel form-panel">
-          <Form {...form}>
-            <form autoComplete="off" onSubmit={form.handleSubmit(onSubmit)}>
-              <div className="form-grid">
-                <div className="form-field">
-                  <div className="field-label-row">
-                    <label htmlFor="fullName">Full name</label>
-                  </div>
-                  <input id="fullName" {...form.register('fullName')} required placeholder="e.g. Avery Morgan" />
-                </div>
-
-                <div className="form-field">
-                  <div className="field-label-row">
-                    <label htmlFor="workEmail">Work email</label>
-                  </div>
-                  <input id="workEmail" {...form.register('workEmail')} type="email" placeholder="name@peoplejourney.com" />
-                </div>
-
-                <div className="form-field">
-                  <div className="field-label-row">
-                    <label htmlFor="personalEmail">Personal email</label>
-                    <span className="field-hint">Optional</span>
-                  </div>
-                  <input id="personalEmail" {...form.register('personalEmail')} type="email" placeholder="name@example.com" />
-                </div>
-
-                <div className="form-field">
-                  <div className="field-label-row">
-                    <label htmlFor="department">Department</label>
-                  </div>
-                  <AnimatedSelect
-                    id="department"
-                    variant="form"
-                    placeholder="Select department"
-                    value={form.watch('department') || ''}
-                    onChange={val => form.setValue('department', val, { shouldValidate: true, shouldDirty: true })}
-                    options={deptList.map(dept => ({ value: dept, label: dept }))}
-                  />
-                </div>
-
-                <div className="form-field">
-                  <div className="field-label-row">
-                    <label htmlFor="designation">Designation / Role</label>
-                  </div>
-                  <AnimatedSelect
-                    id="designation"
-                    variant="form"
-                    placeholder="Select designation (optional)"
-                    value={form.watch('designation') || ''}
-                    onChange={val => form.setValue('designation', val, { shouldValidate: true, shouldDirty: true })}
-                    options={(designations || []).map(des => ({
-                      value: des.designationName,
-                      label: des.designationName,
-                    }))}
-                  />
-                </div>
-
-                <div className="form-field">
-                  <div className="field-label-row">
-                    <label htmlFor="joiningDate">Joining date</label>
-                  </div>
-                  <DatePicker
-                    id="joiningDate"
-                    value={form.watch('joiningDate')}
-                    onChange={val => form.setValue('joiningDate', val, { shouldValidate: true, shouldDirty: true })}
-                    placeholder="Select joining date"
-                    required
-                  />
-                </div>
-
-                <div className="form-field">
-                  <div className="field-label-row">
-                    <label htmlFor="lastWorkingDay">Last working day</label>
-                    <span className="field-hint">Optional</span>
-                  </div>
-                  <DatePicker
-                    id="lastWorkingDay"
-                    value={form.watch('lastWorkingDay') || ''}
-                    onChange={val => form.setValue('lastWorkingDay', val, { shouldValidate: true, shouldDirty: true })}
-                    placeholder="Select last working day"
-                  />
-                </div>
-
-                <div className="form-field">
-                  <div className="field-label-row">
-                    <label htmlFor="status">Lifecycle status</label>
-                  </div>
-                  <AnimatedSelect
-                    id="status"
-                    variant="form"
-                    value={form.watch('status') || 'Onboarding'}
-                    onChange={val => form.setValue('status', val as LifecycleStatus, { shouldValidate: true, shouldDirty: true })}
-                    options={[
-                      { value: 'Onboarding', label: 'Onboarding', subtext: 'Beginning onboarding journey' },
-                      { value: 'Active', label: 'Active', subtext: 'Fully active team member' },
-                      { value: 'Offboarding', label: 'Offboarding', subtext: 'Planned transition or exit' },
-                      { value: 'Exited', label: 'Exited', subtext: 'Former employee' },
-                    ]}
-                  />
-                </div>
-              </div>
-
-              {Object.keys(form.formState.errors).length > 0 && (
-                <p className="field-error" role="alert">Please verify the required fields and email formatting.</p>
-              )}
-
-              <div className="form-actions">
-                <button
-                  type="submit"
-                  className="primary-action"
-                  disabled={createMutation.isPending}
-                >
-                  {createMutation.isPending ? (
-                    <>
-                      <Loader2 size={16} className="animate-spin" />
-                      Saving employee…
-                    </>
-                  ) : (
-                    <>
-                      <Check size={16} /> Save employee
-                    </>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  className="secondary-action"
-                  onClick={() => { form.reset(); setCreatedEmployee(null); }}
-                  disabled={createMutation.isPending}
-                >
-                  Clear fields
-                </button>
-              </div>
-            </form>
-          </Form>
-
-          {createdEmployee && (
-            <div className="preview-result" role="status" style={{ borderLeftColor: '#2ba45a' }}>
-              <b style={{ color: '#166534' }}>✓ Employee Added Successfully</b>
-              <p>{createdEmployee.name} has been successfully added to your workspace.</p>
-            </div>
-          )}
-        </section>
-        <aside className="panel form-aside">
-          <span className="aside-icon"><UserCheck size={19} /></span>
-          <h2>Instant Onboarding</h2>
-          <p>New team members are immediately enrolled in your workspace journey checklist and lifecycle touchpoints.</p>
-          <span className="aside-note">Lifecycle & touchpoints tracked automatically</span>
-        </aside>
-      </div>
+      <AddEmployeeWizard
+        departments={departments || []}
+        designations={designations || []}
+      />
     </>
   );
 }
@@ -1602,22 +1394,85 @@ function ResponsesPage() {
 }
 
 function SettingsPage() {
-  const { appUser, user, signOut } = useAuth();
-  const [dateFormat, setDateFormat] = useState('DD MMM YYYY');
-  const [landingView, setLandingView] = useState('overview');
-  const [emailAlerts, setEmailAlerts] = useState(true);
-  const [journeyDigests, setJourneyDigests] = useState(true);
-  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+  const { appUser, user, signOut, updateLocalPreferences } = useAuth();
+  const updateProfileMutation = useUpdateUserProfile();
   const { toast } = useToast();
+
+  const stored = getStoredPreferences();
+  const [dateFormat, setDateFormat] = useState<string>(
+    () => (appUser?.preferences?.dateFormat as string) || stored.dateFormat || 'DD MMM YYYY'
+  );
+  const [landingView, setLandingView] = useState<string>(
+    () => (appUser?.preferences?.defaultView as string) || stored.defaultView || 'overview'
+  );
+  const [emailAlerts, setEmailAlerts] = useState<boolean>(
+    () => typeof appUser?.preferences?.emailAlerts === 'boolean'
+      ? (appUser.preferences.emailAlerts as boolean)
+      : stored.emailAlerts
+  );
+  const [journeyDigests, setJourneyDigests] = useState<boolean>(
+    () => typeof appUser?.preferences?.journeyDigests === 'boolean'
+      ? (appUser.preferences.journeyDigests as boolean)
+      : stored.journeyDigests
+  );
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Sync state if appUser preferences load asynchronously
+  useEffect(() => {
+    if (appUser?.preferences) {
+      const p = appUser.preferences;
+      if (p.dateFormat && typeof p.dateFormat === 'string') setDateFormat(p.dateFormat);
+      if (p.defaultView && typeof p.defaultView === 'string') setLandingView(p.defaultView);
+      if (typeof p.emailAlerts === 'boolean') setEmailAlerts(p.emailAlerts);
+      if (typeof p.journeyDigests === 'boolean') setJourneyDigests(p.journeyDigests);
+    }
+  }, [appUser?.preferences]);
 
   const displayName = appUser?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Workspace User';
   const avatarLetter = (displayName[0] || 'U').toUpperCase();
 
-  const handleSavePreferences = () => {
-    toast({
-      title: 'Preferences Saved',
-      description: 'Your workspace settings have been updated successfully.',
-    });
+  const handleSavePreferences = async () => {
+    try {
+      setIsSaving(true);
+      const newPrefs = {
+        defaultView: landingView as 'overview' | 'employees' | 'onboarding',
+        dateFormat,
+        emailAlerts,
+        journeyDigests,
+      };
+
+      // 1. Save to local storage for immediate fast retrieval
+      saveStoredPreferences(newPrefs);
+
+      // 2. Optimistically update in-memory Auth context
+      updateLocalPreferences(newPrefs);
+
+      // 3. Persist to PostgreSQL backend via PATCH /api/auth/me
+      await updateProfileMutation.mutateAsync({
+        preferences: newPrefs,
+      });
+
+      const viewLabels: Record<string, string> = {
+        overview: 'People Overview',
+        employees: 'Team Directory',
+        onboarding: 'Onboarding Journeys',
+      };
+
+      toast({
+        title: 'Preferences Saved',
+        description: `Default view set to ${viewLabels[landingView] || landingView}. Your workspace preferences have been saved to your account.`,
+      });
+    } catch (err) {
+      console.error('Failed to update workspace preferences:', err);
+      toast({
+        variant: 'destructive',
+        title: 'Save Failed',
+        description: 'Could not sync preferences with the server. Local settings were applied.',
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -1628,8 +1483,8 @@ function SettingsPage() {
         text="Customize your personal experience, notification alerts, and workspace display preferences."
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) minmax(280px, 0.8fr)', gap: '16px', alignItems: 'start' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.7fr)_minmax(300px,0.9fr)] gap-6 items-start">
+        <div className="flex flex-col gap-6 min-w-0">
           {/* Account Profile Card */}
           <section className="panel" style={{ padding: '24px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '20px' }}>
@@ -1797,15 +1652,25 @@ function SettingsPage() {
             </div>
 
             <div style={{ marginTop: '22px', display: 'flex', gap: '10px' }}>
-              <button type="button" className="primary-action" onClick={handleSavePreferences}>
-                <Check size={16} /> Save preferences
+              <button
+                type="button"
+                className="primary-action"
+                onClick={handleSavePreferences}
+                disabled={isSaving || updateProfileMutation.isPending}
+              >
+                {isSaving || updateProfileMutation.isPending ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <Check size={16} />
+                )}
+                <span>{isSaving || updateProfileMutation.isPending ? 'Saving preferences…' : 'Save preferences'}</span>
               </button>
             </div>
           </section>
         </div>
 
-        {/* Aside: Privacy & Security */}
-        <aside style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        {/* Aside: Privacy & Workspace Info */}
+        <aside className="flex flex-col gap-6">
           {/* Data Privacy & Compliance */}
           <section className="panel" style={{ padding: '20px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
@@ -1826,35 +1691,28 @@ function SettingsPage() {
             >
               <FileText size={14} /> View Privacy & Compliance Policy
             </button>
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={triggerCookiePreferencesModal}
+              style={{ width: '100%', justifyContent: 'center', fontSize: '11px', marginTop: '8px' }}
+            >
+              <ShieldCheck size={14} /> Cookie & Storage Preferences
+            </button>
           </section>
 
-          {/* Security & Hacking Defenses */}
+          {/* Workspace Guidance & Quick Reference */}
           <section className="panel" style={{ padding: '20px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
-              <span className="aside-icon" style={{ margin: 0, color: '#0369a1', background: '#f0f9ff' }}><ShieldCheck size={18} /></span>
-              <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '999px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>
-                OWASP Hardened
+              <span className="aside-icon" style={{ margin: 0, color: '#8c5369', background: '#faeef2' }}><ClipboardCheck size={18} /></span>
+              <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '999px', background: '#fdf2f4', color: '#8c5369', border: '1px solid #f2d4dc' }}>
+                HR Quick Guide
               </span>
             </div>
-            <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#4a3b45', margin: '0 0 8px 0' }}>Threat Defense Status</h2>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px', color: '#685963' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span>SQL Injection:</span>
-                <strong style={{ color: '#15803d' }}>Parameterized (100%)</strong>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span>API Rate Limiter:</span>
-                <strong style={{ color: '#15803d' }}>Active (500 req/15m)</strong>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span>Security Headers:</span>
-                <strong style={{ color: '#15803d' }}>Helmet Active (CSP/HSTS)</strong>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span>Tamper Audit Log:</span>
-                <strong style={{ color: '#15803d' }}>Enabled (hr_audit_logs)</strong>
-              </div>
-            </div>
+            <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#4a3b45', margin: '0 0 6px 0' }}>Exit Feedback System</h2>
+            <p style={{ fontSize: '11px', color: '#887680', lineHeight: 1.6, margin: '0 0 12px 0' }}>
+              When an employee transitions out, generate a secure feedback link from Exit Interviews. Responses are recorded confidentially in PostgreSQL and immediately accessible for PDF report generation and Excel exports.
+            </p>
           </section>
 
           {/* Session Management */}
@@ -1887,8 +1745,8 @@ function SettingsPage() {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: 'rgba(56, 36, 47, 0.45)',
-              backdropFilter: 'blur(4px)',
+              backgroundColor: 'rgba(30, 20, 25, 0.45)',
+              backdropFilter: 'blur(6px)',
               padding: '20px',
             }}
             onClick={() => setShowPrivacyModal(false)}
@@ -2275,11 +2133,24 @@ function PersonalDashboard() {
 
 export function DashboardPage() {
   const [path, setPath] = useLocation();
+  const { appUser } = useAuth();
   const [globalSearch, setGlobalSearch] = useState('');
   const title = titles[path] || 'Personal Workspace';
 
-  const content = useMemo(() => {
+  // Apply default landing view redirection when user visits root /dashboard
+  useEffect(() => {
     if (path === '/dashboard') {
+      const stored = getStoredPreferences();
+      const defaultView = (appUser?.preferences?.defaultView as string) || stored.defaultView;
+      const target = getDefaultLandingPath(defaultView);
+      if (target !== '/dashboard') {
+        setPath(target);
+      }
+    }
+  }, [path, appUser, setPath]);
+
+  const content = useMemo(() => {
+    if (path === '/dashboard' || path === '/dashboard/overview') {
       return <Overview />;
     }
     return <ListingPage path={path} globalSearch={globalSearch} setGlobalSearch={setGlobalSearch} />;

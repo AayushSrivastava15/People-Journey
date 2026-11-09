@@ -7,6 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { AnimatedSelect } from '@/components/ui/animated-select';
 import {
   useCompanyExitTemplate,
   useUpdateTemplateDraft,
@@ -235,8 +236,23 @@ export function TemplateEditorDialog({
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-6xl w-[95vw] h-[90vh] p-0 flex flex-col bg-[#fffdfb] overflow-hidden border border-[#ebdada]">
+      <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
+        <DialogContent
+          hideCloseButton={true}
+          className="max-w-6xl w-[95vw] h-[90vh] p-0 flex flex-col bg-[#fffdfb] overflow-hidden border border-[#ebdada]"
+          onPointerDownOutside={e => {
+            const target = e.target as HTMLElement;
+            if (target?.closest?.('.animated-select-container') || target?.closest?.('[role="listbox"]')) {
+              e.preventDefault();
+            }
+          }}
+          onInteractOutside={e => {
+            const target = e.target as HTMLElement;
+            if (target?.closest?.('.animated-select-container') || target?.closest?.('[role="listbox"]')) {
+              e.preventDefault();
+            }
+          }}
+        >
           {/* Top Bar Header */}
           <div className="px-6 py-4 border-b border-[#f0e4e6] flex flex-wrap items-center justify-between gap-3 bg-white">
             <div className="flex items-center gap-3">
@@ -332,6 +348,19 @@ export function TemplateEditorDialog({
                 className="primary-action text-xs px-3.5 py-1.5 bg-[#59424f] text-white hover:bg-[#483540]"
               >
                 <UploadCloud size={14} className="mr-1" /> Publish New Version
+              </button>
+
+              <div className="w-[1px] h-5 bg-stone-200 mx-0.5" />
+
+              {/* Single Accessible Close Button */}
+              <button
+                type="button"
+                onClick={() => onOpenChange(false)}
+                className="p-1.5 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-[#bd7b92]"
+                aria-label="Close template editor"
+                title="Close template editor"
+              >
+                <X size={18} />
               </button>
             </div>
           </div>
@@ -615,25 +644,27 @@ export function TemplateEditorDialog({
                               <label className="block text-xs font-medium text-stone-600 mb-1">
                                 Question Type
                               </label>
-                              <select
+                              <AnimatedSelect
+                                id={`question-type-${q.id}`}
+                                variant="form"
                                 value={q.type}
-                                onChange={e =>
+                                onChange={val =>
                                   updateQuestion(qIdx, {
-                                    type: e.target.value as any,
+                                    type: val as any,
                                   })
                                 }
-                                className="w-full text-xs p-2 rounded-lg border border-stone-200 bg-white outline-none focus:border-[#59424f]"
-                              >
-                                <option value="text">Single Line Text</option>
-                                <option value="textarea">Paragraph Text</option>
-                                <option value="radio">Single Choice (Radio)</option>
-                                <option value="checkbox">Multiple Choice (Checkboxes)</option>
-                                <option value="rating">Rating Scale (1-5)</option>
-                                <option value="rating_matrix">Matrix Table (1-5)</option>
-                                <option value="date">Date Picker</option>
-                                <option value="email">Email</option>
-                                <option value="declaration">Declaration & Signature</option>
-                              </select>
+                                options={[
+                                  { value: 'text', label: 'Single Line Text' },
+                                  { value: 'textarea', label: 'Paragraph Text' },
+                                  { value: 'radio', label: 'Single Choice (Radio)' },
+                                  { value: 'checkbox', label: 'Multiple Choice (Checkboxes)' },
+                                  { value: 'rating', label: 'Rating Scale (1-5)' },
+                                  { value: 'rating_matrix', label: 'Matrix Table (1-5)' },
+                                  { value: 'date', label: 'Date Picker' },
+                                  { value: 'email', label: 'Email' },
+                                  { value: 'declaration', label: 'Declaration & Signature' },
+                                ]}
+                              />
                             </div>
                           </div>
 

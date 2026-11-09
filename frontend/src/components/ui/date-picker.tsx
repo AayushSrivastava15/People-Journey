@@ -26,18 +26,39 @@ export interface DatePickerProps {
 function parseLocalDate(dateStr?: string): Date | undefined {
   if (!dateStr || typeof dateStr !== 'string' || !dateStr.trim()) return undefined;
   const trimmed = dateStr.trim();
-  const parts = trimmed.split('-');
-  if (parts.length === 3) {
-    const y = parseInt(parts[0], 10);
-    const m = parseInt(parts[1], 10) - 1;
-    const d = parseInt(parts[2], 10);
+
+  // 1. Match YYYY-MM-DD or ISO strings starting with YYYY-MM-DD
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    const y = parseInt(isoMatch[1], 10);
+    const m = parseInt(isoMatch[2], 10) - 1;
+    const d = parseInt(isoMatch[3], 10);
     if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
       const dt = new Date(y, m, d, 12, 0, 0);
       if (!isNaN(dt.getTime())) return dt;
     }
   }
+
+  // 2. Match DD-MMM-YYYY or DD-MM-YYYY (e.g. 10-Nov-2026 or 10/11/2026)
+  const dmyMatch = trimmed.match(/^(\d{1,2})[-/ ]([A-Za-z0-9]{3,})[-/ ](\d{4})/);
+  if (dmyMatch) {
+    const d = parseInt(dmyMatch[1], 10);
+    const mStr = dmyMatch[2].toLowerCase();
+    const y = parseInt(dmyMatch[3], 10);
+    const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    const mIdx = isNaN(Number(mStr)) ? monthNames.indexOf(mStr.slice(0, 3)) : parseInt(mStr, 10) - 1;
+    if (mIdx >= 0 && mIdx <= 11 && !isNaN(d) && !isNaN(y)) {
+      const dt = new Date(y, mIdx, d, 12, 0, 0);
+      if (!isNaN(dt.getTime())) return dt;
+    }
+  }
+
+  // 3. Fallback standard Date parsing, forced to local midday
   const fallback = new Date(trimmed);
-  return !isNaN(fallback.getTime()) ? fallback : undefined;
+  if (!isNaN(fallback.getTime())) {
+    return new Date(fallback.getFullYear(), fallback.getMonth(), fallback.getDate(), 12, 0, 0);
+  }
+  return undefined;
 }
 
 /**

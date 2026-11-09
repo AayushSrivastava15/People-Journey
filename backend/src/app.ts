@@ -7,7 +7,7 @@ import { requestLogger } from './middleware/request-logger.js';
 import { errorHandler } from './middleware/error-handler.js';
 import routes from './routes/index.js';
 import { env } from './config/env.js';
-
+import { getHealth } from './controllers/health.controller.js';
 import { resolveShortLink } from './controllers/exit-interview.controller.js';
 
 const app: Express = express();
@@ -38,16 +38,32 @@ app.use(apiRateLimiter);
 app.use(requestLogger);
 
 // 3. CORS Configuration
+const allowedOrigins = env.CORS_ORIGIN.split(',').map(origin => origin.trim()).filter(Boolean);
+
 app.use(
   cors({
-    origin: env.CORS_ORIGIN.split(',').map(origin => origin.trim()).filter(Boolean),
+    origin: (origin, callback) => {
+      // Allow requests with no origin (curl, mobile apps, health probes)
+      if (!origin) return callback(null, true);
+      // Explicitly configured origins
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      // In development, allow localhost on any port
+      if (env.NODE_ENV !== 'production' && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+        return callback(null, true);
+      }
+      callback(null, false);
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-request-id', 'x-correlation-id'],
+    exposedHeaders: ['x-request-id'],
   })
 );
 
 app.use(cookieParser());
+
+// Root health-check probe aliases (Render, Kubernetes, cloud load-balancers)
+app.get(['/healthz', '/health'], getHealth);
 
 // 4. Request Payload Size Limits (supports high-res company logo uploads)
 app.use(express.json({ limit: '10mb' }));

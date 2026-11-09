@@ -8,6 +8,8 @@ import { ProtectedRoute } from '@/components/layout/protected-route';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 import { LandingPage } from '@/pages/landing-page';
 import { LoginPage } from '@/pages/login-page';
+import { CookieConsentBanner } from '@/components/cookie-consent-banner';
+import { SessionInactivityTracker } from '@/components/session-inactivity-tracker';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -61,6 +63,7 @@ function Router() {
         <Route path="/" component={LandingPage} />
         <Route path="/login" component={LoginPage} />
         <Route path="/dashboard" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/overview" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/settings" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/employees" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/add-employee" component={ProtectedWorkspaceRoute} />
@@ -91,6 +94,8 @@ function App() {
       <TooltipProvider>
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
           <Router />
+          <SessionInactivityTracker />
+          <CookieConsentBanner />
         </WouterRouter>
         <Toaster />
       </TooltipProvider>

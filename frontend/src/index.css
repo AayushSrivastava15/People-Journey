@@ -782,13 +782,35 @@ button.topbar-bell.is-active {
 @media print {
   @page {
     size: A4 portrait;
-    margin: 12mm 12mm 12mm 12mm;
+    margin: 14mm 14mm 14mm 14mm;
   }
 
-  body {
+  *,
+  *::before,
+  *::after {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  html,
+  body,
+  body[data-scroll-locked] {
     background: #ffffff !important;
     color: #1c1917 !important;
     font-size: 10pt !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    position: static !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* When printing a dialog/modal response report, hide the entire background app root */
+  body:has([role="dialog"]) #root,
+  body.is-printing-dialog #root,
+  .is-printing-dialog #root {
+    display: none !important;
   }
 
   /* Hide app shell, navbars, sidebars, buttons, backdrop overlays */
@@ -797,8 +819,18 @@ button.topbar-bell.is-active {
   header,
   .no-print,
   button,
-  [data-state="open"] > .fixed {
+  [data-radix-dialog-overlay],
+  .dialog-overlay {
     display: none !important;
+  }
+
+  /* Unconstrain Radix portal */
+  [data-radix-portal] {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
   }
 
   /* Unconstrain dialog container and modal overflow */
@@ -816,9 +848,18 @@ button.topbar-bell.is-active {
     background: #ffffff !important;
     padding: 0 !important;
     margin: 0 !important;
+    inset: auto !important;
+  }
+
+  [role="dialog"] > div {
+    display: block !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
   }
 
   .print-container {
+    display: block !important;
     overflow: visible !important;
     height: auto !important;
     max-height: none !important;
@@ -826,8 +867,9 @@ button.topbar-bell.is-active {
     margin: 0 !important;
   }
 
-  /* Avoid breaking inside cards */
-  .break-inside-avoid {
+  /* Avoid breaking inside cards and individual question blocks */
+  .break-inside-avoid,
+  .print-avoid-break {
     break-inside: avoid !important;
     page-break-inside: avoid !important;
   }

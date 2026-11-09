@@ -37,6 +37,9 @@ export interface Employee {
   status: LifecycleStatus;
   hireDate: string;
   exitDate: string | null;
+  lastWorkingDay?: string | null;
+  exitReason?: string | null;
+  exitNotes?: string | null;
   createdAt?: string;
   updatedAt?: string;
   createdBy?: string | null;
@@ -161,7 +164,9 @@ export interface CreateEmployeePayload {
   hireDate: string;
   joiningDate?: string;
   exitDate?: string | null;
-  lastWorkingDay?: string;
+  lastWorkingDay?: string | null;
+  exitReason?: string | null;
+  exitNotes?: string | null;
   notes?: string;
 }
 
@@ -176,7 +181,9 @@ export interface UpdateEmployeePayload {
   employmentStatus?: string;
   hireDate?: string;
   exitDate?: string | null;
-  lastWorkingDay?: string;
+  lastWorkingDay?: string | null;
+  exitReason?: string | null;
+  exitNotes?: string | null;
   notes?: string;
 }
 

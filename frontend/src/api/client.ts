@@ -60,38 +60,60 @@ export async function apiClient<T>(endpoint: string, options: RequestInit = {}):
     }
   }
 
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
+  // Request timeout protection (30s default)
+  let controller: AbortController | undefined;
+  let signal = options.signal;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-  if (!response.ok) {
-    let errorMessage = response.statusText;
-    let errorData: unknown = null;
+  if (!signal && typeof AbortController !== 'undefined') {
+    controller = new AbortController();
+    signal = controller.signal;
+    timeoutId = setTimeout(() => controller?.abort(), 30000);
+  }
 
-    try {
-      errorData = await response.json();
-      if (typeof errorData === 'object' && errorData !== null) {
-        const errObj = errorData as Record<string, unknown>;
-        const nestedError = errObj.error as Record<string, unknown> | undefined;
-        errorMessage = (errObj.message as string) || (nestedError?.message as string) || (typeof errObj.error === 'string' ? errObj.error : '') || errorMessage;
-      }
-    } catch {
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers,
+      signal,
+    });
+
+    if (timeoutId) clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      let errorMessage = response.statusText;
+      let errorData: unknown = null;
+
       try {
-        const text = await response.text();
-        if (text) errorMessage = text;
+        errorData = await response.json();
+        if (typeof errorData === 'object' && errorData !== null) {
+          const errObj = errorData as Record<string, unknown>;
+          const nestedError = errObj.error as Record<string, unknown> | undefined;
+          errorMessage = (errObj.message as string) || (nestedError?.message as string) || (typeof errObj.error === 'string' ? errObj.error : '') || errorMessage;
+        }
       } catch {
-        // Fallback to status text
+        try {
+          const text = await response.text();
+          if (text) errorMessage = text;
+        } catch {
+          // Fallback to status text
+        }
       }
+
+      throw new ApiError(errorMessage || `Request failed with status ${response.status}`, response.status, errorData);
     }
 
-    throw new ApiError(errorMessage || `Request failed with status ${response.status}`, response.status, errorData);
-  }
+    // Handle empty 204 or non-JSON responses
+    if (response.status === 204) {
+      return {} as T;
+    }
 
-  // Handle empty 204 or non-JSON responses
-  if (response.status === 204) {
-    return {} as T;
+    return response.json();
+  } catch (err) {
+    if (timeoutId) clearTimeout(timeoutId);
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new ApiError('Request timed out. Please check your connection and try again.', 408);
+    }
+    throw err;
   }
-
-  return response.json();
 }

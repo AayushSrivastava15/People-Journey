@@ -35,6 +35,7 @@ export interface AuthContextValue {
   getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
   verifyAuthorization: (targetUser?: User | null) => Promise<boolean>;
   refreshSession: () => Promise<boolean>;
+  updateLocalPreferences: (prefs: Record<string, unknown>) => void;
   signOut: () => Promise<void>;
 }
 
@@ -130,6 +131,16 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return verifyAuthorization(auth.currentUser);
   }, [verifyAuthorization]);
 
+  const updateLocalPreferences = useCallback((newPrefs: Record<string, unknown>) => {
+    setAppUser(prev => prev ? {
+      ...prev,
+      preferences: {
+        ...(prev.preferences || {}),
+        ...newPrefs,
+      },
+    } : null);
+  }, []);
+
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
     let active = true;
@@ -192,6 +203,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         getIdToken,
         verifyAuthorization,
         refreshSession,
+        updateLocalPreferences,
         signOut: handleSignOut,
       }}
     >

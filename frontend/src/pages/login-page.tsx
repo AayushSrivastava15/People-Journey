@@ -13,6 +13,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useAuth } from "@/context";
+import { applyAuthPersistence } from "@/lib/firebase";
 import {
   signInWithGoogle,
   signInWithEmail,
@@ -20,6 +21,7 @@ import {
   resetPassword,
   mapAuthError,
 } from "@/services/authService";
+import { getStoredPreferences, getDefaultLandingPath } from "@/utils/workspace-preferences";
 import { AuthLoadingScreen } from "@/components/layout/protected-route";
 
 type AuthMode = "signin" | "register" | "forgot";
@@ -49,8 +51,13 @@ function GoogleIcon() {
 
 export function LoginPage() {
   const [, setLocation] = useLocation();
-  const { user, loading, isAuthorized, authorizationChecking, verifyAuthorization, signInWithGoogle: contextSignInWithGoogle } = useAuth();
+  const { user, appUser, loading, isAuthorized, authorizationChecking, verifyAuthorization, signInWithGoogle: contextSignInWithGoogle } = useAuth();
   const shouldReduceMotion = useReducedMotion();
+
+  const getDestination = () => {
+    const pref = (appUser?.preferences?.defaultView as string) || getStoredPreferences().defaultView;
+    return getDefaultLandingPath(pref);
+  };
 
   const [mode, setMode] = useState<AuthMode>("signin");
   const [email, setEmail] = useState("");
@@ -58,6 +65,7 @@ export function LoginPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberDevice, setRememberDevice] = useState(true);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false);
@@ -66,14 +74,20 @@ export function LoginPage() {
 
   useEffect(() => {
     document.title = "HR Workspace Sign In | People Journey";
+    if (typeof window !== "undefined") {
+      const searchParams = new URLSearchParams(window.location.search);
+      if (searchParams.get("reason") === "timeout") {
+        setErrorMessage("Your session expired after 20 minutes of inactivity. Please sign in again.");
+      }
+    }
   }, []);
 
-  // If already authenticated, automatically navigate to dashboard
+  // If already authenticated, automatically navigate to default landing destination
   useEffect(() => {
     if (!loading && user) {
-      setLocation("/dashboard");
+      setLocation(getDestination());
     }
-  }, [user, loading, setLocation]);
+  }, [user, loading, setLocation, appUser]);
 
   // While restoring session or checking auth, show the calm loading screen
   if (loading) {
@@ -87,8 +101,9 @@ export function LoginPage() {
     setSuccessMessage(null);
 
     try {
+      await applyAuthPersistence(rememberDevice);
       await contextSignInWithGoogle();
-      setLocation("/dashboard");
+      setLocation(getDestination());
     } catch (err: unknown) {
       setErrorMessage(mapAuthError(err));
     } finally {
@@ -109,9 +124,10 @@ export function LoginPage() {
 
     setIsSubmitting(true);
     try {
+      await applyAuthPersistence(rememberDevice);
       const signedInUser = await signInWithEmail(email, password);
       await verifyAuthorization(signedInUser);
-      setLocation("/dashboard");
+      setLocation(getDestination());
     } catch (err: unknown) {
       setErrorMessage(mapAuthError(err));
       // Preserves entered email so user doesn't have to re-type it
@@ -150,7 +166,7 @@ export function LoginPage() {
     try {
       const registeredUser = await registerWithEmail(email, password, displayName);
       await verifyAuthorization(registeredUser);
-      setLocation("/dashboard");
+      setLocation(getDestination());
     } catch (err: unknown) {
       setErrorMessage(mapAuthError(err));
     } finally {
@@ -347,6 +363,50 @@ export function LoginPage() {
                     {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
                 </div>
+              </div>
+
+              {/* Remember device checkbox */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  margin: "10px 0 16px 0",
+                }}
+              >
+                <label
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    cursor: "pointer",
+                    fontSize: "0.83rem",
+                    color: "#49373f",
+                    userSelect: "none",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={rememberDevice}
+                    onChange={(e) => setRememberDevice(e.target.checked)}
+                    style={{
+                      width: "16px",
+                      height: "16px",
+                      accentColor: "#944b63",
+                      cursor: "pointer",
+                    }}
+                  />
+                  <span>Remember this device</span>
+                </label>
+                <span
+                  style={{
+                    fontSize: "0.72rem",
+                    color: "#8c7781",
+                  }}
+                  title="Your session automatically expires after 20 minutes of continuous inactivity"
+                >
+                  20m inactivity lock
+                </span>
               </div>
 
               <button

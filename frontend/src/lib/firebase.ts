@@ -1,6 +1,7 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
 import {
   browserLocalPersistence,
+  browserSessionPersistence,
   getAuth,
   GoogleAuthProvider,
   setPersistence,
@@ -28,11 +29,21 @@ const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 // Firebase Authentication
 export const auth = getAuth(app);
 
-// Keep the signed-in session across browser restarts.
+// Keep the signed-in session across browser restarts by default.
 export const authPersistenceReady = setPersistence(
   auth,
   browserLocalPersistence
 );
+
+/**
+ * Dynamically set authentication persistence according to user's "Remember this device" preference.
+ */
+export async function applyAuthPersistence(remember: boolean): Promise<void> {
+  await setPersistence(
+    auth,
+    remember ? browserLocalPersistence : browserSessionPersistence
+  );
+}
 
 // Google sign-in provider
 export const googleProvider = new GoogleAuthProvider();

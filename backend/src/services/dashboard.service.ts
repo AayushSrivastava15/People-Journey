@@ -67,12 +67,12 @@ export const dashboardService = {
         COUNT(*) FILTER (
           WHERE UPPER(employment_status) = 'ONBOARDING'
             AND hire_date >= CURRENT_DATE
-            AND hire_date <= CURRENT_DATE + INTERVAL '7 days'
+            AND hire_date <= CURRENT_DATE + INTERVAL '14 days'
         )::int AS upcoming_joiners_cnt,
         COUNT(*) FILTER (
           WHERE UPPER(employment_status) = 'OFFBOARDING'
-            AND exit_date >= CURRENT_DATE
-            AND exit_date <= CURRENT_DATE + INTERVAL '7 days'
+            AND COALESCE(last_working_day, exit_date) >= CURRENT_DATE
+            AND COALESCE(last_working_day, exit_date) <= CURRENT_DATE + INTERVAL '14 days'
         )::int AS upcoming_exits_cnt
       FROM hr_employees
       WHERE owner_user_id = $1
@@ -133,14 +133,14 @@ export const dashboardService = {
         e.employee_id::text AS id,
         TRIM(e.first_name || ' ' || COALESCE(e.last_name, '')) AS person,
         'Last working day' AS label,
-        TO_CHAR(e.exit_date, 'YYYY-MM-DD') AS event_date,
+        TO_CHAR(COALESCE(e.last_working_day, e.exit_date), 'YYYY-MM-DD') AS event_date,
         'Offboarding' AS status,
         '/dashboard/offboarding' AS path
       FROM hr_employees e
       WHERE e.owner_user_id = $1
         AND UPPER(e.employment_status) = 'OFFBOARDING'
-        AND e.exit_date >= CURRENT_DATE
-        AND e.exit_date <= CURRENT_DATE + INTERVAL '14 days'
+        AND COALESCE(e.last_working_day, e.exit_date) >= CURRENT_DATE
+        AND COALESCE(e.last_working_day, e.exit_date) <= CURRENT_DATE + INTERVAL '14 days'
       ORDER BY event_date ASC
       LIMIT 6
     `;

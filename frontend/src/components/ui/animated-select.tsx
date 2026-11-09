@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
-import { ChevronDown, Check } from 'lucide-react';
+import { ChevronDown, Check, Search } from 'lucide-react';
 
 export interface SelectOption {
   value: string;
@@ -29,6 +29,8 @@ export interface AnimatedSelectProps {
   required?: boolean;
   invalid?: boolean;
   'aria-label'?: string;
+  searchable?: boolean;
+  searchPlaceholder?: string;
 }
 
 /**
@@ -51,9 +53,12 @@ export function AnimatedSelect({
   required,
   invalid = false,
   'aria-label': ariaLabel,
+  searchable = false,
+  searchPlaceholder,
 }: AnimatedSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
+  const [searchQuery, setSearchQuery] = useState('');
   const [coords, setCoords] = useState<{ top: number; left: number; width: number; placeAbove: boolean }>({
     top: 0,
     left: 0,
@@ -63,6 +68,7 @@ export function AnimatedSelect({
 
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const shouldReduceMotion = useReducedMotion();
 
   // Normalize options into SelectOption objects
@@ -74,6 +80,18 @@ export function AnimatedSelect({
       return opt;
     });
   }, [options]);
+
+  // Filter options if searching
+  const filteredOptions = React.useMemo(() => {
+    if (!searchable || !searchQuery.trim()) return normalizedOptions;
+    const q = searchQuery.toLowerCase().trim();
+    return normalizedOptions.filter(opt => {
+      const matchLabel = opt.label.toLowerCase().includes(q);
+      const matchSub = opt.subtext?.toLowerCase().includes(q) || false;
+      const matchBadge = opt.badge?.toLowerCase().includes(q) || false;
+      return matchLabel || matchSub || matchBadge;
+    });
+  }, [normalizedOptions, searchable, searchQuery]);
 
   // Find currently selected option
   const selectedOption = normalizedOptions.find(opt => opt.value === value);
@@ -110,6 +128,14 @@ export function AnimatedSelect({
       setIsOpen(false);
     }
   };
+
+  useEffect(() => {
+    if (!isOpen) {
+      setSearchQuery('');
+    } else if (searchable) {
+      setTimeout(() => searchInputRef.current?.focus(), 40);
+    }
+  }, [isOpen, searchable]);
 
   // Close on outside click
   useEffect(() => {
@@ -306,6 +332,9 @@ export function AnimatedSelect({
                 ref={menuRef}
                 role="listbox"
                 aria-label={ariaLabel || placeholder}
+                onPointerDown={e => e.stopPropagation()}
+                onMouseDown={e => e.stopPropagation()}
+                onClick={e => e.stopPropagation()}
                 initial={
                   shouldReduceMotion
                     ? { opacity: 0 }
@@ -343,7 +372,7 @@ export function AnimatedSelect({
                   bottom: coords.placeAbove ? window.innerHeight - coords.top : undefined,
                   left: coords.left,
                   width: coords.width,
-                  maxHeight: '260px',
+                  maxHeight: '280px',
                   zIndex: 9999,
                   background: '#ffffff',
                   border: '1px solid #ebdada',
@@ -356,17 +385,95 @@ export function AnimatedSelect({
                   transformOrigin: coords.placeAbove ? 'bottom left' : 'top left',
                 }}
               >
-                {normalizedOptions.map((opt, index) => {
-                  const isSelected = opt.value === value;
-                  const isHighlighted = highlightedIndex === index;
+                {searchable && (
+                  <div
+                    style={{
+                      padding: '4px 6px 8px',
+                      borderBottom: '1px solid #f2e4ea',
+                      marginBottom: '6px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '7px',
+                    }}
+                    onClick={e => e.stopPropagation()}
+                    onPointerDown={e => e.stopPropagation()}
+                    onMouseDown={e => e.stopPropagation()}
+                  >
+                    <Search size={13} style={{ color: '#a7959f', flexShrink: 0 }} />
+                    <input
+                      ref={searchInputRef}
+                      type="text"
+                      placeholder={searchPlaceholder || 'Type to search…'}
+                      value={searchQuery}
+                      onClick={e => e.stopPropagation()}
+                      onPointerDown={e => e.stopPropagation()}
+                      onMouseDown={e => e.stopPropagation()}
+                      onChange={e => {
+                        setSearchQuery(e.target.value);
+                        setHighlightedIndex(0);
+                      }}
+                      onKeyDown={e => {
+                        e.stopPropagation();
+                        if (e.key === 'Escape') {
+                          setIsOpen(false);
+                          triggerRef.current?.focus();
+                        } else if (e.key === 'ArrowDown') {
+                          e.preventDefault();
+                          setHighlightedIndex(prev => Math.min(prev + 1, filteredOptions.length - 1));
+                        } else if (e.key === 'ArrowUp') {
+                          e.preventDefault();
+                          setHighlightedIndex(prev => Math.max(prev - 1, 0));
+                        } else if (e.key === 'Enter') {
+                          e.preventDefault();
+                          if (highlightedIndex >= 0 && highlightedIndex < filteredOptions.length) {
+                            handleSelectOption(filteredOptions[highlightedIndex]);
+                          }
+                        }
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '4px 6px',
+                        fontSize: '11px',
+                        border: '1px solid #eee2e6',
+                        borderRadius: '6px',
+                        outline: 'none',
+                        background: '#fffdfb',
+                        color: '#3c2e38',
+                      }}
+                    />
+                  </div>
+                )}
 
-                  return (
-                    <div
-                      key={opt.value || `opt-${index}`}
-                      role="option"
-                      aria-selected={isSelected}
-                      onClick={() => handleSelectOption(opt)}
-                      onMouseEnter={() => setHighlightedIndex(index)}
+                {filteredOptions.length === 0 ? (
+                  <div style={{ padding: '12px 8px', textAlign: 'center', fontSize: '11px', color: '#8f7b85' }}>
+                    No matching options found
+                  </div>
+                ) : (
+                  filteredOptions.map((opt, index) => {
+                    const isSelected = opt.value === value;
+                    const isHighlighted = highlightedIndex === index;
+
+                    return (
+                      <div
+                        key={opt.value || `opt-${index}`}
+                        role="option"
+                        aria-selected={isSelected}
+                        onPointerDown={e => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleSelectOption(opt);
+                        }}
+                        onMouseDown={e => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleSelectOption(opt);
+                        }}
+                        onClick={e => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleSelectOption(opt);
+                        }}
+                        onMouseEnter={() => setHighlightedIndex(index)}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -448,7 +555,8 @@ export function AnimatedSelect({
                       </div>
                     </div>
                   );
-                })}
+                })
+              )}
               </motion.div>
             )}
           </AnimatePresence>,

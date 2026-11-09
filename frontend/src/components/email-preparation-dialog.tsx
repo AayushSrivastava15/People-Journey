@@ -14,6 +14,7 @@ import {
 import type { Employee, EmailTemplate, EmailTemplateCategory } from '@/types/api';
 import { useToast } from '@/hooks/use-toast';
 import { AnimatedSelect } from '@/components/ui/animated-select';
+import { DatePicker } from '@/components/ui/date-picker';
 import {
   EMAIL_TEMPLATE_CATEGORIES,
   normalizeCategory,
@@ -237,6 +238,20 @@ export function EmailPreparationDialog({
     profile,
   ]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const handleOpenGmail = async () => {
@@ -356,12 +371,13 @@ export function EmailPreparationDialog({
 
   return (
     <div
+      onClick={onClose}
       style={{
         position: 'fixed',
         inset: 0,
         zIndex: 50,
-        backgroundColor: 'rgba(29, 21, 26, 0.65)',
-        backdropFilter: 'blur(4px)',
+        backgroundColor: 'rgba(30, 20, 25, 0.45)',
+        backdropFilter: 'blur(6px)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -370,6 +386,7 @@ export function EmailPreparationDialog({
       }}
     >
       <div
+        onClick={e => e.stopPropagation()}
         style={{
           width: '100%',
           maxWidth: '920px',
@@ -628,20 +645,14 @@ export function EmailPreparationDialog({
                   Submission deadline for the employee's feedback form. Leave empty if no strict deadline is needed.
                 </span>
               </div>
-              <input
-                type="date"
-                value={responseDueDate}
-                onChange={e => setResponseDueDate(e.target.value)}
-                style={{
-                  width: '150px',
-                  fontSize: '11px',
-                  padding: '6px 8px',
-                  borderRadius: '6px',
-                  border: '1px solid #e6d8df',
-                  background: '#ffffff',
-                  color: '#57434c',
-                }}
-              />
+              <div style={{ width: '180px' }}>
+                <DatePicker
+                  value={responseDueDate}
+                  onChange={setResponseDueDate}
+                  placeholder="Select due date"
+                  className="w-full text-xs"
+                />
+              </div>
             </div>
           )}
 

@@ -34,12 +34,16 @@ const editEmployeeSchema = z.object({
   firstName: z.string().trim().min(1, 'First name is required').max(100),
   lastName: z.string().trim().max(100).optional().default(''),
   workEmail: z.union([z.string().trim().email('Invalid email format'), z.literal('')]).optional(),
+  personalEmail: z.union([z.string().trim().email('Invalid email format'), z.literal('')]).optional(),
   phone: z.string().trim().max(30).optional().default(''),
   departmentId: z.coerce.number().int().positive().optional().nullable(),
   designationId: z.coerce.number().int().positive().optional().nullable(),
   employmentStatus: z.enum(['Active', 'Onboarding', 'Offboarding', 'Exited']),
   hireDate: z.string().min(1, 'Joining date is required'),
+  lastWorkingDay: z.string().optional(),
   exitDate: z.string().optional(),
+  exitReason: z.string().optional(),
+  exitNotes: z.string().optional(),
 });
 
 type EditEmployeeFormValues = z.infer<typeof editEmployeeSchema>;
@@ -139,12 +143,16 @@ export function EditEmployeeDialog({
       firstName: '',
       lastName: '',
       workEmail: '',
+      personalEmail: '',
       phone: '',
       departmentId: null,
       designationId: null,
       employmentStatus: 'Active',
       hireDate: '',
+      lastWorkingDay: '',
       exitDate: '',
+      exitReason: '',
+      exitNotes: '',
     },
   });
 
@@ -155,32 +163,62 @@ export function EditEmployeeDialog({
       firstName: employee.firstName || '',
       lastName: employee.lastName || '',
       workEmail: employee.workEmail || '',
+      personalEmail: employee.personalEmail || '',
       phone: employee.phone || '',
       departmentId: employee.departmentId ?? null,
       designationId: employee.designationId ?? null,
       employmentStatus: toDisplayStatus(employee.employmentStatus),
       hireDate: employee.hireDate || '',
+      lastWorkingDay: employee.lastWorkingDay || '',
       exitDate: employee.exitDate || '',
+      exitReason: employee.exitReason || '',
+      exitNotes: employee.exitNotes || '',
     });
   }, [employee, open, form]);
 
   const watchedStatus = form.watch('employmentStatus') as LifecycleStatus;
   const watchedHireDate = form.watch('hireDate');
   const watchedExitDate = form.watch('exitDate');
+  const watchedLastWorkingDay = form.watch('lastWorkingDay');
 
   const allowedStatuses = ALLOWED_TRANSITIONS[currentStatus] || [currentStatus];
 
   // ----- Submit handler -----
   const onSubmit = (values: EditEmployeeFormValues) => {
     if (!employee) return;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const newStatus = values.employmentStatus as LifecycleStatus;
 
-    // Cross-field validation: exit date must be after hire date
-    if (values.exitDate && values.hireDate && new Date(values.exitDate) <= new Date(values.hireDate)) {
-      form.setError('exitDate', { message: 'Last working day must be after the joining date.' });
+    // Cross-field validations by lifecycle status
+    if (newStatus === 'Active' && values.hireDate && values.hireDate > todayStr) {
+      form.setError('hireDate', { message: 'Joining date for active employees cannot be in the future.' });
       return;
     }
 
-    const newStatus = values.employmentStatus as LifecycleStatus;
+    if (newStatus === 'Offboarding') {
+      const lwd = values.lastWorkingDay || values.exitDate;
+      if (!lwd) {
+        form.setError('lastWorkingDay', { message: 'Last working day is required for offboarding.' });
+        return;
+      }
+      if (values.hireDate && lwd < values.hireDate) {
+        form.setError('lastWorkingDay', { message: 'Last working day cannot precede joining date.' });
+        return;
+      }
+    }
+
+    if (newStatus === 'Exited') {
+      const actualExit = values.exitDate || values.lastWorkingDay;
+      if (!actualExit) {
+        form.setError('exitDate', { message: 'Exit date is required for exited employees.' });
+        return;
+      }
+      if (values.hireDate && actualExit < values.hireDate) {
+        form.setError('exitDate', { message: 'Exit date cannot precede joining date.' });
+        return;
+      }
+    }
+
     const transKey = `${currentStatus}→${newStatus}`;
 
     // Check if transition is sensitive
@@ -195,18 +233,25 @@ export function EditEmployeeDialog({
   const executeUpdate = async (values: EditEmployeeFormValues) => {
     if (!employee) return;
     try {
+      const lwd = values.employmentStatus === 'Offboarding' ? (values.lastWorkingDay || values.exitDate || null) : null;
+      const exDate = values.employmentStatus === 'Exited' ? (values.exitDate || values.lastWorkingDay || null) : (values.employmentStatus === 'Offboarding' ? lwd : null);
+
       await updateMutation.mutateAsync({
         employeeId: employee.employeeId,
         payload: {
           firstName: values.firstName,
           lastName: values.lastName || '',
           workEmail: values.workEmail || undefined,
+          personalEmail: values.personalEmail || undefined,
           phone: values.phone || undefined,
           departmentId: values.departmentId ?? null,
           designationId: values.designationId ?? null,
           employmentStatus: values.employmentStatus,
           hireDate: values.hireDate,
-          exitDate: values.exitDate || null,
+          lastWorkingDay: lwd,
+          exitDate: exDate,
+          exitReason: (values.employmentStatus === 'Offboarding' || values.employmentStatus === 'Exited') ? (values.exitReason || null) : null,
+          exitNotes: (values.employmentStatus === 'Offboarding' || values.employmentStatus === 'Exited') ? (values.exitNotes || null) : null,
         },
       });
 
@@ -243,8 +288,20 @@ export function EditEmployeeDialog({
   return (
     <>
       {/* ---- Edit Dialog ---- */}
-      <Dialog open={open && !pendingTransition} onOpenChange={(o) => { if (!o) handleCancelDialog(); }}>
+      <Dialog open={open && !pendingTransition} onOpenChange={(o) => { if (!o) handleCancelDialog(); }} modal={false}>
         <DialogContent
+          onPointerDownOutside={e => {
+            const target = e.target as HTMLElement;
+            if (target?.closest?.('.animated-select-container') || target?.closest?.('[role="listbox"]')) {
+              e.preventDefault();
+            }
+          }}
+          onInteractOutside={e => {
+            const target = e.target as HTMLElement;
+            if (target?.closest?.('.animated-select-container') || target?.closest?.('[role="listbox"]')) {
+              e.preventDefault();
+            }
+          }}
           style={{
             maxWidth: '640px',
             width: '100%',
@@ -311,7 +368,7 @@ export function EditEmployeeDialog({
               <div className="form-field">
                 <div className="field-label-row">
                   <label htmlFor="edit-workEmail">Work email</label>
-                  <span className="field-hint">Optional</span>
+                  <span className="field-hint">Required</span>
                 </div>
                 <input
                   id="edit-workEmail"
@@ -326,7 +383,22 @@ export function EditEmployeeDialog({
 
               <div className="form-field">
                 <div className="field-label-row">
-                  <label htmlFor="edit-phone">Phone</label>
+                  <label htmlFor="edit-personalEmail">Personal email</label>
+                  <span className="field-hint">Optional</span>
+                </div>
+                <input
+                  id="edit-personalEmail"
+                  {...form.register('personalEmail')}
+                  type="email"
+                  placeholder="name@gmail.com"
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+              <div className="form-field">
+                <div className="field-label-row">
+                  <label htmlFor="edit-phone">Phone number</label>
                   <span className="field-hint">Optional</span>
                 </div>
                 <input
@@ -336,7 +408,34 @@ export function EditEmployeeDialog({
                   placeholder="+91 98765 43210"
                 />
               </div>
+
+              <div className="form-field">
+                <div className="field-label-row">
+                  <label htmlFor="edit-status">Lifecycle status</label>
+                </div>
+                <AnimatedSelect
+                  id="edit-status"
+                  variant="form"
+                  value={watchedStatus}
+                  onChange={(val) => form.setValue('employmentStatus', val as LifecycleStatus, { shouldDirty: true })}
+                  options={[
+                    { value: 'Onboarding', label: 'Onboarding', subtext: 'Beginning onboarding journey' },
+                    { value: 'Active', label: 'Active', subtext: 'Fully active team member' },
+                    { value: 'Offboarding', label: 'Offboarding', subtext: 'Planned transition or exit' },
+                    { value: 'Exited', label: 'Exited', subtext: 'Former employee' },
+                  ].filter(opt => allowedStatuses.includes(opt.value as LifecycleStatus))}
+                />
+              </div>
             </div>
+
+            {watchedStatus !== currentStatus && (
+              <span style={{
+                display: 'flex', alignItems: 'center', gap: '5px',
+                fontSize: '11px', color: '#b06b20', marginTop: '-4px', marginBottom: '8px'
+              }}>
+                <AlertTriangle size={13} /> Transitioning status from <b>{currentStatus}</b> to <b>{watchedStatus}</b>
+              </span>
+            )}
 
             {/* ---- Department & Designation ---- */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
@@ -385,11 +484,13 @@ export function EditEmployeeDialog({
               </div>
             </div>
 
-            {/* ---- Dates row ---- */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+            {/* ---- Dynamic Lifecycle Dates & Details ---- */}
+            <div style={{ display: 'grid', gridTemplateColumns: (watchedStatus === 'Offboarding' || watchedStatus === 'Exited') ? '1fr 1fr' : '1fr', gap: '14px' }}>
               <div className="form-field">
                 <div className="field-label-row">
                   <label htmlFor="edit-hireDate">Joining date <span style={{ color: '#c0556b' }}>*</span></label>
+                  {watchedStatus === 'Active' && <span className="field-hint">Past or today</span>}
+                  {watchedStatus === 'Onboarding' && <span className="field-hint">Today or future</span>}
                 </div>
                 <DatePicker
                   id="edit-hireDate"
@@ -403,62 +504,103 @@ export function EditEmployeeDialog({
                 )}
               </div>
 
-              <div className="form-field">
-                <div className="field-label-row">
-                  <label htmlFor="edit-exitDate">Planned last working day</label>
-                  <span className="field-hint">Optional</span>
+              {watchedStatus === 'Offboarding' && (
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label htmlFor="edit-lastWorkingDay">Scheduled Last Working Day <span style={{ color: '#c0556b' }}>*</span></label>
+                    <span className="field-hint">Today or future</span>
+                  </div>
+                  <DatePicker
+                    id="edit-lastWorkingDay"
+                    value={form.watch('lastWorkingDay') || form.watch('exitDate') || ''}
+                    onChange={(val) => {
+                      form.setValue('lastWorkingDay', val || '', { shouldDirty: true });
+                      form.setValue('exitDate', val || '', { shouldDirty: true });
+                    }}
+                    placeholder="Select scheduled last working day"
+                    required
+                  />
+                  {form.formState.errors.lastWorkingDay && (
+                    <span className="field-error" style={{ fontSize: '11px' }}>
+                      {form.formState.errors.lastWorkingDay.message}
+                    </span>
+                  )}
                 </div>
-                <DatePicker
-                  id="edit-exitDate"
-                  value={watchedExitDate || ''}
-                  onChange={(val) => {
-                    form.setValue('exitDate', val || '', { shouldDirty: true });
-                    // Auto-suggest Offboarding if currently Active and a future exit date is set
-                    if (val && watchedStatus === 'Active' && allowedStatuses.includes('Offboarding')) {
-                      form.setValue('employmentStatus', 'Offboarding', { shouldDirty: true });
-                    }
-                  }}
-                  placeholder="Select last working day"
-                />
-                {watchedExitDate && watchedHireDate && new Date(watchedExitDate) <= new Date(watchedHireDate) && (
-                  <span className="field-error" style={{ fontSize: '11px' }}>
-                    Must be after the joining date.
-                  </span>
-                )}
-              </div>
-            </div>
+              )}
 
-            {/* ---- Status ---- */}
-            <div className="form-field">
-              <div className="field-label-row">
-                <label htmlFor="edit-status">Lifecycle status</label>
-              </div>
-              <AnimatedSelect
-                id="edit-status"
-                variant="form"
-                value={watchedStatus}
-                onChange={(val) => form.setValue('employmentStatus', val as LifecycleStatus, { shouldDirty: true })}
-                options={[
-                  { value: 'Onboarding', label: 'Onboarding', subtext: 'Beginning onboarding journey' },
-                  { value: 'Active', label: 'Active', subtext: 'Fully active team member' },
-                  { value: 'Offboarding', label: 'Offboarding', subtext: 'Planned transition or exit' },
-                  { value: 'Exited', label: 'Exited', subtext: 'Former employee' },
-                ].filter(opt => allowedStatuses.includes(opt.value as LifecycleStatus))}
-              />
-              {watchedStatus !== currentStatus && (
-                <span style={{
-                  display: 'flex', alignItems: 'center', gap: '5px',
-                  fontSize: '11px', color: '#a36d55',
-                  background: '#fef8f0', border: '1px solid #f5d8bf',
-                  borderRadius: '7px', padding: '6px 10px', marginTop: '2px',
-                }}>
-                  <AlertTriangle size={12} />
-                  Status will change: <b style={{ marginLeft: 3 }}>{currentStatus}</b>
-                  <span style={{ margin: '0 3px' }}>→</span>
-                  <b>{watchedStatus}</b>. You will be asked to confirm.
-                </span>
+              {watchedStatus === 'Exited' && (
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label htmlFor="edit-exitDate">Recorded Exit Date <span style={{ color: '#c0556b' }}>*</span></label>
+                    <span className="field-hint">Past or today</span>
+                  </div>
+                  <DatePicker
+                    id="edit-exitDate"
+                    value={form.watch('exitDate') || form.watch('lastWorkingDay') || ''}
+                    onChange={(val) => {
+                      form.setValue('exitDate', val || '', { shouldDirty: true });
+                      form.setValue('lastWorkingDay', val || '', { shouldDirty: true });
+                    }}
+                    placeholder="Select recorded exit date"
+                    required
+                  />
+                  {form.formState.errors.exitDate && (
+                    <span className="field-error" style={{ fontSize: '11px' }}>
+                      {form.formState.errors.exitDate.message}
+                    </span>
+                  )}
+                </div>
               )}
             </div>
+
+            {(watchedStatus === 'Offboarding' || watchedStatus === 'Exited') && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '14px' }}>
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label htmlFor="edit-exitReason">Reason for Departure</label>
+                    <span className="field-hint">Optional</span>
+                  </div>
+                  <AnimatedSelect
+                    id="edit-exitReason"
+                    variant="form"
+                    placeholder="Select reason"
+                    value={form.watch('exitReason') || ''}
+                    onChange={(val) => form.setValue('exitReason', val, { shouldDirty: true })}
+                    options={[
+                      { value: 'Better career opportunity', label: 'Better career opportunity' },
+                      { value: 'Personal reasons', label: 'Personal reasons' },
+                      { value: 'Relocation', label: 'Relocation' },
+                      { value: 'Higher studies', label: 'Higher studies' },
+                      { value: 'Compensation & benefits', label: 'Compensation & benefits' },
+                      { value: 'Health & medical', label: 'Health & medical' },
+                      { value: 'Career change', label: 'Career change' },
+                      { value: 'Retirement', label: 'Retirement' },
+                      { value: 'Other', label: 'Other' },
+                    ]}
+                  />
+                </div>
+
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label htmlFor="edit-exitNotes">{watchedStatus === 'Offboarding' ? 'Handover & Transition Notes' : 'Historical Archival Notes'}</label>
+                    <span className="field-hint">Optional</span>
+                  </div>
+                  <textarea
+                    id="edit-exitNotes"
+                    {...form.register('exitNotes')}
+                    placeholder="Notes regarding transition, asset handovers, or relieving..."
+                    rows={2}
+                    style={{
+                      width: '100%',
+                      padding: '8px 10px',
+                      borderRadius: '8px',
+                      border: '1px solid #dcd1d7',
+                      fontSize: '0.84rem',
+                    }}
+                  />
+                </div>
+              </div>
+            )}
 
             {/* ---- Global errors ---- */}
             {Object.keys(form.formState.errors).length > 0 && (

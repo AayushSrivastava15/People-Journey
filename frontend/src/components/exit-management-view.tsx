@@ -9,6 +9,7 @@ import {
   FileText,
   Layers,
   Link2,
+  ListFilter,
   Loader2,
   Mail,
   Plus,
@@ -35,6 +36,7 @@ import {
   useRevokeExitInterview,
   useUpdateExitInterviewEvaluation,
 } from '@/api/queries';
+import { DatePicker } from '@/components/ui/date-picker';
 import type {
   ExitInterviewDetail,
   ExitInterviewEvaluation,
@@ -47,6 +49,7 @@ import { useToast } from '@/hooks/use-toast';
 import { EmailPreparationDialog } from '@/components/email-preparation-dialog';
 import { TemplateEditorDialog } from '@/components/template-editor-dialog';
 import { ResponseDetailDialog } from '@/components/exit-response-detail-dialog';
+import { AnimatedSelect } from '@/components/ui/animated-select';
 import {
   Dialog,
   DialogContent,
@@ -300,37 +303,39 @@ export function ExitManagementView({ mode }: { mode: 'records' | 'responses' }) 
             />
           </label>
 
-          <select
-            className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-xs"
+          <AnimatedSelect
+            variant="filter"
+            icon={<ListFilter size={13} />}
             value={status}
-            onChange={e => {
-              setStatus(e.target.value);
+            onChange={val => {
+              setStatus(val);
               setPage(1);
             }}
-          >
-            <option value="">All statuses</option>
-            <option value="PENDING">Not Started</option>
-            <option value="OPENED">In Progress</option>
-            <option value="COMPLETED">Completed</option>
-            <option value="EXPIRED">Expired</option>
-            <option value="REVOKED">Cancelled</option>
-          </select>
+            options={[
+              { value: '', label: 'All statuses' },
+              { value: 'PENDING', label: 'Not Started' },
+              { value: 'OPENED', label: 'In Progress' },
+              { value: 'COMPLETED', label: 'Completed' },
+              { value: 'EXPIRED', label: 'Expired' },
+              { value: 'REVOKED', label: 'Cancelled' },
+            ]}
+          />
 
-          <select
-            className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-xs"
+          <AnimatedSelect
+            variant="filter"
             value={departmentId}
-            onChange={e => {
-              setDepartmentId(e.target.value);
+            onChange={val => {
+              setDepartmentId(val);
               setPage(1);
             }}
-          >
-            <option value="">All departments</option>
-            {departments.map(d => (
-              <option key={d.departmentId} value={d.departmentId}>
-                {d.departmentName}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: '', label: 'All departments' },
+              ...departments.map(d => ({
+                value: String(d.departmentId),
+                label: d.departmentName,
+              })),
+            ]}
+          />
         </div>
 
         {isLoading ? (
@@ -502,8 +507,9 @@ function CreateInterviewDialog({
     e => e.employmentStatus === 'OFFBOARDING' || e.employmentStatus === 'EXITED'
   );
 
-  const selectedEmployee = employees.find(e => String(e.employeeId) === employeeId);
-  const selectedTemplate = templates.find(t => t.id === templateId);
+  const selectedEmployee = employees.find(e => String(e.employeeId) === String(employeeId));
+  const effectiveTemplateId = templateId || templates.find(t => t.isDefault)?.id || templates[0]?.id;
+  const selectedTemplate = templates.find(t => t.id === effectiveTemplateId);
 
   const activeExistingInterview = useMemo(() => {
     if (!employeeId || !exitInterviewsList?.data) return null;
@@ -523,11 +529,11 @@ function CreateInterviewDialog({
 
   const isPendingAction = create.isPending || regenerate.isPending;
   const canCreate = Boolean(
-    employeeId && templateId && !isPendingAction && !templatesLoading && !employeesLoading
+    employeeId && !isPendingAction && !employeesLoading
   );
 
   const submit = async () => {
-    if (!canCreate || !selectedTemplate) return;
+    if (!canCreate) return;
     try {
       if (activeExistingInterview) {
         const r = await regenerate.mutateAsync({
@@ -544,7 +550,7 @@ function CreateInterviewDialog({
 
       const r = await create.mutateAsync({
         employeeId: Number(employeeId),
-        templateId: selectedTemplate.id,
+        templateId: effectiveTemplateId || undefined,
         expiryDays,
         responseDueDate: responseDueDate || null,
       });
@@ -607,8 +613,22 @@ function CreateInterviewDialog({
 
   return (
     <>
-      <Dialog open={open} onOpenChange={value => !value && close()}>
-        <DialogContent className="max-w-xl border-[#ebdada] bg-[#fffdfb] p-0">
+      <Dialog open={open} onOpenChange={value => !value && close()} modal={false}>
+        <DialogContent
+          className="max-w-xl border-[#ebdada] bg-[#fffdfb] p-0"
+          onPointerDownOutside={e => {
+            const target = e.target as HTMLElement;
+            if (target?.closest?.('.animated-select-container') || target?.closest?.('[role="listbox"]')) {
+              e.preventDefault();
+            }
+          }}
+          onInteractOutside={e => {
+            const target = e.target as HTMLElement;
+            if (target?.closest?.('.animated-select-container') || target?.closest?.('[role="listbox"]')) {
+              e.preventDefault();
+            }
+          }}
+        >
           <div className="max-h-[85vh] overflow-y-auto p-6">
             <DialogHeader>
               <DialogTitle>
@@ -692,32 +712,37 @@ function CreateInterviewDialog({
                       No employees are currently marked as <b>Offboarding</b> or <b>Exited</b>. Move an employee to offboarding to generate an exit interview.
                     </p>
                   ) : (
-                    <select
+                    <AnimatedSelect
+                      id="departing-employee-select"
+                      variant="form"
+                      searchable
+                      searchPlaceholder="Search employee name, code, or department…"
+                      placeholder="Select an offboarding or exited employee"
                       value={employeeId}
-                      onChange={e => setEmployeeId(e.target.value)}
-                      className="w-full rounded-lg border border-stone-200 bg-[#fffdfb] p-2.5 text-xs font-medium text-stone-700 outline-none focus:border-[#b67c90]"
-                    >
-                      <option value="">Select an offboarding or exited employee</option>
-                      {employees.map(emp => {
-                        const hasActive = exitInterviewsList?.data?.some(
-                          i =>
-                            i.employeeId === emp.employeeId &&
-                            (i.status === 'PENDING' || i.status === 'OPENED') &&
-                            (!i.expiresAt || new Date(i.expiresAt) > new Date())
-                        );
-                        return (
-                          <option key={emp.employeeId} value={emp.employeeId}>
-                            {emp.name} · {emp.employeeCode} · {emp.departmentName || 'General'}
-                            {hasActive ? ' (Active Survey in Progress)' : ''}
-                          </option>
-                        );
-                      })}
-                    </select>
+                      onChange={val => setEmployeeId(val)}
+                      options={[
+                        { value: '', label: 'Select an offboarding or exited employee' },
+                        ...employees.map(emp => {
+                          const hasActive = exitInterviewsList?.data?.some(
+                            i =>
+                              i.employeeId === emp.employeeId &&
+                              (i.status === 'PENDING' || i.status === 'OPENED') &&
+                              (!i.expiresAt || new Date(i.expiresAt) > new Date())
+                          );
+                          return {
+                            value: String(emp.employeeId),
+                            label: `${emp.name} · ${emp.employeeCode}`,
+                            subtext: `${emp.departmentName || 'General'} · ${emp.workEmail || 'No email registered'}`,
+                            badge: hasActive ? 'Active Survey in Progress' : undefined,
+                          };
+                        }),
+                      ]}
+                    />
                   )}
                   {selectedEmployee && (
                     <div className="mt-3 rounded-lg bg-stone-50 p-2.5 text-xs text-stone-600 flex justify-between">
-                      <span>Last Working Day: <b>{date(selectedEmployee.exitDate)}</b></span>
-                      <span>Email: <b>{selectedEmployee.workEmail || 'None'}</b></span>
+                      <span>Last Working Day: <b>{date(selectedEmployee.exitDate || selectedEmployee.lastWorkingDay)}</b></span>
+                      <span>Email: <b>{selectedEmployee.workEmail || selectedEmployee.personalEmail || 'None'}</b></span>
                     </div>
                   )}
 
@@ -770,11 +795,11 @@ function CreateInterviewDialog({
                     2. Response Due Date (Optional)
                   </span>
                   <div className="flex items-center gap-3">
-                    <input
-                      type="date"
+                    <DatePicker
                       value={responseDueDate}
-                      onChange={e => setResponseDueDate(e.target.value)}
-                      className="w-full rounded-lg border border-stone-200 bg-[#fffdfb] p-2 text-xs font-medium text-stone-700 outline-none focus:border-[#b67c90]"
+                      onChange={setResponseDueDate}
+                      placeholder="Select target response due date (optional)"
+                      className="w-full text-xs"
                     />
                   </div>
                   <span className="mt-1.5 block text-[11px] text-stone-500">
@@ -970,8 +995,22 @@ function InterviewDetailDialog({
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-3xl border-[#ebdada] bg-[#fffdfb] p-0">
+      <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
+        <DialogContent
+          className="max-w-3xl border-[#ebdada] bg-[#fffdfb] p-0"
+          onPointerDownOutside={e => {
+            const target = e.target as HTMLElement;
+            if (target?.closest?.('.animated-select-container') || target?.closest?.('[role="listbox"]')) {
+              e.preventDefault();
+            }
+          }}
+          onInteractOutside={e => {
+            const target = e.target as HTMLElement;
+            if (target?.closest?.('.animated-select-container') || target?.closest?.('[role="listbox"]')) {
+              e.preventDefault();
+            }
+          }}
+        >
           <div className="max-h-[85vh] overflow-y-auto p-6">
             <DialogHeader>
               <DialogTitle className="text-xl font-bold text-stone-800">
@@ -1329,19 +1368,21 @@ function EvaluationForm({
         />
       </label>
 
-      <label className="block">
-        Rehire Eligibility
-        <select
-          className="mt-1 w-full rounded border border-stone-200 bg-white p-2 outline-none focus:border-[#b67c90]"
+      <div className="block text-xs font-medium text-stone-700">
+        <span className="mb-1 block">Rehire Eligibility</span>
+        <AnimatedSelect
+          variant="form"
+          placeholder="Undetermined"
           value={value.rehireEligibility || ''}
-          onChange={e => set('rehireEligibility', e.target.value || null)}
-        >
-          <option value="">Undetermined</option>
-          <option value="eligible">Eligible for rehire</option>
-          <option value="not_eligible">Not eligible</option>
-          <option value="conditional">Conditional review required</option>
-        </select>
-      </label>
+          onChange={val => set('rehireEligibility', val || null)}
+          options={[
+            { value: '', label: 'Undetermined' },
+            { value: 'eligible', label: 'Eligible for rehire' },
+            { value: 'not_eligible', label: 'Not eligible' },
+            { value: 'conditional', label: 'Conditional review required' },
+          ]}
+        />
+      </div>
 
       <label className="flex items-center gap-2 pt-6">
         <input

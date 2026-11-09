@@ -39,6 +39,25 @@ async function bootstrap() {
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+
+  process.on('unhandledRejection', (reason: unknown) => {
+    logger.error(
+      {
+        err: reason instanceof Error ? { message: reason.message, stack: reason.stack } : reason,
+      },
+      'Unhandled promise rejection caught by global handler'
+    );
+  });
+
+  process.on('uncaughtException', (err: Error) => {
+    logger.fatal(
+      {
+        err: { message: err.message, stack: err.stack },
+      },
+      'Uncaught exception caught by global handler - triggering graceful shutdown'
+    );
+    shutdown('UNCAUGHT_EXCEPTION').catch(() => process.exit(1));
+  });
 }
 
 bootstrap().catch(err => {
