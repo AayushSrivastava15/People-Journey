@@ -1,7 +1,27 @@
 import { useState } from 'react';
 import { useLocation } from 'wouter';
-import { CheckCircle2, ChevronRight, Sparkles, Building2, Palette, UserCheck, FileText, ArrowRight, Eye, Edit3 } from 'lucide-react';
+import { CheckCircle2, ChevronRight, Sparkles, Building2, Palette, UserCheck, FileText, ArrowRight, Eye, Edit3, X } from 'lucide-react';
 import { useCompanyOnboardingStatus } from '@/api/queries';
+
+const ONBOARDING_BANNER_DISMISSED_KEY = 'pj_onboarding_banner_dismissed';
+
+export function getIsOnboardingBannerDismissed(): boolean {
+  if (typeof window === 'undefined') return false;
+  return localStorage.getItem(ONBOARDING_BANNER_DISMISSED_KEY) === 'true';
+}
+
+export function setOnboardingBannerDismissed(dismissed: boolean) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (dismissed) {
+      localStorage.setItem(ONBOARDING_BANNER_DISMISSED_KEY, 'true');
+    } else {
+      localStorage.removeItem(ONBOARDING_BANNER_DISMISSED_KEY);
+    }
+  } catch {
+    // ignore quota/storage errors
+  }
+}
 
 interface CompanyOnboardingBannerProps {
   onOpenTemplateEditor?: () => void;
@@ -14,7 +34,12 @@ export function CompanyOnboardingBanner({
 }: CompanyOnboardingBannerProps) {
   const [, setLocation] = useLocation();
   const { data: status, isLoading } = useCompanyOnboardingStatus();
-  const [dismissed, setDismissed] = useState(false);
+  const [dismissed, setDismissed] = useState<boolean>(getIsOnboardingBannerDismissed);
+
+  const handleDismiss = () => {
+    setDismissed(true);
+    setOnboardingBannerDismissed(true);
+  };
 
   if (isLoading || !status || status.setupCompleted || dismissed) {
     return null;
@@ -52,7 +77,7 @@ export function CompanyOnboardingBanner({
   ];
 
   return (
-    <div className="mb-8 rounded-3xl border border-[#ebdce1] 'bg-gradient-to-br' from-[#fffbfa] via-[#fff5f7] to-[#fbf2f4] p-6 md:p-8 shadow-sm">
+    <div className="mb-6 rounded-3xl border border-[#ebdce1] bg-gradient-to-br from-[#fffbfa] via-[#fff5f7] to-[#fbf2f4] p-6 md:p-8 shadow-sm">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-6 border-b border-[#f3e1e6]">
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#fce8ed] border border-[#f5d0dc] text-[#935269] text-xs font-semibold mb-3">
@@ -68,7 +93,7 @@ export function CompanyOnboardingBanner({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 shrink-0">
           <button
             type="button"
             onClick={() => setLocation('/dashboard/settings')}
@@ -79,10 +104,19 @@ export function CompanyOnboardingBanner({
           </button>
           <button
             type="button"
-            onClick={() => setDismissed(true)}
+            onClick={handleDismiss}
             className="px-4 py-2.5 rounded-xl border border-[#ebdce1] bg-white/80 hover:bg-white text-[#72616c] text-xs font-medium transition-colors"
           >
             Continue to Dashboard
+          </button>
+          <button
+            type="button"
+            onClick={handleDismiss}
+            className="p-2 rounded-xl text-[#887582] hover:text-[#3d2f38] hover:bg-stone-100 transition-colors"
+            title="Dismiss onboarding banner"
+            aria-label="Dismiss onboarding banner"
+          >
+            <X size={16} />
           </button>
         </div>
       </div>

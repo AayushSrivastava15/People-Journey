@@ -1,0 +1,23 @@
+# Render Blueprint configuration for People Journey HR Portal
+# Documentation: https://render.com/docs/blueprint-spec
+
+services:
+  # Frontend Single-Page Application (Static Site)
+  - type: web
+    name: people-journey-hr
+    runtime: static
+    buildCommand: npm run build:frontend
+    staticPublishPath: ./frontend/dist
+    routes:
+      # SPA Catch-all Rewrite: Redirects all deep links and page refreshes (e.g. /dashboard, /dashboard/overview)
+      # to /index.html so client-side routing (Wouter) resolves them without 404 errors.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: SAMEORIGIN
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff

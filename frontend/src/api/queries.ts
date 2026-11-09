@@ -462,14 +462,40 @@ export function useCompanyProfile() {
   });
 }
 
+const ONBOARDING_STATUS_STORAGE_KEY = 'pj_company_onboarding_status';
+
+function getCachedOnboardingStatus(): CompanyOnboardingStatus | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    const raw = localStorage.getItem(ONBOARDING_STATUS_STORAGE_KEY);
+    if (!raw) return undefined;
+    return JSON.parse(raw) as CompanyOnboardingStatus;
+  } catch {
+    return undefined;
+  }
+}
+
+function setCachedOnboardingStatus(status: CompanyOnboardingStatus) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(ONBOARDING_STATUS_STORAGE_KEY, JSON.stringify(status));
+  } catch {
+    // ignore quota/storage errors
+  }
+}
+
 export function useCompanyOnboardingStatus() {
   return useQuery({
     queryKey: QUERY_KEYS.companyOnboardingStatus,
     queryFn: async () => {
       const res = await apiClient<{ success: boolean; data: CompanyOnboardingStatus }>('/company-profile/onboarding-status');
+      if (res?.data) {
+        setCachedOnboardingStatus(res.data);
+      }
       return res.data;
     },
-    staleTime: 30000,
+    initialData: getCachedOnboardingStatus,
+    staleTime: 60000,
   });
 }
 

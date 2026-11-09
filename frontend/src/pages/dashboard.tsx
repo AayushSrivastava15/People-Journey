@@ -43,7 +43,7 @@ import { triggerCookiePreferencesModal } from '@/components/cookie-consent-banne
 
 
 const navGroups = [
-  { label: 'Overview', links: [{ label: 'Dashboard', path: '/dashboard/overview', icon: LayoutDashboard }] },
+  { label: 'Overview', links: [{ label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard }] },
   { label: 'People', links: [
     { label: 'All Employees', path: '/dashboard/employees', icon: UsersRound },
     { label: 'Add Employee', path: '/dashboard/add-employee', icon: Users },
@@ -299,7 +299,7 @@ function Shell({
                 <p>{group.label}</p>
                 {group.links.map(item => {
                   const Icon = item.icon;
-                  const active = item.path === path || (item.path === '/dashboard/overview' && path === '/dashboard');
+                  const active = item.path === path || (item.path === '/dashboard' && (path === '/dashboard' || path === '/dashboard/overview'));
                   return (
                     <Link
                       key={item.path}
@@ -768,18 +768,16 @@ function Overview() {
 
   return (
     <>
-      <div className="mb-4">
-        <CompanyOnboardingBanner
-          onOpenTemplateEditor={() => {
-            setTemplateEditorMode('editor');
-            setTemplateEditorOpen(true);
-          }}
-          onPreviewTemplate={() => {
-            setTemplateEditorMode('preview');
-            setTemplateEditorOpen(true);
-          }}
-        />
-      </div>
+      <CompanyOnboardingBanner
+        onOpenTemplateEditor={() => {
+          setTemplateEditorMode('editor');
+          setTemplateEditorOpen(true);
+        }}
+        onPreviewTemplate={() => {
+          setTemplateEditorMode('preview');
+          setTemplateEditorOpen(true);
+        }}
+      />
       <PageHeading
         eyebrow="Workspace Overview"
         title="Your People Overview"
@@ -2137,13 +2135,13 @@ export function DashboardPage() {
   const [globalSearch, setGlobalSearch] = useState('');
   const title = titles[path] || 'Personal Workspace';
 
-  // Apply default landing view redirection when user visits root /dashboard
+  // Apply default landing view redirection when user visits root /dashboard or legacy /dashboard/overview
   useEffect(() => {
-    if (path === '/dashboard') {
+    if (path === '/dashboard' || path === '/dashboard/overview') {
       const stored = getStoredPreferences();
       const defaultView = (appUser?.preferences?.defaultView as string) || stored.defaultView;
       const target = getDefaultLandingPath(defaultView);
-      if (target !== '/dashboard') {
+      if (target !== '/dashboard' && target !== '/dashboard/overview') {
         setPath(target);
       }
     }
