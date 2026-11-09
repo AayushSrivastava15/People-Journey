@@ -1,4 +1,4 @@
-import { lazy, Suspense, type ReactNode } from 'react';
+import { useEffect, lazy, Suspense, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -10,6 +10,7 @@ import { LandingPage } from '@/pages/landing-page';
 import { LoginPage } from '@/pages/login-page';
 import { CookieConsentBanner } from '@/components/cookie-consent-banner';
 import { SessionInactivityTracker } from '@/components/session-inactivity-tracker';
+import { useAuth } from '@/context';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -48,6 +49,23 @@ function DashboardRoute() {
   );
 }
 
+function IndexHtmlRedirect() {
+  const [, setLocation] = useLocation();
+  const { user, loading } = useAuth();
+
+  useEffect(() => {
+    if (!loading) {
+      if (user) {
+        setLocation('/dashboard', { replace: true });
+      } else {
+        setLocation('/', { replace: true });
+      }
+    }
+  }, [user, loading, setLocation]);
+
+  return <RouteFallback label="Opening workspace…" />;
+}
+
 function ProtectedWorkspaceRoute() {
   return (
     <ProtectedRoute>
@@ -61,6 +79,7 @@ function Router() {
     <RoutedErrorBoundary>
       <Switch>
         <Route path="/" component={LandingPage} />
+        <Route path="/index.html" component={IndexHtmlRedirect} />
         <Route path="/login" component={LoginPage} />
         <Route path="/dashboard" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/overview" component={ProtectedWorkspaceRoute} />
