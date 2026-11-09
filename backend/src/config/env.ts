@@ -44,6 +44,38 @@ export const env = {
   DATABASE_POOL_MIN: Number(process.env.DATABASE_POOL_MIN) || 1,
   DATABASE_POOL_MAX: Number(process.env.DATABASE_POOL_MAX) || 10,
 
+  // Reverse proxy trust setting (defaults to 1 for Render / Cloudflare first hop)
+  TRUST_PROXY: process.env.TRUST_PROXY || '1',
+
+  // Optional Redis store configuration for multi-instance rate limiting and caching
+  REDIS_URL: process.env.REDIS_URL || '',
+
+  // Production Rate Limiting configurations (all limits configurable via environment)
+  RATE_LIMIT_GENERAL_WINDOW_MS: Number(process.env.RATE_LIMIT_GENERAL_WINDOW_MS) || 60 * 1000,
+  RATE_LIMIT_GENERAL_MAX: Number(process.env.RATE_LIMIT_GENERAL_MAX) || 120,
+
+  RATE_LIMIT_AUTH_WINDOW_MS: Number(process.env.RATE_LIMIT_AUTH_WINDOW_MS) || 15 * 60 * 1000,
+  RATE_LIMIT_AUTH_MAX: Number(process.env.RATE_LIMIT_AUTH_MAX) || 10,
+
+  RATE_LIMIT_DASHBOARD_WINDOW_MS: Number(process.env.RATE_LIMIT_DASHBOARD_WINDOW_MS) || 60 * 1000,
+  RATE_LIMIT_DASHBOARD_MAX: Number(process.env.RATE_LIMIT_DASHBOARD_MAX) || 30,
+
+  RATE_LIMIT_EMPLOYEE_WINDOW_MS: Number(process.env.RATE_LIMIT_EMPLOYEE_WINDOW_MS) || 60 * 1000,
+  RATE_LIMIT_EMPLOYEE_MAX: Number(process.env.RATE_LIMIT_EMPLOYEE_MAX) || 30,
+
+  RATE_LIMIT_EMAIL_WINDOW_MS: Number(process.env.RATE_LIMIT_EMAIL_WINDOW_MS) || 60 * 1000,
+  RATE_LIMIT_EMAIL_MAX: Number(process.env.RATE_LIMIT_EMAIL_MAX) || 5,
+
+  RATE_LIMIT_PUBLIC_EXIT_WINDOW_MS: Number(process.env.RATE_LIMIT_PUBLIC_EXIT_WINDOW_MS) || 60 * 1000,
+  RATE_LIMIT_PUBLIC_EXIT_MAX: Number(process.env.RATE_LIMIT_PUBLIC_EXIT_MAX) || 20,
+
+  RATE_LIMIT_EXPORT_WINDOW_MS: Number(process.env.RATE_LIMIT_EXPORT_WINDOW_MS) || 60 * 1000,
+  RATE_LIMIT_EXPORT_MAX: Number(process.env.RATE_LIMIT_EXPORT_MAX) || 5,
+
+  // Database Load Optimization: Caching TTLs (in seconds)
+  DASHBOARD_CACHE_TTL_SECONDS: Number(process.env.DASHBOARD_CACHE_TTL_SECONDS) || 60,
+  COMPANY_PROFILE_CACHE_TTL_SECONDS: Number(process.env.COMPANY_PROFILE_CACHE_TTL_SECONDS) || 300,
+
   // Firebase Admin configuration
   FIREBASE_PROJECT_ID: process.env.FIREBASE_PROJECT_ID || 'peoplejourney-4d586',
   FIREBASE_SERVICE_ACCOUNT_PATH: process.env.FIREBASE_SERVICE_ACCOUNT_PATH || '',

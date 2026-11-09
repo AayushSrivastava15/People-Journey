@@ -2,6 +2,7 @@ import { executeSql } from '../config/database.js';
 import type { CompanyProfile, CompanyOnboardingStatus, UpsertCompanyProfileDto } from '../models/company-profile.model.js';
 import { MASTER_EXIT_QUESTIONNAIRE } from '../config/master-exit-questionnaire.js';
 import { logger } from '../utils/logger.js';
+import { companyProfileCache } from '../utils/company-profile-cache.js';
 
 function mapRowToCompanyProfile(row: any): CompanyProfile {
   return {
@@ -34,19 +35,32 @@ function mapRowToCompanyProfile(row: any): CompanyProfile {
 
 export class CompanyProfileService {
   async getProfile(ownerUserId: string): Promise<CompanyProfile | null> {
+    const cached = await companyProfileCache.getProfile(ownerUserId);
+    if (cached !== undefined) {
+      return cached;
+    }
+
     const result = await executeSql(
       `SELECT * FROM hr_company_profiles WHERE owner_user_id = $1 LIMIT 1`,
       [ownerUserId]
     );
 
     if (result.rows.length === 0) {
+      await companyProfileCache.setProfile(ownerUserId, null);
       return null;
     }
 
-    return mapRowToCompanyProfile(result.rows[0]);
+    const profile = mapRowToCompanyProfile(result.rows[0]);
+    await companyProfileCache.setProfile(ownerUserId, profile);
+    return profile;
   }
 
   async getOnboardingStatus(ownerUserId: string): Promise<CompanyOnboardingStatus> {
+    const cached = await companyProfileCache.getOnboardingStatus(ownerUserId);
+    if (cached) {
+      return cached;
+    }
+
     const profile = await this.getProfile(ownerUserId);
 
     // Check if company has an exit template
@@ -71,7 +85,7 @@ export class CompanyProfileService {
 
     const isAllComplete = step1Details && step3HrContact && step4ExitForm;
 
-    return {
+    const statusResult: CompanyOnboardingStatus = {
       setupCompleted: profile?.setupCompleted ?? isAllComplete,
       setupStep: profile?.setupStep || (stepsCompleted < 4 ? stepsCompleted + 1 : 4),
       stepsCompleted,
@@ -84,6 +98,9 @@ export class CompanyProfileService {
       },
       hasDefaultTemplate,
     };
+
+    await companyProfileCache.setOnboardingStatus(ownerUserId, statusResult);
+    return statusResult;
   }
 
   async upsertProfile(
@@ -174,6 +191,9 @@ export class CompanyProfileService {
 
     // Automatically clone the master template for this company if one does not exist
     await this.ensureCompanyTemplate(ownerUserId, profile.companyName);
+
+    // Invalidate cached profile and onboarding status on profile updates
+    await companyProfileCache.invalidate(ownerUserId);
 
     return profile;
   }

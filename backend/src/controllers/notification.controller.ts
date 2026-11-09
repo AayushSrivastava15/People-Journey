@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { notificationService } from '../services/notification.service.js';
 import { logger } from '../utils/logger.js';
+import { dashboardCache } from '../utils/dashboard-cache.js';
 
 export async function getNotifications(req: Request, res: Response): Promise<void> {
   const userId = req.user?.id;
@@ -59,6 +60,8 @@ export async function markAsRead(req: Request, res: Response): Promise<void> {
       return;
     }
 
+    await dashboardCache.invalidatePersonal(userId);
+
     res.status(200).json({
       success: true,
       message: 'Notification marked as read.',
@@ -85,6 +88,7 @@ export async function markAllAsRead(req: Request, res: Response): Promise<void> 
 
   try {
     const count = await notificationService.markAllAsRead(userId);
+    await dashboardCache.invalidatePersonal(userId);
     res.status(200).json({
       success: true,
       message: `${count} notifications marked as read.`,

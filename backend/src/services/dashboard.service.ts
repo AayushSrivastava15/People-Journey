@@ -1,6 +1,7 @@
 import { executeSql } from '../config/database.js';
 import type { DashboardStats } from '../models/dashboard.model.js';
 import { userService } from './user.service.js';
+import { dashboardCache } from '../utils/dashboard-cache.js';
 
 export interface PersonalDashboardData {
   user: {
@@ -43,6 +44,12 @@ export const dashboardService = {
    * Scoped strictly to the authenticated user's workspace.
    */
   async getStats(ownerUserId: string): Promise<DashboardStats> {
+    // Check server-side cache first (eliminates 5 duplicate SQL queries on repeated views)
+    const cachedStats = await dashboardCache.getStats(ownerUserId);
+    if (cachedStats) {
+      return cachedStats;
+    }
+
     // 1. Month buckets for the last 6 months
     const now = new Date();
     const monthKeys: { key: string; label: string }[] = [];
@@ -228,7 +235,7 @@ export const dashboardService = {
       path: e.path,
     }));
 
-    return {
+    const statsResult: DashboardStats = {
       totalEmployees: totalCount,
       activeEmployees: activeCount,
       onboardingEmployees: onboardingCount,
@@ -242,6 +249,11 @@ export const dashboardService = {
       monthlyActivity,
       upcomingEvents,
     };
+
+    // Store in cache for subsequent views within TTL window
+    await dashboardCache.setStats(ownerUserId, statsResult);
+
+    return statsResult;
   },
 
   /**
@@ -249,6 +261,11 @@ export const dashboardService = {
    * Isolates records to only what this user owns or is authorized to see.
    */
   async getPersonalDashboard(userId: string, email: string): Promise<PersonalDashboardData> {
+    const cachedPersonal = await dashboardCache.getPersonal(userId);
+    if (cachedPersonal) {
+      return cachedPersonal;
+    }
+
     const user = await userService.findById(userId);
     if (!user) {
       throw new Error('User not found.');
@@ -349,7 +366,7 @@ export const dashboardService = {
       },
     ];
 
-    return {
+    const personalResult: PersonalDashboardData = {
       user: {
         id: user.id,
         email: user.email,
@@ -363,5 +380,9 @@ export const dashboardService = {
       notifications,
       checklist,
     };
+
+    await dashboardCache.setPersonal(userId, personalResult);
+
+    return personalResult;
   },
 };

@@ -2,6 +2,7 @@ import app from './app.js';
 import { env } from './config/env.js';
 import { logger } from './utils/logger.js';
 import { initPool, closePool } from './config/database.js';
+import { closeRedisClient } from './middleware/rate-limiter.js';
 
 async function bootstrap() {
   // Attempt to initialize PostgreSQL connection pool if DATABASE_URL is configured
@@ -27,6 +28,7 @@ async function bootstrap() {
     server.close(async () => {
       logger.info('HTTP server closed');
       await closePool();
+      await closeRedisClient();
       process.exit(0);
     });
 

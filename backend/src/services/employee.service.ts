@@ -10,6 +10,7 @@ import type {
 import { auditService } from './audit.service.js';
 import { masterService } from './master.service.js';
 import { logger } from '../utils/logger.js';
+import { dashboardCache } from '../utils/dashboard-cache.js';
 
 interface RawEmployeeRow {
   employee_id: number;
@@ -435,6 +436,7 @@ export const employeeService = {
       });
 
       logger.info({ employeeId: created.employeeId, employeeCode: created.employeeCode, ownerUserId }, 'Created employee in personal workspace');
+      await dashboardCache.invalidate(ownerUserId);
       return created;
     } catch (err) {
       const error = err as Error & { code?: string };
@@ -607,6 +609,8 @@ export const employeeService = {
       details: { updatedFields: Object.keys(data), previousStatus: existing.employmentStatus, newStatus: targetStatus },
     });
 
+    await dashboardCache.invalidate(ownerUserId);
+
     return updated;
   },
 
@@ -716,6 +720,7 @@ export const employeeService = {
 
     // 5. Fetch updated employee record after transaction has successfully committed
     const updated = (await this.getEmployeeById(employeeId, ownerUserId))!;
+    await dashboardCache.invalidate(ownerUserId);
     return { employee: updated, offboardingId };
   },
 };

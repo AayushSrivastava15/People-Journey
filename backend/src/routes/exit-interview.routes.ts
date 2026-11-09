@@ -1,6 +1,6 @@
 import { Router, type IRouter } from 'express';
-import rateLimit from 'express-rate-limit';
 import { authenticateToken } from '../middleware/auth.middleware.js';
+import { publicExitLimiter, exportLimiter } from '../middleware/rate-limiter.js';
 import {
   createInterview,
   exportCsv,
@@ -26,38 +26,20 @@ import {
 
 const router: IRouter = Router();
 
-const publicLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 120,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: {
-    success: false,
-    error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests. Please try again later.' },
-  },
-});
-
-const submitLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: {
-    success: false,
-    error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Submission rate limit reached. Please wait before retrying.' },
-  },
-});
-
-// Public employee short-code resolution & native hosted feedback submission
-router.get('/resolve/:code', publicLimiter, resolveShortLink);
-router.post('/submit/:code', submitLimiter, submitPublicFeedback);
+// Public employee short-code resolution & native hosted feedback submission (protected by publicExitLimiter: 20 req/min per IP)
+router.get('/resolve/:code', publicExitLimiter, resolveShortLink);
+router.post('/submit/:code', publicExitLimiter, submitPublicFeedback);
 
 // Legacy public form routes
-router.get('/public/:token', publicLimiter, getPublicForm);
-router.post('/public/:token/submit', submitLimiter, submitPublicForm);
+router.get('/public/:token', publicExitLimiter, getPublicForm);
+router.post('/public/:token/submit', publicExitLimiter, submitPublicForm);
 
 // Authenticated HR Manager routes
 router.use(authenticateToken);
+
+// Reports & Bulk Exports (protected by exportLimiter: 5 exports/min per user)
+router.get('/export/excel', exportLimiter, exportExcel);
+router.get('/export/csv', exportLimiter, exportCsv);
 
 // Company Template Management
 router.get('/template', getCompanyTemplate);
@@ -66,10 +48,8 @@ router.post('/template/publish', publishTemplate);
 router.post('/template/reset-default', resetTemplateToDefault);
 router.get('/templates', listTemplates);
 
-// Responses & Exports
+// Responses Detail
 router.get('/responses/:id', getResponseDetail);
-router.get('/export/excel', exportExcel);
-router.get('/export/csv', exportCsv);
 
 // Standard Exit Interview CRUD
 router.get('/', listInterviews);

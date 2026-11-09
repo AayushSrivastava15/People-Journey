@@ -1,10 +1,14 @@
 import express, { type Express } from 'express';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { requestLogger } from './middleware/request-logger.js';
 import { errorHandler } from './middleware/error-handler.js';
+import {
+  generalApiLimiter,
+  publicExitLimiter,
+  resolveOptionalAuth,
+} from './middleware/rate-limiter.js';
 import routes from './routes/index.js';
 import { env } from './config/env.js';
 import { getHealth } from './controllers/health.controller.js';
@@ -12,29 +16,17 @@ import { resolveShortLink } from './controllers/exit-interview.controller.js';
 
 const app: Express = express();
 
-// 1. HTTP Security Headers (prevents clickjacking, MIME sniffing, XSS injection)
+// 1. Reverse Proxy Trust Configuration (Render / Cloudflare)
+// Essential for accurate client IP identification in rate limiting without header spoofing
+app.set('trust proxy', Number(env.TRUST_PROXY) || (env.TRUST_PROXY === 'true' ? true : 1));
+
+// 2. HTTP Security Headers (prevents clickjacking, MIME sniffing, XSS injection)
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
   })
 );
 
-// 2. Global Rate Limiter (protects against DDoS, brute force, and API scraping)
-const apiRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15-minute window
-  max: 500, // 500 requests per IP per window
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: {
-    success: false,
-    error: {
-      code: 'RATE_LIMIT_EXCEEDED',
-      message: 'Too many requests from this IP address. Please slow down and try again shortly.',
-    },
-  },
-});
-
-app.use(apiRateLimiter);
 app.use(requestLogger);
 
 // 3. CORS Configuration
@@ -56,21 +48,22 @@ app.use(
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-request-id', 'x-correlation-id'],
-    exposedHeaders: ['x-request-id'],
+    exposedHeaders: ['x-request-id', 'RateLimit-Limit', 'RateLimit-Remaining', 'RateLimit-Reset', 'Retry-After'],
   })
 );
 
 app.use(cookieParser());
 
-// Root health-check probe aliases (Render, Kubernetes, cloud load-balancers)
+// 4. Root Health Probe Aliases (Render, Kubernetes, cloud monitors)
+// Mounted BEFORE rate limiting so automated probes are NEVER throttled or locked out
 app.get(['/healthz', '/health'], getHealth);
 
-// 4. Request Payload Size Limits (supports high-res company logo uploads)
+// 5. Request Payload Size Limits (supports high-res company logo uploads)
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Short URL direct resolver for departing employees (redirects browser hits to frontend hosted form)
-app.get('/e/:code', (req, res, next) => {
+// 6. Short URL direct resolver for departing employees (protected by public exit rate limiter)
+app.get('/e/:code', publicExitLimiter, (req, res, next) => {
   const code = encodeURIComponent(String(req.params.code || '').trim());
   if (req.accepts(['html', 'json']) === 'html' || !req.headers.accept?.includes('application/json')) {
     const frontendBase = (
@@ -82,7 +75,17 @@ app.get('/e/:code', (req, res, next) => {
   return resolveShortLink(req, res);
 });
 
-app.use('/api', routes);
+// 7. Security Headers for API responses (Prevent CDN / Shared Browser Caching of Multi-Tenant HR Data)
+app.use('/api', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
+// 8. General API Rate Limiting (120 req/min per verified user or client IP)
+// Pre-resolves optional Bearer credentials so verified users receive dedicated user quotas
+app.use('/api', resolveOptionalAuth, generalApiLimiter, routes);
 
 app.use(errorHandler);
 
