@@ -8,6 +8,9 @@ import {
   getPreviewRows,
   updatePreviewRow,
   deletePreviewRow,
+  revertPreviewRow,
+  toggleRowApproval,
+  bulkSetApproval,
   commitImport,
   exportSessionErrors,
   getStarterTemplate,
@@ -35,6 +38,9 @@ router.post('/validate-multi-mapping', employeeLimiter, validateMultiSheetMappin
 // Paginated Preview & Row Operations
 router.get('/preview/:sessionId', employeeLimiter, getPreviewRows);
 router.patch('/preview/:sessionId/:rowIndex', employeeLimiter, updatePreviewRow);
+router.post('/preview/:sessionId/:rowIndex/revert', employeeLimiter, revertPreviewRow);
+router.post('/preview/:sessionId/:rowIndex/approve', employeeLimiter, toggleRowApproval);
+router.post('/preview/:sessionId/bulk-approve', employeeLimiter, bulkSetApproval);
 router.delete('/preview/:sessionId/:rowIndex', employeeLimiter, deletePreviewRow);
 
 // Batch Commit & Error Export

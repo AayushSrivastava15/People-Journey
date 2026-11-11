@@ -605,7 +605,25 @@ export type SheetCategory =
   | 'RESIGNATION_TRACKER'
   | 'RETENTION_TRACKER'
   | 'TRANSFER'
+  | 'RECRUITMENT'
   | 'IGNORE';
+
+export interface FieldDiff {
+  field: string;
+  label: string;
+  currentVal: string;
+  proposedVal: string;
+}
+
+export type ReconciliationType =
+  | 'NEW_EMPLOYEE'
+  | 'EXISTING_UPDATE'
+  | 'LIFECYCLE_CHANGE'
+  | 'RESTORATION'
+  | 'LOCATION_TRANSFER'
+  | 'THIRD_PARTY'
+  | 'HISTORICAL_EXIT'
+  | 'EXISTING_UNCHANGED';
 
 export interface SheetSessionData {
   sheetName: string;
@@ -633,6 +651,8 @@ export interface UploadExcelResponse {
   detection: ColumnDetectionResult;
   sheets?: SheetSessionData[];
   sheetOrder?: string[];
+  summary?: ImportSummary;
+  previewRows?: ValidatedImportRow[];
 }
 
 export interface ImportSummary {
@@ -640,6 +660,10 @@ export interface ImportSummary {
   validRecords: number;
   needsAttentionRecords: number;
   duplicateRecords: number;
+  existingUpdatesCount?: number;
+  thirdPartyCount?: number;
+  historicalExitsCount?: number;
+  approvedCount?: number;
   statusBreakdown: {
     onboarding: number;
     active: number;
@@ -650,6 +674,12 @@ export interface ImportSummary {
 
 export interface ValidatedImportRow {
   rowIndex: number;
+  originalRowIndex?: number;
+  sourceSheets: string[];
+  isHistorical?: boolean;
+  isThirdParty?: boolean;
+  vendor?: string;
+  originalExtractedData?: Record<string, unknown>;
   originalData: Record<string, unknown>;
   mappedData: {
     employeeCode: string;
@@ -670,12 +700,19 @@ export interface ValidatedImportRow {
     workLocation?: string;
     reportingManager?: string;
     vendor?: string;
+    employmentCategory?: 'REGULAR' | 'THIRD_PARTY';
   };
+  isEdited?: boolean;
+  editedFields?: string[];
+  isExistingEmployee?: boolean;
+  existingEmployeeId?: number;
+  existingDbData?: Record<string, unknown>;
+  fieldDiffs?: FieldDiff[];
+  reconciliationType: ReconciliationType;
+  approvedForImport: boolean;
   validationStatus: 'VALID' | 'NEEDS_ATTENTION' | 'DUPLICATE';
   errors: Array<{ field: string; message: string; critical: boolean }>;
   warnings: string[];
-  sourceSheets?: string[];
-  isHistorical?: boolean;
 }
 
 export interface ImportPreviewResponse {

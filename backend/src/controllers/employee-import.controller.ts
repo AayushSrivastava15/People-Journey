@@ -35,11 +35,13 @@ export async function uploadExcelFile(req: Request, res: Response): Promise<void
       success: true,
       sessionId: result.session.sessionId,
       fileName: result.session.fileName,
-      totalRows: result.session.rawRows.length,
+      totalRows: result.session.validatedRows.length || result.session.rawRows.length,
       canonicalFields: CANONICAL_IMPORT_FIELDS,
       detection: result.detection,
       sheets: result.sheets,
       sheetOrder: result.sheetOrder,
+      summary: result.session.summary,
+      previewRows: result.session.validatedRows.slice(0, 10),
     });
   } catch (err) {
     const error = err as Error;
@@ -228,6 +230,12 @@ export async function getPreviewRows(req: Request, res: Response): Promise<void>
     filtered = filtered.filter(r => r.validationStatus === 'VALID');
   } else if (filter === 'duplicates') {
     filtered = filtered.filter(r => r.validationStatus === 'DUPLICATE');
+  } else if (filter === 'existing_updates') {
+    filtered = filtered.filter(r => r.isExistingEmployee === true);
+  } else if (filter === 'third_party') {
+    filtered = filtered.filter(r => r.isThirdParty === true);
+  } else if (filter === 'historical_exits') {
+    filtered = filtered.filter(r => r.reconciliationType === 'HISTORICAL_EXIT' || r.isHistorical === true);
   }
 
   // Filter by search text
@@ -237,9 +245,11 @@ export async function getPreviewRows(req: Request, res: Response): Promise<void>
       return (
         d.employeeCode.toLowerCase().includes(search) ||
         d.fullName.toLowerCase().includes(search) ||
-        d.workEmail.toLowerCase().includes(search) ||
-        d.department.toLowerCase().includes(search) ||
-        d.designation.toLowerCase().includes(search) ||
+        (d.workEmail && d.workEmail.toLowerCase().includes(search)) ||
+        (d.department && d.department.toLowerCase().includes(search)) ||
+        (d.designation && d.designation.toLowerCase().includes(search)) ||
+        (d.workLocation && d.workLocation.toLowerCase().includes(search)) ||
+        (r.vendor && r.vendor.toLowerCase().includes(search)) ||
         String(r.rowIndex).includes(search)
       );
     });
@@ -296,7 +306,7 @@ export async function updatePreviewRow(req: Request, res: Response): Promise<voi
 
   // Re-run validation across the session to update duplicate detection and rules
   try {
-    await smartImportService.validateSessionRows(sessionId, userId, session.columnMapping, false);
+    await smartImportService.validateMultiSheetMapping(sessionId, userId, {}, false);
     const refreshed = importSessionStore.getSession(sessionId, userId)!;
     const refreshedRow = refreshed.validatedRows.find(r => r.rowIndex === numIndex);
 
@@ -309,6 +319,100 @@ export async function updatePreviewRow(req: Request, res: Response): Promise<voi
     const error = err as Error;
     res.status(500).json({ success: false, error: { code: 'REVALIDATION_ERROR', message: error.message } });
   }
+}
+
+export async function revertPreviewRow(req: Request, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } });
+    return;
+  }
+
+  const sessionId = String(req.params.sessionId);
+  const rowIndex = String(req.params.rowIndex);
+  const numIndex = parseInt(rowIndex, 10);
+  if (isNaN(numIndex)) {
+    res.status(400).json({ success: false, error: { code: 'INVALID_ROW', message: 'Invalid row index parameter.' } });
+    return;
+  }
+
+  const reverted = importSessionStore.revertRow(sessionId, userId, numIndex);
+  if (!reverted) {
+    res.status(404).json({ success: false, error: { code: 'ROW_NOT_FOUND', message: `Row ${numIndex} not found or cannot be reverted.` } });
+    return;
+  }
+
+  try {
+    await smartImportService.validateMultiSheetMapping(sessionId, userId, {}, false);
+    const refreshed = importSessionStore.getSession(sessionId, userId)!;
+    const refreshedRow = refreshed.validatedRows.find(r => r.rowIndex === numIndex);
+
+    res.status(200).json({
+      success: true,
+      row: refreshedRow,
+      summary: refreshed.summary,
+    });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ success: false, error: { code: 'REVERT_ERROR', message: error.message } });
+  }
+}
+
+export async function toggleRowApproval(req: Request, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } });
+    return;
+  }
+
+  const sessionId = String(req.params.sessionId);
+  const rowIndex = String(req.params.rowIndex);
+  const numIndex = parseInt(rowIndex, 10);
+  if (isNaN(numIndex)) {
+    res.status(400).json({ success: false, error: { code: 'INVALID_ROW', message: 'Invalid row index parameter.' } });
+    return;
+  }
+
+  const approved = req.body?.approved;
+  const updated = importSessionStore.toggleRowApproval(sessionId, userId, numIndex, approved);
+  if (!updated) {
+    res.status(404).json({ success: false, error: { code: 'ROW_NOT_FOUND', message: `Row ${numIndex} not found.` } });
+    return;
+  }
+
+  const session = importSessionStore.getSession(sessionId, userId)!;
+  session.summary.approvedCount = session.validatedRows.filter(r => r.approvedForImport).length;
+
+  res.status(200).json({
+    success: true,
+    row: updated,
+    summary: session.summary,
+  });
+}
+
+export async function bulkSetApproval(req: Request, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } });
+    return;
+  }
+
+  const sessionId = String(req.params.sessionId);
+  const { filterType, approved } = req.body || {};
+
+  const ok = importSessionStore.bulkSetApproval(sessionId, userId, filterType || 'valid_only', Boolean(approved));
+  if (!ok) {
+    res.status(404).json({ success: false, error: { code: 'SESSION_NOT_FOUND', message: 'Import session not found.' } });
+    return;
+  }
+
+  const session = importSessionStore.getSession(sessionId, userId)!;
+  session.summary.approvedCount = session.validatedRows.filter(r => r.approvedForImport).length;
+
+  res.status(200).json({
+    success: true,
+    summary: session.summary,
+  });
 }
 
 export async function deletePreviewRow(req: Request, res: Response): Promise<void> {

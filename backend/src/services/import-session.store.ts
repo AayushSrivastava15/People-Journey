@@ -10,9 +10,37 @@ export interface RowValidationError {
   critical: boolean;
 }
 
+export interface FieldDiff {
+  field: string;
+  label: string;
+  currentVal: string;
+  proposedVal: string;
+}
+
+export type ReconciliationType =
+  | 'NEW_EMPLOYEE'
+  | 'EXISTING_UPDATE'
+  | 'LIFECYCLE_CHANGE'
+  | 'RESTORATION'
+  | 'LOCATION_TRANSFER'
+  | 'THIRD_PARTY'
+  | 'HISTORICAL_EXIT'
+  | 'EXISTING_UNCHANGED';
+
 export interface ValidatedImportRow {
   rowIndex: number; // 1-indexed row number from original Excel
+  originalRowIndex?: number;
+  sourceSheets: string[];
+  isHistorical?: boolean;
+  isThirdParty?: boolean;
+  vendor?: string;
+
+  // Immutable original values extracted before any manual edits
+  originalExtractedData: Record<string, unknown>;
+
+  // Raw original row object from Excel
   originalData: Record<string, unknown>;
+
   mappedData: {
     employeeCode: string;
     firstName: string;
@@ -29,12 +57,27 @@ export interface ValidatedImportRow {
     exitDate: string | null; // YYYY-MM-DD
     exitReason: string | null;
     exitNotes: string | null;
+    workLocation?: string;
+    reportingManager?: string;
+    vendor?: string;
+    employmentCategory?: 'REGULAR' | 'THIRD_PARTY';
   };
+
+  // Change tracking
+  isEdited?: boolean;
+  editedFields?: string[];
+
+  // Reconciliation against existing workspace database
+  isExistingEmployee?: boolean;
+  existingEmployeeId?: number;
+  existingDbData?: Record<string, unknown>;
+  fieldDiffs?: FieldDiff[];
+  reconciliationType: ReconciliationType;
+  approvedForImport: boolean;
+
   validationStatus: RowValidationStatus;
   errors: RowValidationError[];
   warnings: string[];
-  sourceSheets?: string[];
-  isHistorical?: boolean;
 }
 
 export interface ImportSummary {
@@ -42,6 +85,10 @@ export interface ImportSummary {
   validRecords: number;
   needsAttentionRecords: number;
   duplicateRecords: number;
+  existingUpdatesCount?: number;
+  thirdPartyCount?: number;
+  historicalExitsCount?: number;
+  approvedCount?: number;
   statusBreakdown: {
     onboarding: number;
     active: number;
@@ -325,6 +372,7 @@ class ImportSessionStore {
       RESIGNATION_TRACKER: 'Lifecycle Updates / Historical Employees',
       RETENTION_TRACKER: 'Employee Restoration',
       TRANSFER: 'Employee Location Updates',
+      RECRUITMENT: 'Recruitment Onboarding',
       IGNORE: 'Ignored',
     };
     sheet.categoryLabel = labels[category] || 'Custom';
@@ -373,10 +421,26 @@ class ImportSessionStore {
     const row = session.validatedRows.find(r => r.rowIndex === rowIndex);
     if (!row) return null;
 
+    // Track changed fields against original extracted data
+    const editedFieldsSet = new Set(row.editedFields || []);
+    for (const [key, val] of Object.entries(updatedMappedData)) {
+      const origVal = row.originalExtractedData ? (row.originalExtractedData as any)[key] : undefined;
+      const currentVal = val ?? '';
+      const baseVal = origVal ?? '';
+      if (String(currentVal).trim() !== String(baseVal).trim()) {
+        editedFieldsSet.add(key);
+      } else {
+        editedFieldsSet.delete(key);
+      }
+    }
+
     row.mappedData = {
       ...row.mappedData,
       ...updatedMappedData,
     };
+
+    row.editedFields = Array.from(editedFieldsSet);
+    row.isEdited = row.editedFields.length > 0;
 
     // Keep rawRows in sync
     const rawIdx = rowIndex - 2;
@@ -392,6 +456,72 @@ class ImportSessionStore {
     }
 
     return row;
+  }
+
+  revertRow(sessionId: string, ownerUserId: string, rowIndex: number): ValidatedImportRow | null {
+    const session = this.getSession(sessionId, ownerUserId);
+    if (!session) return null;
+
+    const row = session.validatedRows.find(r => r.rowIndex === rowIndex);
+    if (!row || !row.originalExtractedData) return null;
+
+    // Revert mappedData to original extracted snapshot
+    row.mappedData = {
+      ...(row.originalExtractedData as any),
+    };
+    row.isEdited = false;
+    row.editedFields = [];
+
+    // Sync rawRows if applicable
+    const rawIdx = rowIndex - 2;
+    if (session.rawRows[rawIdx]) {
+      for (const [field, val] of Object.entries(row.mappedData)) {
+        const header = Object.keys(session.columnMapping).find(h => session.columnMapping[h] === field) || field;
+        session.rawRows[rawIdx][header] = val;
+      }
+    }
+
+    return row;
+  }
+
+  toggleRowApproval(
+    sessionId: string,
+    ownerUserId: string,
+    rowIndex: number,
+    approved?: boolean
+  ): ValidatedImportRow | null {
+    const session = this.getSession(sessionId, ownerUserId);
+    if (!session) return null;
+
+    const row = session.validatedRows.find(r => r.rowIndex === rowIndex);
+    if (!row) return null;
+
+    row.approvedForImport = approved !== undefined ? approved : !row.approvedForImport;
+    return row;
+  }
+
+  bulkSetApproval(
+    sessionId: string,
+    ownerUserId: string,
+    filterType: 'all' | 'existing_updates' | 'historical_exits' | 'valid_only',
+    approved: boolean
+  ): boolean {
+    const session = this.getSession(sessionId, ownerUserId);
+    if (!session) return false;
+
+    for (const row of session.validatedRows) {
+      if (filterType === 'all') {
+        if (row.validationStatus === 'VALID') row.approvedForImport = approved;
+      } else if (filterType === 'existing_updates') {
+        if (row.isExistingEmployee) row.approvedForImport = approved;
+      } else if (filterType === 'historical_exits') {
+        if (row.reconciliationType === 'HISTORICAL_EXIT') row.approvedForImport = approved;
+      } else if (filterType === 'valid_only') {
+        if (row.validationStatus === 'VALID') row.approvedForImport = approved;
+      }
+    }
+
+    return true;
   }
 
   deleteRow(sessionId: string, ownerUserId: string, rowIndex: number): boolean {
@@ -431,6 +561,10 @@ class ImportSessionStore {
       validRecords: valid,
       needsAttentionRecords: attention,
       duplicateRecords: duplicate,
+      existingUpdatesCount: session.validatedRows.filter(r => r.isExistingEmployee).length,
+      thirdPartyCount: session.validatedRows.filter(r => r.isThirdParty).length,
+      historicalExitsCount: session.validatedRows.filter(r => r.reconciliationType === 'HISTORICAL_EXIT').length,
+      approvedCount: session.validatedRows.filter(r => r.approvedForImport).length,
       statusBreakdown: breakdown,
     };
   }

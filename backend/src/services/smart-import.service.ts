@@ -11,6 +11,8 @@ import {
   type ImportSummary,
   type ImportSession,
   type SheetSessionData,
+  type ReconciliationType,
+  type FieldDiff,
 } from './import-session.store.js';
 import { excelSheetAnalyzer, type SheetAnalysis, type SheetCategory } from './excel-sheet-analyzer.js';
 
@@ -424,6 +426,10 @@ export class SmartImportService {
       sheetSessionList
     );
 
+    // 4. Automatically run multi-sheet reconciliation and validation
+    await this.validateMultiSheetMapping(session.sessionId, ownerUserId);
+    const validatedSession = importSessionStore.getSession(session.sessionId, ownerUserId) || session;
+
     // Primary sheet detection result for backwards compatibility
     const primarySheet =
       sheetSessionList.find(s => s.importable && s.category === 'REGULAR_EMPLOYEES') ||
@@ -437,7 +443,7 @@ export class SmartImportService {
     };
 
     return {
-      session,
+      session: validatedSession,
       detection: {
         detectedHeaders: primarySheet?.detectedHeaders || [],
         suggestedMapping: primaryMapping.suggestedMapping,
@@ -445,8 +451,8 @@ export class SmartImportService {
         previewSampleRows: primarySheet?.rawRows.slice(0, 5) || [],
         savedMappingMatched: primaryMapping.savedMappingMatched,
       },
-      sheets: Object.values(session.sheets),
-      sheetOrder: session.sheetOrder,
+      sheets: Object.values(validatedSession.sheets),
+      sheetOrder: validatedSession.sheetOrder,
       canonicalFields: CANONICAL_IMPORT_FIELDS,
     };
   }
@@ -520,23 +526,59 @@ export class SmartImportService {
       }
     }
 
-    // Fetch existing employee codes and emails in workspace to detect duplicates
-    const existingEmpRes = await executeSql<{ employee_code: string; work_email: string | null }>(
-      `SELECT employee_code, work_email 
-       FROM hr_employees 
-       WHERE owner_user_id = $1 AND deleted_at IS NULL`,
+    // Fetch existing employees in workspace to detect updates vs new employees
+    interface DbEmployeeRecord {
+      id: number;
+      employee_code: string;
+      first_name: string;
+      last_name: string | null;
+      work_email: string | null;
+      personal_email: string | null;
+      phone: string | null;
+      department_name: string | null;
+      designation_name: string | null;
+      employment_status: string;
+      hire_date: string | null;
+      last_working_day: string | null;
+      exit_reason: string | null;
+      exit_notes: string | null;
+    }
+
+    const existingEmpRes = await executeSql<DbEmployeeRecord>(
+      `SELECT e.employee_id as id, e.employee_code, e.first_name, e.last_name, 
+              e.work_email, e.personal_email, e.phone,
+              d.department_name, ds.designation_name,
+              e.employment_status, 
+              TO_CHAR(e.hire_date, 'YYYY-MM-DD') as hire_date,
+              TO_CHAR(e.last_working_day, 'YYYY-MM-DD') as last_working_day,
+              e.exit_reason, e.exit_notes
+       FROM hr_employees e
+       LEFT JOIN hr_departments d ON d.department_id = e.department_id AND d.owner_user_id = e.owner_user_id
+       LEFT JOIN hr_designations ds ON ds.designation_id = e.designation_id AND ds.owner_user_id = e.owner_user_id
+       WHERE e.owner_user_id = $1 AND e.deleted_at IS NULL`,
       [ownerUserId],
       { userId: ownerUserId, role: 'user' }
     );
 
-    const existingCodes = new Set(
-      (existingEmpRes.rows || []).map(r => String(r.employee_code).trim().toLowerCase())
-    );
-    const existingEmails = new Set(
-      (existingEmpRes.rows || [])
-        .map(r => (r.work_email ? String(r.work_email).trim().toLowerCase() : ''))
-        .filter(Boolean)
-    );
+    const existingCodeMap = new Map<string, DbEmployeeRecord>();
+    const existingEmailMap = new Map<string, DbEmployeeRecord>();
+
+    for (const emp of existingEmpRes.rows || []) {
+      if (emp.employee_code) {
+        existingCodeMap.set(String(emp.employee_code).trim().toLowerCase(), emp);
+      }
+      if (emp.work_email) {
+        existingEmailMap.set(String(emp.work_email).trim().toLowerCase(), emp);
+      }
+    }
+
+    // Map existing rows to preserve manual edits
+    const existingRowMap = new Map<number, ValidatedImportRow>();
+    if (session.validatedRows && session.validatedRows.length > 0) {
+      for (const r of session.validatedRows) {
+        existingRowMap.set(r.rowIndex, r);
+      }
+    }
 
     // Reconciled employee internal model
     interface MutableReconciledRow {
@@ -839,6 +881,67 @@ export class SmartImportService {
       });
     }
 
+    // PASS 6: RECRUITMENT sheets (genuine selected/joining candidates for onboarding)
+    const recruitmentSheets = Object.values(session.sheets).filter(s => s.importable && s.category === 'RECRUITMENT');
+    for (const sheet of recruitmentSheets) {
+      const mapping = sheet.columnMapping || {};
+      sheet.rawRows.forEach((raw, i) => {
+        const rowNum = sheet.headerRowIndex + 1 + i;
+
+        // Check candidate stage / status
+        const stageVal = (
+          getFieldVal(raw, mapping, 'employmentStatus') ||
+          String(raw['Stage'] || raw['stage'] || raw['Status'] || raw['status'] || raw['Candidate Status'] || '')
+        ).trim().toLowerCase();
+
+        // Genuine selected candidates (Offer, Selected, Joining, Hired)
+        const isSelected = ['offer', 'offered', 'selected', 'joining', 'joined', 'hired', 'accepted'].some(s => stageVal.includes(s));
+        if (!isSelected) {
+          // Open vacancies or unselected candidates (Interview, Screening, Applied, Rejected) are ignored!
+          return;
+        }
+
+        const candidateName = getFieldVal(raw, mapping, 'fullName') || String(raw['Candidate'] || raw['Candidate Name'] || raw['candidate'] || '').trim();
+        let firstName = getFieldVal(raw, mapping, 'firstName');
+        let lastName = getFieldVal(raw, mapping, 'lastName');
+        if (candidateName && !firstName) {
+          const parts = candidateName.split(/\s+/);
+          firstName = parts[0] || '';
+          lastName = parts.slice(1).join(' ') || '';
+        }
+
+        const designation = getFieldVal(raw, mapping, 'designation') || String(raw['Position'] || raw['Role'] || raw['Title'] || '').trim();
+        const department = getFieldVal(raw, mapping, 'department') || String(raw['Department'] || raw['Dept'] || '').trim();
+        const rawCode = getFieldVal(raw, mapping, 'employeeCode');
+        const rawHireDate = getFieldVal(raw, mapping, 'hireDate');
+        const parsedHire = this.parseDateValue(rawHireDate);
+
+        addRow({
+          rowIndex: rowNum,
+          primarySheet: sheet.sheetName,
+          sourceSheets: new Set([sheet.sheetName]),
+          isHistorical: false,
+          originalData: raw,
+          employeeCode: rawCode,
+          fullName: candidateName || `${firstName} ${lastName}`.trim(),
+          firstName,
+          lastName,
+          workEmail: getFieldVal(raw, mapping, 'workEmail'),
+          personalEmail: getFieldVal(raw, mapping, 'personalEmail'),
+          phone: getFieldVal(raw, mapping, 'phone'),
+          department: department || 'Recruitment Onboarding',
+          designation: designation || 'Selected Candidate',
+          employmentStatus: 'ONBOARDING',
+          hireDate: parsedHire || rawHireDate,
+          lastWorkingDay: null,
+          exitDate: null,
+          exitReason: null,
+          exitNotes: `Selected candidate from ${sheet.sheetName} (Stage: ${stageVal})`,
+          customNotes: [`Selected candidate (${stageVal})`],
+        });
+      });
+    }
+
     // Compute intra-batch code occurrences for duplicate checking
     const codeOccurrences = new Map<string, number[]>();
     for (const row of reconciledRows) {
@@ -861,6 +964,86 @@ export class SmartImportService {
       const errors: RowValidationError[] = [];
       const warnings: string[] = [];
 
+      // Match against existing database employee
+      const lowerCode = row.employeeCode ? row.employeeCode.toLowerCase() : '';
+      const lowerEmail = row.workEmail ? row.workEmail.toLowerCase() : '';
+      const existingDbMatch = (lowerCode && existingCodeMap.get(lowerCode)) || (lowerEmail && existingEmailMap.get(lowerEmail)) || null;
+
+      let isExistingEmployee = false;
+      let existingEmployeeId: number | undefined;
+      let existingDbData: Record<string, unknown> | undefined;
+      const fieldDiffs: FieldDiff[] = [];
+      let reconciliationType: ReconciliationType = 'NEW_EMPLOYEE';
+      let approvedForImport = true;
+
+      if (existingDbMatch) {
+        isExistingEmployee = true;
+        existingEmployeeId = existingDbMatch.id;
+        existingDbData = {
+          id: existingDbMatch.id,
+          employeeCode: existingDbMatch.employee_code,
+          fullName: `${existingDbMatch.first_name || ''} ${existingDbMatch.last_name || ''}`.trim(),
+          workEmail: existingDbMatch.work_email || '',
+          department: existingDbMatch.department_name || '',
+          designation: existingDbMatch.designation_name || '',
+          employmentStatus: existingDbMatch.employment_status || '',
+          hireDate: existingDbMatch.hire_date || '',
+          lastWorkingDay: existingDbMatch.last_working_day || '',
+        };
+
+        if (row.department && existingDbMatch.department_name && row.department.toLowerCase() !== existingDbMatch.department_name.toLowerCase()) {
+          fieldDiffs.push({ field: 'department', label: 'Department', currentVal: existingDbMatch.department_name, proposedVal: row.department });
+        }
+        if (row.designation && existingDbMatch.designation_name && row.designation.toLowerCase() !== existingDbMatch.designation_name.toLowerCase()) {
+          fieldDiffs.push({ field: 'designation', label: 'Designation / Role', currentVal: existingDbMatch.designation_name, proposedVal: row.designation });
+        }
+        if (row.employmentStatus && existingDbMatch.employment_status && row.employmentStatus.toUpperCase() !== existingDbMatch.employment_status.toUpperCase()) {
+          fieldDiffs.push({ field: 'employmentStatus', label: 'Lifecycle Status', currentVal: existingDbMatch.employment_status, proposedVal: row.employmentStatus });
+        }
+        if (row.workLocation) {
+          fieldDiffs.push({ field: 'workLocation', label: 'Work Location', currentVal: 'Current Site', proposedVal: row.workLocation });
+        }
+        if (row.lastWorkingDay && existingDbMatch.last_working_day !== row.lastWorkingDay) {
+          fieldDiffs.push({ field: 'lastWorkingDay', label: 'Last Working Day', currentVal: existingDbMatch.last_working_day || 'None', proposedVal: row.lastWorkingDay });
+        }
+
+        if (fieldDiffs.some(d => d.field === 'employmentStatus')) {
+          if (row.employmentStatus === 'ACTIVE' && (existingDbMatch.employment_status === 'OFFBOARDING' || existingDbMatch.employment_status === 'EXITED')) {
+            reconciliationType = 'RESTORATION';
+          } else {
+            reconciliationType = 'LIFECYCLE_CHANGE';
+          }
+        } else if (fieldDiffs.some(d => d.field === 'workLocation')) {
+          reconciliationType = 'LOCATION_TRANSFER';
+        } else if (fieldDiffs.length > 0) {
+          reconciliationType = 'EXISTING_UPDATE';
+        } else {
+          reconciliationType = 'EXISTING_UNCHANGED';
+        }
+
+        // Existing employee updates require explicit approval before applying
+        approvedForImport = false;
+        warnings.push(`Matches existing employee "${existingDbMatch.employee_code}". Proposed changes require HR approval.`);
+      } else if (row.isHistorical) {
+        reconciliationType = 'HISTORICAL_EXIT';
+        approvedForImport = false;
+        warnings.push('Historical departure record. Explicit approval required to create as EXITED employee.');
+      } else if (row.vendor || (row.primarySheet && row.primarySheet.toLowerCase().includes('third party'))) {
+        reconciliationType = 'THIRD_PARTY';
+        approvedForImport = true;
+      } else {
+        reconciliationType = 'NEW_EMPLOYEE';
+        approvedForImport = true;
+      }
+
+      // Check if row was previously manually edited in session
+      const previousRow = existingRowMap.get(rowIndex);
+      const isEdited = previousRow?.isEdited || false;
+      const editedFields = previousRow?.editedFields || [];
+      if (previousRow?.approvedForImport !== undefined) {
+        approvedForImport = previousRow.approvedForImport;
+      }
+
       // 1. Employee Code Validation (CRITICAL: Never auto-generate!)
       if (!row.employeeCode) {
         errors.push({
@@ -871,10 +1054,10 @@ export class SmartImportService {
       } else {
         const lowerCode = row.employeeCode.toLowerCase();
         const dupRows = codeOccurrences.get(lowerCode) || [];
-        if (existingCodes.has(lowerCode)) {
+        if (existingDbMatch && !approvedForImport) {
           errors.push({
             field: 'employeeCode',
-            message: `Employee Code "${row.employeeCode}" already exists in your workspace. Overwrites are not permitted.`,
+            message: `Employee Code "${row.employeeCode}" already exists in your workspace. Overwrites are not permitted unless approved.`,
             critical: true,
           });
         } else if (dupRows.length > 1) {
@@ -906,7 +1089,7 @@ export class SmartImportService {
           });
         } else {
           const lowerEmail = row.workEmail.toLowerCase();
-          if (existingEmails.has(lowerEmail)) {
+          if (existingEmailMap.has(lowerEmail) && !existingDbMatch) {
             warnings.push(`Work email "${row.workEmail}" is already used by an existing employee.`);
           }
           if (fileSeenEmails.has(lowerEmail)) {
@@ -981,9 +1164,33 @@ export class SmartImportService {
         validationStatus = 'NEEDS_ATTENTION';
       }
 
+      const originalExtractedData = previousRow?.originalExtractedData || {
+        employeeCode: row.employeeCode,
+        firstName: row.firstName,
+        lastName: row.lastName,
+        fullName: row.fullName || `${row.firstName} ${row.lastName}`.trim(),
+        workEmail: row.workEmail,
+        personalEmail: row.personalEmail,
+        phone: row.phone,
+        department: row.department,
+        designation: row.designation,
+        employmentStatus: row.employmentStatus,
+        hireDate: hireDate || row.hireDate,
+        lastWorkingDay: lastWorkingDay || null,
+        exitDate: row.employmentStatus === 'EXITED' ? lastWorkingDay : null,
+        exitReason: row.exitReason,
+        exitNotes: finalExitNotes || null,
+        workLocation: row.workLocation,
+        reportingManager: row.reportingManager,
+        vendor: row.vendor,
+      };
+
+      const isThirdParty = Boolean(row.vendor || (row.primarySheet && row.primarySheet.toLowerCase().includes('third party')));
+
       validatedRows.push({
         rowIndex,
         originalData: row.originalData,
+        originalExtractedData,
         mappedData: {
           employeeCode: row.employeeCode,
           firstName: row.firstName,
@@ -1000,12 +1207,26 @@ export class SmartImportService {
           exitDate: row.employmentStatus === 'EXITED' ? lastWorkingDay : null,
           exitReason: row.exitReason,
           exitNotes: finalExitNotes || null,
+          workLocation: row.workLocation,
+          reportingManager: row.reportingManager,
+          vendor: row.vendor,
+          employmentCategory: isThirdParty ? 'THIRD_PARTY' : 'REGULAR',
         },
+        isEdited,
+        editedFields,
+        isExistingEmployee,
+        existingEmployeeId,
+        existingDbData,
+        fieldDiffs,
+        reconciliationType,
+        approvedForImport,
         validationStatus,
         errors,
         warnings,
         sourceSheets: Array.from(row.sourceSheets),
         isHistorical: row.isHistorical,
+        isThirdParty,
+        vendor: row.vendor,
       });
     }
 
@@ -1035,6 +1256,10 @@ export class SmartImportService {
       needsAttentionRecords: attention,
       duplicateRecords: duplicate,
       statusBreakdown: breakdown,
+      existingUpdatesCount: validatedRows.filter(r => r.isExistingEmployee).length,
+      thirdPartyCount: validatedRows.filter(r => r.isThirdParty).length,
+      historicalExitsCount: validatedRows.filter(r => r.reconciliationType === 'HISTORICAL_EXIT').length,
+      approvedCount: validatedRows.filter(r => r.approvedForImport).length,
     };
 
     // Primary mapping alias
@@ -1097,13 +1322,13 @@ export class SmartImportService {
       throw new Error('Your import session has expired. Please upload the Excel file again.');
     }
 
-    const rowsToImport = session.validatedRows.filter(r => r.validationStatus === 'VALID');
+    const rowsToImport = session.validatedRows.filter(r => r.validationStatus === 'VALID' && r.approvedForImport === true);
 
     if (rowsToImport.length === 0) {
-      throw new Error('There are no valid records to import. Please correct the records requiring attention or upload a valid file.');
+      throw new Error('There are no approved valid records to import. Please review and approve records or correct records requiring attention.');
     }
 
-    const skippedRows = session.validatedRows.filter(r => r.validationStatus !== 'VALID');
+    const skippedRows = session.validatedRows.filter(r => r.validationStatus !== 'VALID' || !r.approvedForImport);
     const duplicateCount = session.validatedRows.filter(r => r.validationStatus === 'DUPLICATE').length;
 
     // 1. Resolve or create departments and designations in workspace
@@ -1143,7 +1368,7 @@ export class SmartImportService {
       }
     }
 
-    // 2. Batch insert employees in chunks of 100 within a tenant transaction
+    // 2. Batch insert/update employees in chunks of 100 within a tenant transaction
     const BATCH_SIZE = 100;
     let importedCount = 0;
     const statusBreakdown = { ONBOARDING: 0, ACTIVE: 0, OFFBOARDING: 0, EXITED: 0 };
@@ -1157,52 +1382,38 @@ export class SmartImportService {
           const deptId = m.department ? deptMap.get(m.department.toLowerCase()) || null : null;
           const desigId = m.designation ? desigMap.get(m.designation.toLowerCase()) || null : null;
 
-          const insertRes = await client.query<{ employee_id: number }>(
-            `INSERT INTO hr_employees (
-              owner_user_id,
-              employee_code,
-              first_name,
-              last_name,
-              work_email,
-              personal_email,
-              phone,
-              department_id,
-              designation_id,
-              employment_status,
-              hire_date,
-              exit_date,
-              last_working_day,
-              exit_reason,
-              exit_notes,
-              created_by
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $1)
-            ON CONFLICT DO NOTHING
-            RETURNING employee_id`,
-            [
-              ownerUserId,
-              m.employeeCode,
-              m.firstName,
-              m.lastName || null,
-              m.workEmail || null,
-              m.personalEmail || null,
-              m.phone || null,
-              deptId,
-              desigId,
-              m.employmentStatus,
-              m.hireDate,
-              m.exitDate || m.lastWorkingDay || null,
-              m.lastWorkingDay || null,
-              m.exitReason || null,
-              m.exitNotes || null,
-            ]
-          );
+          if (row.isExistingEmployee && row.existingEmployeeId) {
+            // Update existing workspace employee record
+            await client.query(
+              `UPDATE hr_employees
+               SET department_id = COALESCE($1, department_id),
+                   designation_id = COALESCE($2, designation_id),
+                   employment_status = COALESCE($3, employment_status),
+                   hire_date = COALESCE($4, hire_date),
+                   last_working_day = COALESCE($5, last_working_day),
+                   exit_date = COALESCE($6, exit_date),
+                   exit_reason = COALESCE($7, exit_reason),
+                   exit_notes = COALESCE($8, exit_notes),
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE employee_id = $9 AND owner_user_id = $10`,
+              [
+                deptId,
+                desigId,
+                m.employmentStatus,
+                m.hireDate,
+                m.lastWorkingDay || null,
+                m.exitDate || m.lastWorkingDay || null,
+                m.exitReason || null,
+                m.exitNotes || null,
+                row.existingEmployeeId,
+                ownerUserId,
+              ]
+            );
 
-          if ((insertRes.rows || []).length > 0) {
             importedCount++;
             statusBreakdown[m.employmentStatus]++;
-            const newEmpId = insertRes.rows[0].employee_id;
 
-            // If offboarding, initialize hr_offboarding record
+            // If offboarding, initialize/update hr_offboarding record
             if (m.employmentStatus === 'OFFBOARDING' && m.lastWorkingDay) {
               await client.query(
                 `INSERT INTO hr_offboarding (
@@ -1216,16 +1427,92 @@ export class SmartImportService {
                   contact_email,
                   created_by
                 ) VALUES ($1, $2, CURRENT_DATE, $3, $4, 'PENDING', $5, $6, $1)
-                ON CONFLICT DO NOTHING`,
+                ON CONFLICT (owner_user_id, employee_id) DO UPDATE
+                SET planned_exit_date = EXCLUDED.planned_exit_date,
+                    exit_reason = EXCLUDED.exit_reason,
+                    notes = EXCLUDED.notes`,
                 [
                   ownerUserId,
-                  newEmpId,
+                  row.existingEmployeeId,
                   m.lastWorkingDay,
                   m.exitReason || 'Imported offboarding schedule',
                   m.exitNotes,
                   m.personalEmail || m.workEmail || null,
                 ]
               );
+            }
+          } else {
+            // Insert new employee record
+            const insertRes = await client.query<{ employee_id: number }>(
+              `INSERT INTO hr_employees (
+                owner_user_id,
+                employee_code,
+                first_name,
+                last_name,
+                work_email,
+                personal_email,
+                phone,
+                department_id,
+                designation_id,
+                employment_status,
+                hire_date,
+                exit_date,
+                last_working_day,
+                exit_reason,
+                exit_notes,
+                created_by
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $1)
+              ON CONFLICT DO NOTHING
+              RETURNING employee_id`,
+              [
+                ownerUserId,
+                m.employeeCode,
+                m.firstName,
+                m.lastName || null,
+                m.workEmail || null,
+                m.personalEmail || null,
+                m.phone || null,
+                deptId,
+                desigId,
+                m.employmentStatus,
+                m.hireDate,
+                m.exitDate || m.lastWorkingDay || null,
+                m.lastWorkingDay || null,
+                m.exitReason || null,
+                m.exitNotes || null,
+              ]
+            );
+
+            if ((insertRes.rows || []).length > 0) {
+              importedCount++;
+              statusBreakdown[m.employmentStatus]++;
+              const newEmpId = insertRes.rows[0].employee_id;
+
+              // If offboarding, initialize hr_offboarding record
+              if (m.employmentStatus === 'OFFBOARDING' && m.lastWorkingDay) {
+                await client.query(
+                  `INSERT INTO hr_offboarding (
+                    owner_user_id,
+                    employee_id,
+                    notice_date,
+                    planned_exit_date,
+                    exit_reason,
+                    clearance_status,
+                    notes,
+                    contact_email,
+                    created_by
+                  ) VALUES ($1, $2, CURRENT_DATE, $3, $4, 'PENDING', $5, $6, $1)
+                  ON CONFLICT DO NOTHING`,
+                  [
+                    ownerUserId,
+                    newEmpId,
+                    m.lastWorkingDay,
+                    m.exitReason || 'Imported offboarding schedule',
+                    m.exitNotes,
+                    m.personalEmail || m.workEmail || null,
+                  ]
+                );
+              }
             }
           }
         }

@@ -870,6 +870,81 @@ export function useUpdatePreviewRow() {
   });
 }
 
+export function useRevertPreviewRow() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      sessionId,
+      rowIndex,
+    }: {
+      sessionId: string;
+      rowIndex: number;
+    }) =>
+      apiClient<{ success: boolean; row: ValidatedImportRow; summary: ImportSummary }>(
+        `/employees/import/preview/${sessionId}/${rowIndex}/revert`,
+        {
+          method: 'POST',
+        }
+      ),
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['employees', 'import', 'preview', vars.sessionId] });
+    },
+  });
+}
+
+export function useToggleRowApproval() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      sessionId,
+      rowIndex,
+      approved,
+    }: {
+      sessionId: string;
+      rowIndex: number;
+      approved?: boolean;
+    }) =>
+      apiClient<{ success: boolean; row: ValidatedImportRow; summary: ImportSummary }>(
+        `/employees/import/preview/${sessionId}/${rowIndex}/approve`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ approved }),
+        }
+      ),
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['employees', 'import', 'preview', vars.sessionId] });
+    },
+  });
+}
+
+export function useBulkSetApproval() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      sessionId,
+      filterType,
+      approved,
+    }: {
+      sessionId: string;
+      filterType: 'all' | 'existing_updates' | 'historical_exits' | 'valid_only';
+      approved: boolean;
+    }) =>
+      apiClient<{ success: boolean; summary: ImportSummary }>(
+        `/employees/import/preview/${sessionId}/bulk-approve`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ filterType, approved }),
+        }
+      ),
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['employees', 'import', 'preview', vars.sessionId] });
+    },
+  });
+}
+
 export function useDeletePreviewRow() {
   const queryClient = useQueryClient();
 

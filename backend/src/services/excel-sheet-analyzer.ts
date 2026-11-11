@@ -6,6 +6,7 @@ export type SheetCategory =
   | 'RESIGNATION_TRACKER'
   | 'RETENTION_TRACKER'
   | 'TRANSFER'
+  | 'RECRUITMENT'
   | 'IGNORE';
 
 export interface SheetAnalysis {
@@ -187,8 +188,7 @@ export class ExcelSheetAnalyzer {
     const ignoreNames = [
       'read me', 'readme', 'instruction', 'instructions', 'guide',
       'dashboard', 'projects', 'project', 'summary', 'budget', 'notes',
-      'recruitment', 'recruitment master', 'closed position', 'candidate',
-      'open position', 'pipeline', 'job openings'
+      'closed position'
     ];
     if (ignoreNames.some(k => normName.includes(k))) {
       return {
@@ -196,6 +196,23 @@ export class ExcelSheetAnalyzer {
         label: 'Ignored',
         confidence: 0.98,
         importable: false,
+      };
+    }
+
+    // 2. Recruitment Pipeline (genuine offer/selected candidates for onboarding)
+    if (
+      normName.includes('recruitment') ||
+      normName.includes('candidate') ||
+      normName.includes('hiring') ||
+      normName.includes('pipeline') ||
+      (headerText.includes('candidate') && headerText.includes('stage')) ||
+      (headerText.includes('req id') && headerText.includes('position'))
+    ) {
+      return {
+        category: 'RECRUITMENT',
+        label: 'Recruitment Onboarding',
+        confidence: 0.95,
+        importable: true,
       };
     }
 
