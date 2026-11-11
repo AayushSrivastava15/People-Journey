@@ -82,7 +82,7 @@ export const dashboardService = {
             AND COALESCE(last_working_day, exit_date) <= CURRENT_DATE + INTERVAL '14 days'
         )::int AS upcoming_exits_cnt
       FROM hr_employees
-      WHERE owner_user_id = $1
+      WHERE owner_user_id = $1 AND deleted_at IS NULL
     `;
 
     // Department breakdown
@@ -93,6 +93,7 @@ export const dashboardService = {
       FROM hr_employees e
       LEFT JOIN hr_departments d ON e.department_id = d.department_id
       WHERE e.owner_user_id = $1
+        AND e.deleted_at IS NULL
         AND UPPER(e.employment_status) != 'EXITED'
       GROUP BY d.department_name
       ORDER BY cnt DESC
@@ -105,6 +106,7 @@ export const dashboardService = {
         COUNT(*)::int AS cnt
       FROM hr_employees
       WHERE owner_user_id = $1
+        AND deleted_at IS NULL
         AND hire_date >= DATE_TRUNC('month', CURRENT_TIMESTAMP) - INTERVAL '5 months'
       GROUP BY TO_CHAR(hire_date, 'YYYY-MM')
     `;
@@ -116,6 +118,7 @@ export const dashboardService = {
         COUNT(*)::int AS cnt
       FROM hr_employees
       WHERE owner_user_id = $1
+        AND deleted_at IS NULL
         AND exit_date IS NOT NULL 
         AND exit_date >= DATE_TRUNC('month', CURRENT_TIMESTAMP) - INTERVAL '5 months'
       GROUP BY TO_CHAR(exit_date, 'YYYY-MM')
@@ -132,6 +135,7 @@ export const dashboardService = {
         '/dashboard/onboarding' AS path
       FROM hr_employees e
       WHERE e.owner_user_id = $1
+        AND e.deleted_at IS NULL
         AND UPPER(e.employment_status) = 'ONBOARDING'
         AND e.hire_date >= CURRENT_DATE
         AND e.hire_date <= CURRENT_DATE + INTERVAL '14 days'
@@ -145,6 +149,7 @@ export const dashboardService = {
         '/dashboard/offboarding' AS path
       FROM hr_employees e
       WHERE e.owner_user_id = $1
+        AND e.deleted_at IS NULL
         AND UPPER(e.employment_status) = 'OFFBOARDING'
         AND COALESCE(e.last_working_day, e.exit_date) >= CURRENT_DATE
         AND COALESCE(e.last_working_day, e.exit_date) <= CURRENT_DATE + INTERVAL '14 days'
@@ -285,7 +290,8 @@ export const dashboardService = {
       FROM hr_employees e
       LEFT JOIN hr_departments d ON e.department_id = d.department_id
       LEFT JOIN hr_designations des ON e.designation_id = des.designation_id
-      WHERE e.user_id = $1 OR LOWER(e.work_email) = LOWER($2) OR LOWER(e.personal_email) = LOWER($2)
+      WHERE (e.user_id = $1 OR LOWER(e.work_email) = LOWER($2) OR LOWER(e.personal_email) = LOWER($2))
+        AND e.deleted_at IS NULL
       LIMIT 1
     `;
     const userContext = { userId, role: user.role };

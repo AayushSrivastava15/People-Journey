@@ -578,3 +578,116 @@ export interface ExitInterviewEvaluation {
   updatedBy?: string | null;
   updatedAt?: string;
 }
+
+// ----------------------------------------------------------------------
+// Smart Employee Import & Soft Delete Types
+// ----------------------------------------------------------------------
+
+export interface CanonicalFieldDefinition {
+  field: string;
+  label: string;
+  aliases: string[];
+  required: boolean;
+  description: string;
+}
+
+export interface ColumnDetectionResult {
+  detectedHeaders: string[];
+  suggestedMapping: Record<string, string>;
+  confidence: Record<string, number>;
+  previewSampleRows: Record<string, unknown>[];
+  savedMappingMatched: boolean;
+}
+
+export interface UploadExcelResponse {
+  success: boolean;
+  sessionId: string;
+  fileName: string;
+  totalRows: number;
+  canonicalFields: CanonicalFieldDefinition[];
+  detection: ColumnDetectionResult;
+}
+
+export interface ImportSummary {
+  totalRecords: number;
+  validRecords: number;
+  needsAttentionRecords: number;
+  duplicateRecords: number;
+  statusBreakdown: {
+    onboarding: number;
+    active: number;
+    offboarding: number;
+    exited: number;
+  };
+}
+
+export interface ValidatedImportRow {
+  rowIndex: number;
+  originalData: Record<string, unknown>;
+  mappedData: {
+    employeeCode: string;
+    firstName: string;
+    lastName: string;
+    fullName: string;
+    workEmail: string;
+    personalEmail: string;
+    phone: string;
+    department: string;
+    designation: string;
+    employmentStatus: 'ONBOARDING' | 'ACTIVE' | 'OFFBOARDING' | 'EXITED';
+    hireDate: string;
+    lastWorkingDay: string | null;
+    exitDate: string | null;
+    exitReason: string | null;
+    exitNotes: string | null;
+  };
+  validationStatus: 'VALID' | 'NEEDS_ATTENTION' | 'DUPLICATE';
+  errors: Array<{ field: string; message: string; critical: boolean }>;
+  warnings: string[];
+}
+
+export interface ImportPreviewResponse {
+  success: boolean;
+  page: number;
+  limit: number;
+  totalPages: number;
+  totalFiltered: number;
+  totalRecords: number;
+  summary: ImportSummary;
+  rows: ValidatedImportRow[];
+}
+
+export interface ValidateMappingResponse {
+  success: boolean;
+  sessionId: string;
+  summary: ImportSummary;
+  previewRows: ValidatedImportRow[];
+  totalRows: number;
+}
+
+export interface CommitImportResponse {
+  success: boolean;
+  message: string;
+  result: {
+    historyId: string;
+    totalProcessed: number;
+    importedCount: number;
+    skippedCount: number;
+    errorCount: number;
+    duplicateCount: number;
+    statusBreakdown: Record<string, number>;
+  };
+}
+
+export interface ImportHistoryItem {
+  id: string;
+  filename: string;
+  uploadedAt: string;
+  totalRecords: number;
+  importedRecords: number;
+  skippedRecords: number;
+  failedRecords: number;
+  duplicateRecords: number;
+  status: 'COMPLETED' | 'PARTIAL' | 'FAILED';
+  hasErrors: boolean;
+}

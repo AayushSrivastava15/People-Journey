@@ -290,3 +290,59 @@ export async function offboardEmployee(req: Request, res: Response): Promise<voi
     });
   }
 }
+
+export async function deleteEmployee(req: Request, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({
+      success: false,
+      error: {
+        code: 'UNAUTHENTICATED',
+        message: 'Authentication required.',
+      },
+    });
+    return;
+  }
+
+  const employeeId = Number(req.params.id);
+  if (isNaN(employeeId)) {
+    res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid employee ID parameter.',
+      },
+    });
+    return;
+  }
+
+  try {
+    const success = await employeeService.deleteEmployee(employeeId, userId);
+    if (!success) {
+      res.status(404).json({
+        success: false,
+        error: {
+          code: 'NOT_FOUND',
+          message: `Employee with ID ${employeeId} not found in your workspace.`,
+        },
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Employee successfully removed from active workspace.',
+      employeeId,
+    });
+  } catch (err) {
+    const error = err as Error;
+    logger.error({ message: error.message, employeeId }, 'Failed to delete employee');
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_SERVER_ERROR',
+        message: error.message,
+      },
+    });
+  }
+}

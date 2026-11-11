@@ -93,18 +93,21 @@ export const employeeService = {
   /**
    * List employees with filtering, searching, sorting, and pagination scoped to owner's workspace.
    */
-  async listEmployees(params: EmployeeQueryParams, ownerUserId: string): Promise<{
+  async listEmployees(
+    params: Partial<EmployeeQueryParams> & { page?: number; limit?: number },
+    ownerUserId: string
+  ): Promise<{
     data: Employee[];
     total: number;
     page: number;
     limit: number;
     totalPages: number;
   }> {
-    const page = Math.max(1, params.page);
-    const limit = Math.max(1, Math.min(100, params.limit));
+    const page = Math.max(1, params.page || 1);
+    const limit = Math.max(1, Math.min(100, params.limit || 10));
     const offset = (page - 1) * limit;
 
-    const whereClauses: string[] = ['e.owner_user_id = $1'];
+    const whereClauses: string[] = ['e.owner_user_id = $1', 'e.deleted_at IS NULL'];
     const queryParams: unknown[] = [ownerUserId];
     let paramIndex = 2;
 
@@ -161,8 +164,8 @@ export const employeeService = {
       HIRE_DATE: 'e.hire_date',
       EMPLOYEE_CODE: 'e.employee_code',
     };
-    const sortColumn = columnMap[params.sortBy] || 'e.created_at';
-    const sortOrder = params.sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+    const sortColumn = columnMap[params.sortBy || 'CREATED_AT'] || 'e.created_at';
+    const sortOrder = (params.sortOrder || 'DESC').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
     const dataSql = `
       SELECT 
@@ -246,7 +249,7 @@ export const employeeService = {
       FROM hr_employees e
       LEFT JOIN hr_departments d ON e.department_id = d.department_id
       LEFT JOIN hr_designations des ON e.designation_id = des.designation_id
-      WHERE e.employee_id = $1
+      WHERE e.employee_id = $1 AND e.deleted_at IS NULL
     `;
     const params: unknown[] = [employeeId];
 
@@ -729,5 +732,52 @@ export const employeeService = {
     const updated = (await this.getEmployeeById(employeeId, ownerUserId))!;
     await dashboardCache.invalidate(ownerUserId);
     return { employee: updated, offboardingId };
+  },
+
+  /**
+   * Safe soft-deletion of an employee from active workspace.
+   * - Preserves historical records (exit interviews, offboarding records, audit trails).
+   * - Sets deleted_at = CURRENT_TIMESTAMP to exclude from normal listings and active KPI metrics.
+   * - Records immutable action in hr_audit_logs.
+   * - Invalidates dashboard caches.
+   */
+  async deleteEmployee(employeeId: number, ownerUserId: string): Promise<boolean> {
+    if (!ownerUserId) {
+      throw new Error('Owner user ID is required to delete an employee.');
+    }
+
+    const existing = await this.getEmployeeById(employeeId, ownerUserId);
+    if (!existing) {
+      return false;
+    }
+
+    const sql = `
+      UPDATE hr_employees
+      SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE employee_id = $1 AND owner_user_id = $2 AND deleted_at IS NULL
+      RETURNING employee_id;
+    `;
+    const context = { userId: ownerUserId, role: 'user' };
+    const result = await executeSql<{ employee_id: number }>(sql, [employeeId, ownerUserId], context);
+
+    if ((result.rows || []).length === 0) {
+      return false;
+    }
+
+    await auditService.log({
+      userId: ownerUserId,
+      actionType: 'DELETE_EMPLOYEE',
+      entityType: 'HR_EMPLOYEES',
+      entityId: String(employeeId),
+      details: {
+        employeeCode: existing.employeeCode,
+        name: existing.name,
+        employmentStatus: existing.employmentStatus,
+      },
+    });
+
+    await dashboardCache.invalidate(ownerUserId);
+    logger.info({ employeeId, employeeCode: existing.employeeCode, ownerUserId }, 'Employee soft-deleted from workspace');
+    return true;
   },
 };

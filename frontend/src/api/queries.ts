@@ -33,7 +33,16 @@ import type {
   ExitInterviewEvaluation,
   UserNotificationItem,
   UserNotificationsResponse,
+  UploadExcelResponse,
+  ValidateMappingResponse,
+  ImportPreviewResponse,
+  CommitImportResponse,
+  ImportHistoryItem,
+  ValidatedImportRow,
+  ImportSummary,
 } from '../types/api';
+import { buildApiUrl } from './client';
+import { auth } from '../lib/firebase';
 
 export const QUERY_KEYS = {
   dashboardStats: ['dashboard', 'stats'] as const,
@@ -53,6 +62,8 @@ export const QUERY_KEYS = {
   exitInterview: (id: string) => ['exit-interviews', id] as const,
   exitResponseDetail: (id: string) => ['exit-interviews', 'responses', id] as const,
   notifications: ['notifications'] as const,
+  importHistory: ['employees', 'import', 'history'] as const,
+  importPreview: (sessionId: string, params?: Record<string, unknown>) => ['employees', 'import', 'preview', sessionId, params || {}] as const,
 };
 
 export function usePersonalDashboard() {
@@ -423,6 +434,24 @@ export function useUpdateEmployee() {
   });
 }
 
+export function useDeleteEmployee() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (employeeId: number | string) =>
+      apiClient<{ success: boolean; message: string }>(`/employees/${employeeId}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['employees'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.departments });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.personalDashboard });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.notifications });
+    },
+  });
+}
+
 export function useOffboardEmployee() {
   const queryClient = useQueryClient();
 
@@ -679,6 +708,172 @@ export function useUpdateDraftStatus() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['email-drafts'] });
+    },
+  });
+}
+
+// ----------------------------------------------------------------------
+// Smart Employee Import API Hooks
+// ----------------------------------------------------------------------
+
+export async function downloadImportTemplateFile(): Promise<void> {
+  const url = buildApiUrl('/employees/import/template');
+  const headers = new Headers();
+  if (auth.currentUser) {
+    const token = await auth.currentUser.getIdToken();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+  }
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error('Failed to download starter template');
+  const blob = await res.blob();
+  const downloadUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = downloadUrl;
+  a.download = 'People_Journey_Employee_Template.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(downloadUrl);
+}
+
+export async function downloadImportErrorsFile(sessionId: string): Promise<void> {
+  const url = buildApiUrl(`/employees/import/errors/${sessionId}`);
+  const headers = new Headers();
+  if (auth.currentUser) {
+    const token = await auth.currentUser.getIdToken();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+  }
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error('Failed to download import error report');
+  const blob = await res.blob();
+  const downloadUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = downloadUrl;
+  a.download = `Import_Errors_${Date.now()}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(downloadUrl);
+}
+
+export function useImportHistory() {
+  return useQuery({
+    queryKey: QUERY_KEYS.importHistory,
+    queryFn: async () => {
+      const res = await apiClient<{ success: boolean; history: ImportHistoryItem[] }>('/employees/import/history');
+      return res.history || [];
+    },
+    staleTime: 30000,
+  });
+}
+
+export function useUploadImportFile() {
+  return useMutation({
+    mutationFn: (payload: { fileBase64: string; fileName: string }) =>
+      apiClient<UploadExcelResponse>('/employees/import/upload', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+  });
+}
+
+export function useValidateImportMapping() {
+  return useMutation({
+    mutationFn: (payload: { sessionId: string; columnMapping: Record<string, string>; saveMappingForWorkspace?: boolean }) =>
+      apiClient<ValidateMappingResponse>('/employees/import/validate-mapping', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+  });
+}
+
+export function useImportPreview(
+  sessionId: string | null,
+  params: { page?: number; limit?: number; filter?: string; search?: string } = {}
+) {
+  const query = new URLSearchParams();
+  if (params.page) query.set('page', String(params.page));
+  if (params.limit) query.set('limit', String(params.limit));
+  if (params.filter && params.filter !== 'all') query.set('filter', params.filter);
+  if (params.search) query.set('search', params.search);
+
+  const queryString = query.toString();
+  const endpoint = `/employees/import/preview/${sessionId}${queryString ? `?${queryString}` : ''}`;
+
+  return useQuery({
+    queryKey: QUERY_KEYS.importPreview(sessionId || '', params),
+    enabled: Boolean(sessionId),
+    queryFn: () => apiClient<ImportPreviewResponse>(endpoint),
+    staleTime: 5000,
+  });
+}
+
+export function useUpdatePreviewRow() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      sessionId,
+      rowIndex,
+      data,
+    }: {
+      sessionId: string;
+      rowIndex: number;
+      data: Partial<ValidatedImportRow['mappedData']>;
+    }) =>
+      apiClient<{ success: boolean; row: ValidatedImportRow; summary: ImportSummary }>(
+        `/employees/import/preview/${sessionId}/${rowIndex}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify(data),
+        }
+      ),
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['employees', 'import', 'preview', vars.sessionId] });
+    },
+  });
+}
+
+export function useDeletePreviewRow() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      sessionId,
+      rowIndex,
+    }: {
+      sessionId: string;
+      rowIndex: number;
+    }) =>
+      apiClient<{ success: boolean; message: string; summary: ImportSummary }>(
+        `/employees/import/preview/${sessionId}/${rowIndex}`,
+        {
+          method: 'DELETE',
+        }
+      ),
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['employees', 'import', 'preview', vars.sessionId] });
+    },
+  });
+}
+
+export function useCommitImport() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: { sessionId: string; mode?: 'valid_only' | 'all' }) =>
+      apiClient<CommitImportResponse>('/employees/import/commit', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['employees'] });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.dashboardStats });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.departments });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.designations });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.importHistory });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.personalDashboard });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.notifications });
     },
   });
 }

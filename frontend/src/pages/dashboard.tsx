@@ -6,7 +6,7 @@ import {
   Activity, ArrowDownLeft, ArrowRight, Bell, BriefcaseBusiness, CalendarDays, Check,
   ChevronDown, ChevronLeft, ChevronRight, CircleHelp, ClipboardCheck, Clock3, Database, DoorOpen,
   FileText, LayoutDashboard, ListFilter, Loader2, Lock, LogOut, Menu, MessageSquareText, Pencil, Search, Settings,
-  ShieldCheck, UserCheck, Users, UsersRound, X,
+  ShieldCheck, UserCheck, Users, UsersRound, X, Trash2, FileSpreadsheet,
 } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Form } from '@/components/ui/form';
@@ -39,6 +39,8 @@ import { EditEmployeeDialog } from '@/components/edit-employee-dialog';
 import { ExitManagementView } from '@/components/exit-management-view';
 import { NotificationBellDropdown } from '@/components/notification-bell-dropdown';
 import { AddEmployeeWizard } from '@/components/add-employee-wizard';
+import { DeleteEmployeeDialog } from '@/components/delete-employee-dialog';
+import { SmartEmployeeImportWizard } from '@/components/smart-employee-import-wizard';
 import { triggerCookiePreferencesModal } from '@/components/cookie-consent-banner';
 
 
@@ -506,6 +508,8 @@ function EmployeeTable({
 }) {
   const [editingEmployee, setEditingEmployee] = useState<ApiEmployee | null>(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [deletingEmployee, setDeletingEmployee] = useState<ApiEmployee | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   if (isLoading) {
     return (
@@ -519,6 +523,11 @@ function EmployeeTable({
   const handleEditClick = (employee: ApiEmployee) => {
     setEditingEmployee(employee);
     setEditDialogOpen(true);
+  };
+
+  const handleDeleteClick = (employee: ApiEmployee) => {
+    setDeletingEmployee(employee);
+    setDeleteDialogOpen(true);
   };
 
   return (
@@ -578,31 +587,57 @@ function EmployeeTable({
                   )}
                   <td><Status value={person.status} /></td>
                   <td style={{ textAlign: 'center' }}>
-                    <button
-                      type="button"
-                      title={`Edit ${name}`}
-                      aria-label={`Edit ${name}`}
-                      onClick={() => handleEditClick(person)}
-                      style={{
-                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                        width: 30, height: 30, borderRadius: '8px',
-                        border: '1px solid #eee3e2', background: '#fffdfa',
-                        color: '#887582', cursor: 'pointer',
-                        transition: 'all 0.15s ease',
-                      }}
-                      onMouseEnter={e => {
-                        (e.currentTarget as HTMLButtonElement).style.background = '#f4e4ea';
-                        (e.currentTarget as HTMLButtonElement).style.color = '#bd7b92';
-                        (e.currentTarget as HTMLButtonElement).style.borderColor = '#dfc9d0';
-                      }}
-                      onMouseLeave={e => {
-                        (e.currentTarget as HTMLButtonElement).style.background = '#fffdfa';
-                        (e.currentTarget as HTMLButtonElement).style.color = '#887582';
-                        (e.currentTarget as HTMLButtonElement).style.borderColor = '#eee3e2';
-                      }}
-                    >
-                      <Pencil size={13} />
-                    </button>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                      <button
+                        type="button"
+                        title={`Edit ${name}`}
+                        aria-label={`Edit ${name}`}
+                        onClick={() => handleEditClick(person)}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                          width: 30, height: 30, borderRadius: '8px',
+                          border: '1px solid #eee3e2', background: '#fffdfa',
+                          color: '#887582', cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                        }}
+                        onMouseEnter={e => {
+                          (e.currentTarget as HTMLButtonElement).style.background = '#f4e4ea';
+                          (e.currentTarget as HTMLButtonElement).style.color = '#bd7b92';
+                          (e.currentTarget as HTMLButtonElement).style.borderColor = '#dfc9d0';
+                        }}
+                        onMouseLeave={e => {
+                          (e.currentTarget as HTMLButtonElement).style.background = '#fffdfa';
+                          (e.currentTarget as HTMLButtonElement).style.color = '#887582';
+                          (e.currentTarget as HTMLButtonElement).style.borderColor = '#eee3e2';
+                        }}
+                      >
+                        <Pencil size={13} />
+                      </button>
+
+                      <button
+                        type="button"
+                        title={`Delete ${name}`}
+                        aria-label={`Delete ${name}`}
+                        onClick={() => handleDeleteClick(person)}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                          width: 30, height: 30, borderRadius: '8px',
+                          border: '1px solid #fecaca', background: '#fffdfa',
+                          color: '#dc2626', cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                        }}
+                        onMouseEnter={e => {
+                          (e.currentTarget as HTMLButtonElement).style.background = '#fee2e2';
+                          (e.currentTarget as HTMLButtonElement).style.borderColor = '#fca5a5';
+                        }}
+                        onMouseLeave={e => {
+                          (e.currentTarget as HTMLButtonElement).style.background = '#fffdfa';
+                          (e.currentTarget as HTMLButtonElement).style.borderColor = '#fecaca';
+                        }}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );
@@ -635,6 +670,16 @@ function EmployeeTable({
         }}
         departments={departments}
         designations={designations}
+      />
+
+      {/* Delete Employee Soft Deletion Dialog */}
+      <DeleteEmployeeDialog
+        employee={deletingEmployee}
+        open={deleteDialogOpen}
+        onOpenChange={(o) => {
+          setDeleteDialogOpen(o);
+          if (!o) setDeletingEmployee(null);
+        }}
       />
     </>
   );
@@ -1180,6 +1225,7 @@ function ExitTable({ rows }: { rows: WorkspaceExitItem[] }) {
 function AddEmployee() {
   const { data: departments } = useDepartments();
   const { data: designations } = useDesignations();
+  const [enrollmentMode, setEnrollmentMode] = useState<'single' | 'smart_import'>('single');
 
   return (
     <>
@@ -1187,11 +1233,61 @@ function AddEmployee() {
         eyebrow="Lifecycle Operations"
         title="Add Employee"
         text="Enroll team members into tailored lifecycle workflows with automated milestones and compliance tracking."
+        action={
+          <div style={{ display: 'inline-flex', gap: '6px', background: '#f4e4ea', padding: '4px', borderRadius: '10px' }}>
+            <button
+              type="button"
+              onClick={() => setEnrollmentMode('single')}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '7px 16px',
+                borderRadius: '8px',
+                border: 'none',
+                background: enrollmentMode === 'single' ? '#ffffff' : 'transparent',
+                color: enrollmentMode === 'single' ? '#bd7b92' : '#887582',
+                fontWeight: enrollmentMode === 'single' ? 700 : 500,
+                fontSize: '13px',
+                cursor: 'pointer',
+                boxShadow: enrollmentMode === 'single' ? '0 2px 6px rgba(0,0,0,0.06)' : 'none',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <Users size={14} /> Single Employee
+            </button>
+            <button
+              type="button"
+              onClick={() => setEnrollmentMode('smart_import')}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '7px 16px',
+                borderRadius: '8px',
+                border: 'none',
+                background: enrollmentMode === 'smart_import' ? '#ffffff' : 'transparent',
+                color: enrollmentMode === 'smart_import' ? '#bd7b92' : '#887582',
+                fontWeight: enrollmentMode === 'smart_import' ? 700 : 500,
+                fontSize: '13px',
+                cursor: 'pointer',
+                boxShadow: enrollmentMode === 'smart_import' ? '0 2px 6px rgba(0,0,0,0.06)' : 'none',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <FileSpreadsheet size={14} /> Smart Excel Import
+            </button>
+          </div>
+        }
       />
-      <AddEmployeeWizard
-        departments={departments || []}
-        designations={designations || []}
-      />
+      {enrollmentMode === 'single' ? (
+        <AddEmployeeWizard
+          departments={departments || []}
+          designations={designations || []}
+        />
+      ) : (
+        <SmartEmployeeImportWizard />
+      )}
     </>
   );
 }

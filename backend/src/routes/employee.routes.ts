@@ -5,6 +5,7 @@ import {
   createEmployee,
   updateEmployee,
   offboardEmployee,
+  deleteEmployee,
 } from '../controllers/employee.controller.js';
 import { authenticateToken } from '../middleware/auth.middleware.js';
 import { employeeLimiter } from '../middleware/rate-limiter.js';
@@ -19,6 +20,7 @@ router.get('/', getEmployees);
 router.post('/', createEmployee);
 router.get('/:id', getEmployeeById);
 router.patch('/:id', updateEmployee);
+router.delete('/:id', deleteEmployee);
 router.post('/:id/offboard', offboardEmployee);
 
 export default router;
