@@ -49,6 +49,14 @@ function DashboardRoute() {
   );
 }
 
+function ShortLinkRoute() {
+  return (
+    <Suspense fallback={<RouteFallback label="Opening feedback survey…" />}>
+      <ShortLinkRedirectPage />
+    </Suspense>
+  );
+}
+
 function IndexHtmlRedirect() {
   const [, setLocation] = useLocation();
   const { user, loading } = useAuth();
@@ -95,7 +103,8 @@ function Router() {
         <Route path="/dashboard/notification-history" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/exit-interviews" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/interview-responses" component={ProtectedWorkspaceRoute} />
-        <Route path="/e/:code" component={() => <Suspense fallback={<RouteFallback label="Opening feedback survey…" />}><ShortLinkRedirectPage /></Suspense>} />
+        <Route path="/e/:code" component={ShortLinkRoute} />
+        <Route path="/e/:code/" component={ShortLinkRoute} />
         <Route component={NotFound} />
       </Switch>
     </RoutedErrorBoundary>

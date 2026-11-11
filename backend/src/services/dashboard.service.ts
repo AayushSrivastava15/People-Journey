@@ -152,7 +152,8 @@ export const dashboardService = {
       LIMIT 6
     `;
 
-    // Execute all 5 optimized queries concurrently in parallel
+    // Execute all 5 optimized queries concurrently in parallel with tenant context
+    const tenantContext = { userId: ownerUserId, role: 'user' };
     const [
       kpiRes,
       deptRes,
@@ -168,10 +169,10 @@ export const dashboardService = {
         joining_month_cnt: number;
         upcoming_joiners_cnt: number;
         upcoming_exits_cnt: number;
-      }>(kpiSummarySql, [ownerUserId]),
-      executeSql<{ dept_name: string; cnt: number }>(deptSql, [ownerUserId]),
-      executeSql<{ month_key: string; cnt: number }>(hiresByMonthSql, [ownerUserId]),
-      executeSql<{ month_key: string; cnt: number }>(exitsByMonthSql, [ownerUserId]),
+      }>(kpiSummarySql, [ownerUserId], tenantContext),
+      executeSql<{ dept_name: string; cnt: number }>(deptSql, [ownerUserId], tenantContext),
+      executeSql<{ month_key: string; cnt: number }>(hiresByMonthSql, [ownerUserId], tenantContext),
+      executeSql<{ month_key: string; cnt: number }>(exitsByMonthSql, [ownerUserId], tenantContext),
       executeSql<{
         id: string;
         person: string;
@@ -179,7 +180,7 @@ export const dashboardService = {
         event_date: string;
         status: string;
         path: string;
-      }>(eventsSql, [ownerUserId]),
+      }>(eventsSql, [ownerUserId], tenantContext),
     ]);
 
     const kpi = kpiRes.rows?.[0] || {
@@ -287,6 +288,7 @@ export const dashboardService = {
       WHERE e.user_id = $1 OR LOWER(e.work_email) = LOWER($2) OR LOWER(e.personal_email) = LOWER($2)
       LIMIT 1
     `;
+    const userContext = { userId, role: user.role };
     const empRes = await executeSql<{
       employee_id: number;
       employee_code: string;
@@ -295,7 +297,7 @@ export const dashboardService = {
       exit_date: string | null;
       department_name: string | null;
       designation_name: string | null;
-    }>(empSql, [userId, email]);
+    }>(empSql, [userId, email], userContext);
 
     const empRow = empRes.rows?.[0];
     const employeeProfile = empRow
@@ -325,7 +327,7 @@ export const dashboardService = {
       type: string;
       is_read: boolean;
       created_at: Date;
-    }>(notifSql, [userId]);
+    }>(notifSql, [userId], userContext);
 
     const notifications = (notifRes.rows || []).map(n => ({
       id: n.id,

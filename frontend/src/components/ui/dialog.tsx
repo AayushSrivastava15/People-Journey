@@ -19,9 +19,13 @@ const DialogOverlay = React.forwardRef<
     ref={ref}
     data-radix-dialog-overlay=""
     className={cn(
-      'fixed inset-0 z-50 bg-[#1e1419]/45 backdrop-blur-[6px] transition-all duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 no-print print:hidden',
+      'fixed inset-0 z-50 bg-[#1e1419]/50 backdrop-blur-md transition-all duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 no-print print:hidden',
       className,
     )}
+    style={{
+      backdropFilter: 'blur(8px)',
+      WebkitBackdropFilter: 'blur(8px)',
+    }}
     {...props}
   />
 ));

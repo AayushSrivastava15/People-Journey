@@ -42,7 +42,8 @@ export class CompanyProfileService {
 
     const result = await executeSql(
       `SELECT * FROM hr_company_profiles WHERE owner_user_id = $1 LIMIT 1`,
-      [ownerUserId]
+      [ownerUserId],
+      { userId: ownerUserId, role: 'user' }
     );
 
     if (result.rows.length === 0) {
@@ -66,7 +67,8 @@ export class CompanyProfileService {
     // Check if company has an exit template
     const templateRes = await executeSql(
       `SELECT id FROM hr_exit_interview_templates WHERE owner_user_id = $1 AND is_active = TRUE LIMIT 1`,
-      [ownerUserId]
+      [ownerUserId],
+      { userId: ownerUserId, role: 'user' }
     );
     const hasDefaultTemplate = templateRes.rows.length > 0;
 
@@ -185,7 +187,7 @@ export class CompanyProfileService {
       data.setupStep ?? 1,
     ];
 
-    const result = await executeSql(query, values);
+    const result = await executeSql(query, values, { userId: ownerUserId, role: 'user' });
     const profile = mapRowToCompanyProfile(result.rows[0]);
     logger.info({ ownerUserId, companyName: data.companyName }, 'Saved company profile in PostgreSQL');
 
@@ -205,7 +207,8 @@ export class CompanyProfileService {
   async ensureCompanyTemplate(ownerUserId: string, companyName: string): Promise<string> {
     const existing = await executeSql<{ id: string }>(
       `SELECT id FROM hr_exit_interview_templates WHERE owner_user_id = $1 AND is_active = TRUE LIMIT 1`,
-      [ownerUserId]
+      [ownerUserId],
+      { userId: ownerUserId, role: 'user' }
     );
 
     if (existing.rows.length > 0) {
@@ -230,7 +233,8 @@ export class CompanyProfileService {
         templateName,
         `Official Exit Interview feedback questionnaire for ${companyName || 'the organisation'}.`,
         JSON.stringify(MASTER_EXIT_QUESTIONNAIRE),
-      ]
+      ],
+      { userId: ownerUserId, role: 'user' }
     );
 
     const templateId = insRes.rows[0].id;
@@ -250,7 +254,8 @@ export class CompanyProfileService {
         JSON.stringify(MASTER_EXIT_QUESTIONNAIRE),
         'Initial company template generated from master questionnaire.',
         ownerUserId,
-      ]
+      ],
+      { userId: ownerUserId, role: 'user' }
     );
 
     logger.info({ ownerUserId, templateId }, 'Initialized independent company exit interview template & version 1');

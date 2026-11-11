@@ -347,7 +347,7 @@ export const exitInterviewService = {
         changeSummary: verRes.rows[0].change_summary,
         publishedAt: verRes.rows[0].published_at,
       };
-    });
+    }, { userId: ownerUserId, role: 'user' });
   },
 
   /**
@@ -506,7 +506,7 @@ export const exitInterviewService = {
       );
 
       return inserted.rows[0];
-    });
+    }, { userId: owner, role: 'user' });
 
     const shortUrl = getShortUrl(result.shortCode);
     return { ...result, shortUrl, publicUrl: shortUrl, token: raw };
@@ -547,7 +547,7 @@ export const exitInterviewService = {
       const r = updated.rows[0];
       const shortUrl = getShortUrl(shortCode);
       return { ...r, shortUrl, publicUrl: shortUrl, token: raw };
-    });
+    }, { userId: owner, role: 'user' });
   },
 
   async revoke(owner: string, id: string, actor: string) {
@@ -568,7 +568,7 @@ export const exitInterviewService = {
         [actor, id]
       );
       return true;
-    });
+    }, { userId: owner, role: 'user' });
   },
 
   async reopen(owner: string, id: string, actor: string, days: number) {
@@ -602,7 +602,7 @@ export const exitInterviewService = {
         [actor, id, JSON.stringify({ expiryDays: days, shortCode })]
       );
       return updated.rows[0];
-    });
+    }, { userId: owner, role: 'user' });
 
     if (!r) return null;
     const shortUrl = getShortUrl(r.shortCode);
@@ -827,7 +827,7 @@ export const exitInterviewService = {
           schema: questionnaireSchema,
         },
       };
-    });
+    }, { role: 'anonymous_survey', shortCode });
   },
 
   /**
@@ -928,7 +928,7 @@ export const exitInterviewService = {
 
       logger.info({ interviewId: row.id, shortCode }, 'Exit interview feedback successfully submitted and saved.');
       return { ok: true };
-    });
+    }, { role: 'anonymous_survey', shortCode });
   },
 
   // -------------------------------------------------------------------------
@@ -953,7 +953,8 @@ export const exitInterviewService = {
        LEFT JOIN hr_company_profiles p ON p.owner_user_id = i.owner_user_id
        LEFT JOIN hr_exit_interview_responses r ON r.interview_id = i.id AND r.question_id = 'all'
        WHERE i.id = $1 AND i.owner_user_id = $2`,
-      [interviewId, ownerUserId]
+      [interviewId, ownerUserId],
+      { userId: ownerUserId, role: 'user' }
     );
 
     if (!q.rows.length) return null;

@@ -613,7 +613,7 @@ function CreateInterviewDialog({
 
   return (
     <>
-      <Dialog open={open} onOpenChange={value => !value && close()} modal={false}>
+      <Dialog open={open} onOpenChange={value => !value && close()}>
         <DialogContent
           className="max-w-xl border-[#ebdada] bg-[#fffdfb] p-0"
           onPointerDownOutside={e => {
@@ -995,7 +995,7 @@ function InterviewDetailDialog({
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
+      <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent
           className="max-w-3xl border-[#ebdada] bg-[#fffdfb] p-0"
           onPointerDownOutside={e => {

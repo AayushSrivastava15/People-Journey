@@ -104,7 +104,8 @@ export const masterService = {
       ORDER BY d.department_name ASC
     `;
 
-    const result = await executeSql<RawDepartmentRow>(sql, [ownerUserId || null]);
+    const context = { userId: ownerUserId || undefined, role: 'user' };
+    const result = await executeSql<RawDepartmentRow>(sql, [ownerUserId || null], context);
     return (result.rows || []).map(row => ({
       departmentId: Number(row.department_id),
       departmentName: row.department_name,
@@ -146,11 +147,16 @@ export const masterService = {
       RETURNING department_id, department_name, description, is_active, created_at;
     `;
 
-    const result = await executeSql<RawDepartmentRow>(sql, [
-      input.departmentName.trim(),
-      input.description?.trim() || null,
-      ownerUserId || null,
-    ]);
+    const context = { userId: ownerUserId || undefined, role: 'user' };
+    const result = await executeSql<RawDepartmentRow>(
+      sql,
+      [
+        input.departmentName.trim(),
+        input.description?.trim() || null,
+        ownerUserId || null,
+      ],
+      context
+    );
 
     const row = result.rows?.[0];
     if (!row) {
@@ -182,12 +188,14 @@ export const masterService = {
   async getDesignations(ownerUserId?: string): Promise<Designation[]> {
     await this.ensureSeededDefaults();
 
+    const context = { userId: ownerUserId || undefined, role: 'user' };
     const result = await executeSql<RawDesignationRow>(
       `SELECT designation_id, designation_name, description, created_at
        FROM hr_designations
        WHERE ($1::uuid IS NULL OR owner_user_id IS NULL OR owner_user_id = $1::uuid)
        ORDER BY designation_name ASC`,
-      [ownerUserId || null]
+      [ownerUserId || null],
+      context
     );
 
     return (result.rows || []).map(row => ({
@@ -228,11 +236,16 @@ export const masterService = {
       RETURNING designation_id, designation_name, description, created_at;
     `;
 
-    const result = await executeSql<RawDesignationRow>(sql, [
-      input.designationName.trim(),
-      input.description?.trim() || null,
-      ownerUserId || null,
-    ]);
+    const context = { userId: ownerUserId || undefined, role: 'user' };
+    const result = await executeSql<RawDesignationRow>(
+      sql,
+      [
+        input.designationName.trim(),
+        input.description?.trim() || null,
+        ownerUserId || null,
+      ],
+      context
+    );
 
     const row = result.rows?.[0];
     if (!row) {

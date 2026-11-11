@@ -49,7 +49,8 @@ export const userService = {
       `SELECT id, firebase_uid, email, display_name, photo_url, role, account_status, preferences, created_at, updated_at, last_login_at
        FROM app_users
        WHERE firebase_uid = $1`,
-      [firebaseUid]
+      [firebaseUid],
+      { role: 'auth_bootstrap' }
     );
 
     const row = result.rows?.[0];
@@ -64,7 +65,8 @@ export const userService = {
       `SELECT id, firebase_uid, email, display_name, photo_url, role, account_status, preferences, created_at, updated_at, last_login_at
        FROM app_users
        WHERE LOWER(email) = LOWER($1)`,
-      [email.trim().toLowerCase()]
+      [email.trim().toLowerCase()],
+      { role: 'auth_bootstrap' }
     );
 
     const row = result.rows?.[0];
@@ -79,7 +81,8 @@ export const userService = {
       `SELECT id, firebase_uid, email, display_name, photo_url, role, account_status, preferences, created_at, updated_at, last_login_at
        FROM app_users
        WHERE id = $1`,
-      [id]
+      [id],
+      { userId: id, role: 'user' }
     );
 
     const row = result.rows?.[0];
@@ -90,7 +93,11 @@ export const userService = {
    * Get total count of registered application users.
    */
   async count(): Promise<number> {
-    const result = await executeSql<{ total: string }>('SELECT COUNT(*) AS total FROM app_users');
+    const result = await executeSql<{ total: string }>(
+      'SELECT COUNT(*) AS total FROM app_users',
+      [],
+      { role: 'auth_bootstrap' }
+    );
     return parseInt(result.rows?.[0]?.total || '0', 10);
   },
 
@@ -133,13 +140,17 @@ export const userService = {
       RETURNING id, firebase_uid, email, display_name, photo_url, role, account_status, preferences, created_at, updated_at, last_login_at;
     `;
 
-    const result = await executeSql<RawAppUserRow>(sql, [
-      data.firebaseUid,
-      email,
-      displayName,
-      photoUrl,
-      initialRole,
-    ]);
+    const result = await executeSql<RawAppUserRow>(
+      sql,
+      [
+        data.firebaseUid,
+        email,
+        displayName,
+        photoUrl,
+        initialRole,
+      ],
+      { role: 'auth_bootstrap' }
+    );
 
     const row = result.rows?.[0];
     if (!row) {
@@ -172,15 +183,19 @@ export const userService = {
       RETURNING id, firebase_uid, email, display_name, photo_url, role, account_status, preferences, created_at, updated_at, last_login_at;
     `;
 
-    const result = await executeSql<RawAppUserRow>(sql, [
-      data.firebaseUid,
-      email,
-      data.displayName || null,
-      data.photoUrl || null,
-      role,
-      status,
-      JSON.stringify(preferences),
-    ]);
+    const result = await executeSql<RawAppUserRow>(
+      sql,
+      [
+        data.firebaseUid,
+        email,
+        data.displayName || null,
+        data.photoUrl || null,
+        role,
+        status,
+        JSON.stringify(preferences),
+      ],
+      { role: 'auth_bootstrap' }
+    );
 
     const row = result.rows?.[0];
     if (!row) {
@@ -220,7 +235,7 @@ export const userService = {
       RETURNING id, firebase_uid, email, display_name, photo_url, role, account_status, preferences, created_at, updated_at, last_login_at;
     `;
 
-    const result = await executeSql<RawAppUserRow>(sql, params);
+    const result = await executeSql<RawAppUserRow>(sql, params, { userId, role: 'user' });
     const row = result.rows?.[0];
     if (!row) {
       throw new Error(`User with ID ${userId} not found.`);
@@ -260,7 +275,7 @@ export const userService = {
       RETURNING id, firebase_uid, email, display_name, photo_url, role, account_status, preferences, created_at, updated_at, last_login_at;
     `;
 
-    const result = await executeSql<RawAppUserRow>(sql, params);
+    const result = await executeSql<RawAppUserRow>(sql, params, { userId, role: 'hr_admin' });
     const row = result.rows?.[0];
     if (!row) {
       throw new Error(`User with ID ${userId} not found.`);
@@ -277,7 +292,9 @@ export const userService = {
     const result = await executeSql<RawAppUserRow>(
       `SELECT id, firebase_uid, email, display_name, photo_url, role, account_status, preferences, created_at, updated_at, last_login_at
        FROM app_users
-       ORDER BY created_at DESC`
+       ORDER BY created_at DESC`,
+      [],
+      { role: 'super_admin' }
     );
 
     return (result.rows || []).map(mapRowToAppUser);

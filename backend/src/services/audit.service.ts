@@ -1,5 +1,5 @@
 import type pg from 'pg';
-import { executeSql } from '../config/database.js';
+import { executeSql, type TenantContext } from '../config/database.js';
 import { logger } from '../utils/logger.js';
 
 export interface AuditLogEntry {
@@ -46,7 +46,11 @@ export const auditService = {
       if (client) {
         await client.query(sql, params);
       } else {
-        await executeSql(sql, params);
+        const auditContext: TenantContext = {
+          userId: userId || undefined,
+          role: userId ? 'user' : 'auth_bootstrap',
+        };
+        await executeSql(sql, params, auditContext);
       }
     } catch (err) {
       // Audit logging should not crash the main business operation, but must be logged

@@ -29,6 +29,7 @@ export const notificationService = {
    * have a corresponding notification without generating duplicate rows.
    */
   async syncWorkspaceNotifications(userId: string): Promise<void> {
+    const context = { userId, role: 'user' };
     try {
       // 1. Check active offboarding employees
       const offboardingRes = await executeSql<{
@@ -40,7 +41,8 @@ export const notificationService = {
         `SELECT employee_id, first_name, last_name, exit_date
          FROM hr_employees
          WHERE owner_user_id = $1 AND employment_status = 'OFFBOARDING'`,
-        [userId]
+        [userId],
+        context
       );
 
       for (const emp of offboardingRes.rows) {
@@ -54,7 +56,8 @@ export const notificationService = {
           `SELECT id FROM user_notifications
            WHERE user_id = $1 AND type = 'offboarding' AND message LIKE $2
            LIMIT 1`,
-          [userId, expectedPattern]
+          [userId, expectedPattern],
+          context
         );
 
         if (existing.rowCount === 0) {
@@ -65,7 +68,8 @@ export const notificationService = {
               userId,
               title,
               `${fullName} has an upcoming last working day on ${dateStr}.`,
-            ]
+            ],
+            context
           );
         }
       }
@@ -80,7 +84,8 @@ export const notificationService = {
         `SELECT employee_id, first_name, last_name, hire_date
          FROM hr_employees
          WHERE owner_user_id = $1 AND employment_status = 'ONBOARDING'`,
-        [userId]
+        [userId],
+        context
       );
 
       for (const emp of onboardingRes.rows) {
@@ -93,7 +98,8 @@ export const notificationService = {
           `SELECT id FROM user_notifications
            WHERE user_id = $1 AND type = 'onboarding' AND message LIKE $2
            LIMIT 1`,
-          [userId, expectedPattern]
+          [userId, expectedPattern],
+          context
         );
 
         if (existing.rowCount === 0) {
@@ -104,7 +110,8 @@ export const notificationService = {
               userId,
               title,
               `${fullName} has been added to your workspace (Scheduled start: ${dateStr}).`,
-            ]
+            ],
+            context
           );
         }
       }
@@ -122,7 +129,8 @@ export const notificationService = {
            AND NOT EXISTS (
              SELECT 1 FROM hr_exit_interview_evaluations ev WHERE ev.interview_id = i.id
            )`,
-        [userId]
+        [userId],
+        context
       );
 
       for (const interview of exitRes.rows) {
@@ -134,7 +142,8 @@ export const notificationService = {
           `SELECT id FROM user_notifications
            WHERE user_id = $1 AND type = 'exit_management' AND message LIKE $2
            LIMIT 1`,
-          [userId, expectedPattern]
+          [userId, expectedPattern],
+          context
         );
 
         if (existing.rowCount === 0) {
@@ -145,7 +154,8 @@ export const notificationService = {
               userId,
               title,
               `${fullName}'s exit interview response is awaiting review.`,
-            ]
+            ],
+            context
           );
         }
       }
@@ -165,6 +175,7 @@ export const notificationService = {
     // Reconcile lifecycle events first
     await this.syncWorkspaceNotifications(userId);
 
+    const context = { userId, role: 'user' };
     const rowsRes = await executeSql<{
       id: number;
       user_id: string;
@@ -179,7 +190,8 @@ export const notificationService = {
        WHERE user_id = $1
        ORDER BY created_at DESC
        LIMIT $2`,
-      [userId, limit]
+      [userId, limit],
+      context
     );
 
     const countRes = await executeSql<{ unread_count: number; total_count: number }>(
@@ -188,7 +200,8 @@ export const notificationService = {
          COUNT(*)::int AS total_count
        FROM user_notifications
        WHERE user_id = $1`,
-      [userId]
+      [userId],
+      context
     );
 
     const notifications: UserNotificationRecord[] = (rowsRes.rows || []).map(r => ({
@@ -214,12 +227,14 @@ export const notificationService = {
    * Marks a single notification as read.
    */
   async markAsRead(userId: string, notificationId: number): Promise<boolean> {
+    const context = { userId, role: 'user' };
     const res = await executeSql(
       `UPDATE user_notifications
        SET is_read = TRUE
        WHERE id = $1 AND user_id = $2
        RETURNING id`,
-      [notificationId, userId]
+      [notificationId, userId],
+      context
     );
     return (res.rowCount ?? 0) > 0;
   },
@@ -228,12 +243,14 @@ export const notificationService = {
    * Marks all unread notifications for a user as read.
    */
   async markAllAsRead(userId: string): Promise<number> {
+    const context = { userId, role: 'user' };
     const res = await executeSql(
       `UPDATE user_notifications
        SET is_read = TRUE
        WHERE user_id = $1 AND is_read = FALSE
        RETURNING id`,
-      [userId]
+      [userId],
+      context
     );
     return res.rowCount ?? 0;
   },
@@ -245,6 +262,7 @@ export const notificationService = {
     userId: string,
     data: { title: string; message: string; type: string }
   ): Promise<UserNotificationRecord> {
+    const context = { userId, role: 'user' };
     const res = await executeSql<{
       id: number;
       user_id: string;
@@ -257,7 +275,8 @@ export const notificationService = {
       `INSERT INTO user_notifications (user_id, title, message, type, is_read, created_at)
        VALUES ($1, $2, $3, $4, FALSE, CURRENT_TIMESTAMP)
        RETURNING id, user_id, title, message, type, is_read, created_at`,
-      [userId, data.title, data.message, data.type]
+      [userId, data.title, data.message, data.type],
+      context
     );
 
     const r = res.rows[0];

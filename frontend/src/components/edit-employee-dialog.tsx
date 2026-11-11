@@ -288,7 +288,7 @@ export function EditEmployeeDialog({
   return (
     <>
       {/* ---- Edit Dialog ---- */}
-      <Dialog open={open && !pendingTransition} onOpenChange={(o) => { if (!o) handleCancelDialog(); }} modal={false}>
+      <Dialog open={open && !pendingTransition} onOpenChange={(o) => { if (!o) handleCancelDialog(); }}>
         <DialogContent
           onPointerDownOutside={e => {
             const target = e.target as HTMLElement;

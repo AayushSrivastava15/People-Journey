@@ -236,7 +236,7 @@ export function TemplateEditorDialog({
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
+      <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent
           hideCloseButton={true}
           className="max-w-6xl w-[95vw] h-[90vh] p-0 flex flex-col bg-[#fffdfb] overflow-hidden border border-[#ebdada]"

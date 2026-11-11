@@ -50,7 +50,8 @@ export class EmailDraftService {
          LEFT JOIN hr_designations des ON e.designation_id = des.designation_id
          WHERE e.employee_id = $1 AND e.owner_user_id = $2
          LIMIT 1`,
-        [payload.employeeId, userId]
+        [payload.employeeId, userId],
+        { userId, role: 'user' }
       );
 
       if (empRes.rows.length === 0) {
@@ -148,7 +149,8 @@ export class EmailDraftService {
     if (data.employeeId) {
       const check = await executeSql(
         `SELECT employee_id FROM hr_employees WHERE employee_id = $1 AND owner_user_id = $2`,
-        [data.employeeId, userId]
+        [data.employeeId, userId],
+        { userId, role: 'user' }
       );
       if (check.rows.length === 0) {
         throw new Error('Referenced employee does not belong to your workspace');
@@ -183,7 +185,7 @@ export class EmailDraftService {
       data.status || 'prepared',
     ];
 
-    const result = await executeSql(query, values);
+    const result = await executeSql(query, values, { userId, role: 'user' });
     logger.info({ userId, draftId: result.rows[0].id, recipient: data.recipientEmail }, 'Created email draft snapshot');
     return mapRowToEmailDraft(result.rows[0]);
   }
@@ -240,9 +242,10 @@ export class EmailDraftService {
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
 
+    const userContext = { userId, role: 'user' };
     const [countRes, dataRes] = await Promise.all([
-      executeSql(countQuery, params),
-      executeSql(dataQuery, [...params, limit, offset]),
+      executeSql(countQuery, params, userContext),
+      executeSql(dataQuery, [...params, limit, offset], userContext),
     ]);
 
     const total = parseInt(String(countRes.rows[0]?.count || 0), 10);
@@ -266,7 +269,7 @@ export class EmailDraftService {
       LIMIT 1
     `;
 
-    const result = await executeSql(query, [draftId, userId]);
+    const result = await executeSql(query, [draftId, userId], { userId, role: 'user' });
     if (result.rows.length === 0) return null;
     return mapRowToEmailDraft(result.rows[0]);
   }
@@ -301,7 +304,7 @@ export class EmailDraftService {
       params = [status, draftId, userId];
     }
 
-    const result = await executeSql(query, params);
+    const result = await executeSql(query, params, { userId, role: 'user' });
     if (result.rows.length === 0) {
       throw new Error('Draft not found or unauthorized');
     }

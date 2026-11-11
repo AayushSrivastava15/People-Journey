@@ -47,7 +47,7 @@ export class EmailTemplateService {
 
     query += ` ORDER BY is_system_template ASC, name ASC`;
 
-    const result = await executeSql(query, params);
+    const result = await executeSql(query, params, { userId, role: 'user' });
     return result.rows.map(mapRowToEmailTemplate);
   }
 
@@ -56,7 +56,8 @@ export class EmailTemplateService {
       `SELECT * FROM hr_email_templates 
        WHERE id = $1 AND (owner_user_id = $2 OR is_system_template = TRUE)
        LIMIT 1`,
-      [templateId, userId]
+      [templateId, userId],
+      { userId, role: 'user' }
     );
 
     if (result.rows.length === 0) {
@@ -94,7 +95,7 @@ export class EmailTemplateService {
       data.isActive ?? true,
     ];
 
-    const result = await executeSql(query, values);
+    const result = await executeSql(query, values, { userId, role: 'user' });
     logger.info({ userId, templateId: result.rows[0].id, name: data.name }, 'Created custom email template');
     return mapRowToEmailTemplate(result.rows[0]);
   }
@@ -106,7 +107,8 @@ export class EmailTemplateService {
   ): Promise<EmailTemplate> {
     const existing = await executeSql(
       `SELECT * FROM hr_email_templates WHERE id = $1 LIMIT 1`,
-      [templateId]
+      [templateId],
+      { userId, role: 'user' }
     );
 
     if (existing.rows.length === 0) {
@@ -162,7 +164,7 @@ export class EmailTemplateService {
       RETURNING *;
     `;
 
-    const result = await executeSql(query, values);
+    const result = await executeSql(query, values, { userId, role: 'user' });
     return mapRowToEmailTemplate(result.rows[0]);
   }
 
@@ -185,7 +187,8 @@ export class EmailTemplateService {
   async deleteTemplate(userId: string, templateId: string): Promise<boolean> {
     const existing = await executeSql(
       `SELECT * FROM hr_email_templates WHERE id = $1 LIMIT 1`,
-      [templateId]
+      [templateId],
+      { userId, role: 'user' }
     );
 
     if (existing.rows.length === 0) {
@@ -202,7 +205,8 @@ export class EmailTemplateService {
 
     const result = await executeSql(
       `DELETE FROM hr_email_templates WHERE id = $1 AND owner_user_id = $2`,
-      [templateId, userId]
+      [templateId, userId],
+      { userId, role: 'user' }
     );
 
     return (result.rowCount ?? 0) > 0;

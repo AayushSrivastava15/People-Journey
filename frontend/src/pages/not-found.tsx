@@ -17,7 +17,7 @@ export default function NotFound() {
             Page Not Found
           </h1>
           <p className="mt-2 text-sm text-[#72616c]">
-            The requested page does not exist or may have moved.
+            The requested page could not be found or the link may have expired.
           </p>
           <div className="mt-6 flex flex-col sm:flex-row gap-3 justify-center">
             {user ? (

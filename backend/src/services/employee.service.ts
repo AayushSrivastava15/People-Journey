@@ -197,10 +197,11 @@ export const employeeService = {
 
     const dataParams = [...queryParams, limit, offset];
 
-    // Execute count and data queries concurrently
+    // Execute count and data queries concurrently with tenant context
+    const tenantContext = { userId: ownerUserId, role: 'user' };
     const [countResult, dataResult] = await Promise.all([
-      executeSql<{ total: number }>(countSql, queryParams),
-      executeSql<RawEmployeeRow>(dataSql, dataParams),
+      executeSql<{ total: number }>(countSql, queryParams, tenantContext),
+      executeSql<RawEmployeeRow>(dataSql, dataParams, tenantContext),
     ]);
 
     const total = Number(countResult.rows?.[0]?.total || 0);
@@ -254,7 +255,8 @@ export const employeeService = {
       params.push(ownerUserId);
     }
 
-    const result = await executeSql<RawEmployeeRow>(sql, params);
+    const context = ownerUserId ? { userId: ownerUserId, role: 'user' } : { role: 'user' };
+    const result = await executeSql<RawEmployeeRow>(sql, params, context);
     const row = result.rows?.[0];
     return row ? mapRowToEmployee(row) : null;
   },
@@ -371,6 +373,7 @@ export const employeeService = {
     `;
 
     try {
+      const context = { userId: ownerUserId, role: 'user' };
       const result = await executeSql<{ employee_id: number }>(sql, [
         ownerUserId,
         employeeCode,
@@ -388,7 +391,7 @@ export const employeeService = {
         data.exitReason || null,
         data.exitNotes || null,
         ownerUserId,
-      ]);
+      ], context);
 
       const outId = result.rows?.[0]?.employee_id;
       if (!outId) {
@@ -418,7 +421,8 @@ export const employeeService = {
               data.exitReason || 'Scheduled departure',
               data.exitNotes || null,
               personalEmail || workEmail || null,
-            ]
+            ],
+            context
           );
         } catch (offboardErr) {
           logger.warn({ err: offboardErr, employeeId: outId }, 'Auto-creation of offboarding record skipped or failed');
@@ -556,7 +560,8 @@ export const employeeService = {
       WHERE employee_id = $1 AND owner_user_id = $2
     `;
 
-    await executeSql(sql, params);
+    const context = { userId: ownerUserId, role: 'user' };
+    await executeSql(sql, params, context);
 
     // If transitioned to OFFBOARDING, ensure offboarding record exists
     if (targetStatus === 'OFFBOARDING') {
@@ -580,7 +585,8 @@ export const employeeService = {
             lwd.slice(0, 10),
             data.exitReason || existing.exitReason || 'Scheduled departure',
             data.exitNotes || existing.exitNotes || null,
-          ]
+          ],
+          context
         );
       } catch (err) {
         logger.warn({ err, employeeId }, 'Sync to hr_offboarding upon status update skipped');
@@ -592,7 +598,8 @@ export const employeeService = {
           `UPDATE hr_offboarding
            SET clearance_status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP
            WHERE employee_id = $1 AND owner_user_id = $2 AND clearance_status = 'PENDING'`,
-          [employeeId, ownerUserId]
+          [employeeId, ownerUserId],
+          context
         );
       } catch (err) {
         logger.warn({ err, employeeId }, 'Failed to cancel offboarding record');
@@ -716,7 +723,7 @@ export const employeeService = {
 
       logger.info({ employeeId, offboardingId: generatedId, plannedExitDate, ownerUserId }, 'Offboarding initiated in personal workspace');
       return generatedId;
-    });
+    }, { userId: ownerUserId, role: 'user' });
 
     // 5. Fetch updated employee record after transaction has successfully committed
     const updated = (await this.getEmployeeById(employeeId, ownerUserId))!;

@@ -3,6 +3,7 @@ import { getFirebaseAuth } from '../config/firebase.js';
 import { userService } from '../services/user.service.js';
 import { auditService } from '../services/audit.service.js';
 import type { AppUser, AppRole } from '../models/user.model.js';
+import type { TenantContext } from '../config/database.js';
 import { logger } from '../utils/logger.js';
 import { authCache } from '../utils/auth-cache.js';
 
@@ -14,6 +15,7 @@ declare global {
     interface Request {
       user?: AppUser;
       appUser?: AppUser;
+      tenantContext?: TenantContext;
       firebaseUser?: {
         uid: string;
         email?: string;
@@ -103,6 +105,10 @@ export async function authenticateToken(
     }
     req.user = cached;
     req.appUser = cached;
+    req.tenantContext = {
+      userId: cached.id,
+      role: cached.role || 'user',
+    };
     next();
     return;
   }
@@ -163,9 +169,13 @@ export async function authenticateToken(
       return;
     }
 
-    // 3. Attach trusted PostgreSQL user profile to request
+    // 3. Attach trusted PostgreSQL user profile and server-verified tenant context to request
     req.user = user;
     req.appUser = user;
+    req.tenantContext = {
+      userId: user.id,
+      role: user.role || 'user',
+    };
     next();
   } catch (err) {
     const error = err as Error;
