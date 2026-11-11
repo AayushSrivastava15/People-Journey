@@ -7,6 +7,9 @@ export type SheetCategory =
   | 'RETENTION_TRACKER'
   | 'TRANSFER'
   | 'RECRUITMENT'
+  | 'DASHBOARD'
+  | 'CLOSED_VACANCIES'
+  | 'PROJECTS'
   | 'IGNORE';
 
 export interface SheetAnalysis {
@@ -20,6 +23,9 @@ export interface SheetAnalysis {
   detectedHeaders: string[];
   suggestedCategory: SheetCategory;
   categoryLabel: string;
+  detectedContentType: string;
+  contentDescription: string;
+  defaultInclude: boolean;
   importable: boolean;
   sampleRows: Record<string, string>[];
   previewGrid: Array<{ rowIndex: number; cells: string[] }>;
@@ -178,60 +184,109 @@ export class ExcelSheetAnalyzer {
   classifySheet(sheetName: string, headers: string[]): {
     category: SheetCategory;
     label: string;
+    detectedContentType: string;
+    contentDescription: string;
+    defaultInclude: boolean;
     confidence: number;
     importable: boolean;
   } {
     const normName = sheetName.toLowerCase().trim();
     const headerText = headers.join(' ').toLowerCase();
 
-    // 1. Explicit Ignored sheets
-    const ignoreNames = [
-      'read me', 'readme', 'instruction', 'instructions', 'guide',
-      'dashboard', 'projects', 'project', 'summary', 'budget', 'notes',
-      'closed position'
-    ];
-    if (ignoreNames.some(k => normName.includes(k))) {
+    // 1. Dashboard & Management Summary
+    if (normName.includes('dashboard') || normName.includes('executive') || normName.includes('kpi') || normName.includes('metrics')) {
       return {
-        category: 'IGNORE',
-        label: 'Ignored',
+        category: 'DASHBOARD',
+        label: 'HR summary and metrics',
+        detectedContentType: 'HR summary and metrics',
+        contentDescription: 'Aggregated headcount statistics and management KPI summaries.',
+        defaultInclude: false,
         confidence: 0.98,
         importable: false,
       };
     }
 
-    // 2. Recruitment Pipeline (genuine offer/selected candidates for onboarding)
-    if (
-      normName.includes('recruitment') ||
-      normName.includes('candidate') ||
-      normName.includes('hiring') ||
-      normName.includes('pipeline') ||
-      (headerText.includes('candidate') && headerText.includes('stage')) ||
-      (headerText.includes('req id') && headerText.includes('position'))
-    ) {
+    // 2. Closed Vacancies / Requisitions
+    if (normName.includes('closed position') || normName.includes('closed vacancy') || normName.includes('closed requisition')) {
       return {
-        category: 'RECRUITMENT',
-        label: 'Recruitment Onboarding',
-        confidence: 0.95,
-        importable: true,
+        category: 'CLOSED_VACANCIES',
+        label: 'Closed vacancies',
+        detectedContentType: 'Closed vacancies',
+        contentDescription: 'Historical job requisitions and filled/closed positions.',
+        defaultInclude: false,
+        confidence: 0.98,
+        importable: false,
       };
     }
 
-    // 2. Retention Tracker (resignation withdrawals & employee restoration)
+    // 3. Projects & Headcount Planning
+    if (normName.includes('projects') || normName.includes('project') || normName.includes('gang') || normName.includes('manpower')) {
+      return {
+        category: 'PROJECTS',
+        label: 'Project planning',
+        detectedContentType: 'Project planning',
+        contentDescription: 'Manpower allocation and project tracking.',
+        defaultInclude: false,
+        confidence: 0.98,
+        importable: false,
+      };
+    }
+
+    // 4. Read Me & Instructions
+    const ignoreNames = ['read me', 'readme', 'instruction', 'instructions', 'guide', 'summary', 'budget', 'notes'];
+    if (ignoreNames.some(k => normName.includes(k))) {
+      return {
+        category: 'IGNORE',
+        label: 'Informational guide',
+        detectedContentType: 'Informational guide',
+        contentDescription: 'Workbook instructions, notes, and documentation.',
+        defaultInclude: false,
+        confidence: 0.98,
+        importable: false,
+      };
+    }
+
+    // 5. Retention Tracker (resignation withdrawals & employee restoration)
     if (
       normName.includes('retention') ||
+      normName.includes('withdrawn') ||
       headerText.includes('withdrawal date') ||
-      headerText.includes('resignation status') ||
-      headerText.includes('withdrawn')
+      headerText.includes('resignation status')
     ) {
       return {
         category: 'RETENTION_TRACKER',
-        label: 'Employee Restoration',
+        label: 'Withdrawn resignations',
+        detectedContentType: 'Withdrawn resignations',
+        contentDescription: 'Employees who withdrew their resignations and remain with the company.',
+        defaultInclude: true,
         confidence: 0.95,
         importable: true,
       };
     }
 
-    // 3. Transfer (location/department updates)
+    // 6. Resignation Tracker (lifecycle updates / historical departures)
+    // NOTE: Checked BEFORE regular employees so that "Employee Code" header doesn't steal resignation sheets!
+    if (
+      normName.includes('resignation') ||
+      normName.includes('exit') ||
+      normName.includes('attrition') ||
+      normName.includes('separation') ||
+      headerText.includes('resignation date') ||
+      headerText.includes('last working day') ||
+      headerText.includes('fnf done')
+    ) {
+      return {
+        category: 'RESIGNATION_TRACKER',
+        label: 'Employee resignations and exits',
+        detectedContentType: 'Employee resignations and exits',
+        contentDescription: 'Resignation notices, exit dates, and offboarding details.',
+        defaultInclude: true,
+        confidence: 0.95,
+        importable: true,
+      };
+    }
+
+    // 7. Transfer (location/department updates)
     if (
       normName.includes('transfer') ||
       normName.includes('relocation') ||
@@ -241,30 +296,58 @@ export class ExcelSheetAnalyzer {
     ) {
       return {
         category: 'TRANSFER',
-        label: 'Employee Location Updates',
+        label: 'Employee transfers',
+        detectedContentType: 'Employee transfers',
+        contentDescription: 'Inter-department or location transfer records.',
+        defaultInclude: true,
         confidence: 0.95,
         importable: true,
       };
     }
 
-    // 4. Third Party MIS (contractors, vendor workforce)
+    // 8. Third Party MIS (contractors, vendor workforce)
     if (
       normName.includes('third party') ||
       normName.includes('contractor') ||
       normName.includes('vendor') ||
       normName.includes('external') ||
       normName.includes('temporary') ||
-      headerText.includes('worker ref')
+      headerText.includes('worker ref') ||
+      headerText.includes('payroll')
     ) {
       return {
         category: 'THIRD_PARTY',
-        label: 'Third Party Workforce',
+        label: 'Vendor workforce',
+        detectedContentType: 'Vendor workforce',
+        contentDescription: 'External contractors, temporary staff, and outsourced personnel.',
+        defaultInclude: true,
         confidence: 0.95,
         importable: true,
       };
     }
 
-    // 5. Regular Employees (primary employee roster) - Prioritize roster matching
+    // 9. Recruitment Pipeline (genuine offer/selected candidates for onboarding)
+    if (
+      normName.includes('recruitment') ||
+      normName.includes('candidate') ||
+      normName.includes('hiring') ||
+      normName.includes('pipeline') ||
+      (headerText.includes('candidate') && headerText.includes('stage')) ||
+      (headerText.includes('req id') && headerText.includes('position')) ||
+      (headerText.includes('onboarding status') && headerText.includes('tentative doj'))
+    ) {
+      return {
+        category: 'RECRUITMENT',
+        label: 'Candidates and open positions',
+        detectedContentType: 'Candidates and open positions',
+        contentDescription: 'Recruitment pipeline, offered candidates, and pending hires.',
+        defaultInclude: true,
+        confidence: 0.95,
+        importable: true,
+      };
+    }
+
+    // 10. Regular Employees (primary employee roster)
     if (
       normName.includes('employee') ||
       normName.includes('staff') ||
@@ -274,38 +357,17 @@ export class ExcelSheetAnalyzer {
       normName.includes('roster') ||
       headerText.includes('employee code') ||
       headerText.includes('staff id') ||
-      headerText.includes('date of joining')
+      headerText.includes('date of joining') ||
+      headerText.includes('emp code') ||
+      headerText.includes('doj')
     ) {
       return {
         category: 'REGULAR_EMPLOYEES',
-        label: 'Regular Employees',
+        label: 'Employee records',
+        detectedContentType: 'Employee records',
+        contentDescription: 'Primary employee directory and active staff records.',
+        defaultInclude: true,
         confidence: 0.95,
-        importable: true,
-      };
-    }
-
-    // 6. Resignation Tracker (lifecycle updates / historical departures)
-    if (
-      normName.includes('resignation') ||
-      normName.includes('exit') ||
-      normName.includes('attrition') ||
-      normName.includes('separation') ||
-      headerText.includes('resignation date')
-    ) {
-      return {
-        category: 'RESIGNATION_TRACKER',
-        label: 'Lifecycle Updates / Historical Employees',
-        confidence: 0.95,
-        importable: true,
-      };
-    }
-
-    // Default to Regular Employees if contains basic emp headers
-    if (headerText.includes('emp code') || headerText.includes('doj')) {
-      return {
-        category: 'REGULAR_EMPLOYEES',
-        label: 'Regular Employees',
-        confidence: 0.90,
         importable: true,
       };
     }
@@ -313,7 +375,10 @@ export class ExcelSheetAnalyzer {
     // Default to ignored if no pattern matches
     return {
       category: 'IGNORE',
-      label: 'Ignored',
+      label: 'Reference data',
+      detectedContentType: 'Reference data',
+      contentDescription: 'Supplementary data or reference sheet.',
+      defaultInclude: false,
       confidence: 0.5,
       importable: false,
     };
@@ -394,6 +459,9 @@ export class ExcelSheetAnalyzer {
         detectedHeaders,
         suggestedCategory: classification.category,
         categoryLabel: classification.label,
+        detectedContentType: classification.detectedContentType,
+        contentDescription: classification.contentDescription,
+        defaultInclude: classification.defaultInclude,
         importable: classification.importable,
         sampleRows,
         previewGrid,

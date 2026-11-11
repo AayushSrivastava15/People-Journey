@@ -15,6 +15,11 @@ import {
   type FieldDiff,
 } from './import-session.store.js';
 import { excelSheetAnalyzer, type SheetAnalysis, type SheetCategory } from './excel-sheet-analyzer.js';
+import {
+  employeeLifecycleReconciliationService,
+  type RawEmployeeRecord,
+  type ReconciledLifecycleResult,
+} from './employee-lifecycle-reconciliation.service.js';
 
 export interface ColumnAliasDefinition {
   field: string;
@@ -402,7 +407,10 @@ export class SmartImportService {
         sheetName: sheetAnalysis.sheetName,
         category: sheetAnalysis.suggestedCategory,
         categoryLabel: sheetAnalysis.categoryLabel,
-        importable: sheetAnalysis.importable,
+        detectedContentType: sheetAnalysis.detectedContentType,
+        contentDescription: sheetAnalysis.contentDescription,
+        defaultInclude: sheetAnalysis.defaultInclude,
+        importable: sheetAnalysis.defaultInclude,
         headerRowIndex,
         confidence: sheetAnalysis.confidence,
         isLowConfidence: sheetAnalysis.isLowConfidence,
@@ -496,6 +504,33 @@ export class SmartImportService {
   }
 
   /**
+   * Update active sheet selection for an import session and re-run reconciliation
+   */
+  async selectSheetsForImport(
+    sessionId: string,
+    ownerUserId: string,
+    selectedSheets: string[]
+  ): Promise<ImportSession> {
+    const session = importSessionStore.getSession(sessionId, ownerUserId);
+    if (!session) {
+      throw new Error('Your import session has expired. Please upload the Excel file again.');
+    }
+
+    const selectedSet = new Set(selectedSheets.map(s => s.trim().toLowerCase()));
+    for (const sheet of Object.values(session.sheets)) {
+      sheet.importable = selectedSet.has(sheet.sheetName.trim().toLowerCase());
+    }
+
+    // Re-run validation & reconciliation with newly selected sheets
+    await this.validateMultiSheetMapping(sessionId, ownerUserId);
+    const updated = importSessionStore.getSession(sessionId, ownerUserId);
+    if (!updated) {
+      throw new Error('Failed to retrieve updated session.');
+    }
+    return updated;
+  }
+
+  /**
    * Reconcile all active worksheets and validate unified employee records
    */
   async validateMultiSheetMapping(
@@ -583,9 +618,11 @@ export class SmartImportService {
     // Reconciled employee internal model
     interface MutableReconciledRow {
       rowIndex: number;
+      sourceRowNumber: number;
       primarySheet: string;
       sourceSheets: Set<string>;
       isHistorical: boolean;
+      isThirdParty: boolean;
       originalData: Record<string, unknown>;
       employeeCode: string;
       fullName: string;
@@ -597,6 +634,7 @@ export class SmartImportService {
       department: string;
       designation: string;
       employmentStatus: 'ONBOARDING' | 'ACTIVE' | 'OFFBOARDING' | 'EXITED';
+      employmentCategory: 'REGULAR' | 'THIRD_PARTY' | 'HISTORICAL_EXIT' | 'ONBOARDING';
       hireDate: string;
       lastWorkingDay: string | null;
       exitDate: string | null;
@@ -606,11 +644,30 @@ export class SmartImportService {
       reportingManager?: string;
       vendor?: string;
       customNotes: string[];
+
+      // Lifecycle evaluation details
+      rawExcelStatus?: string;
+      lifecycleReason?: string;
+      supportingDates?: {
+        hireDate?: string | null;
+        resignationDate?: string | null;
+        lastWorkingDay?: string | null;
+        isPastLwd?: boolean;
+        isFutureLwd?: boolean;
+      };
+      conflicts?: Array<{
+        sheet: string;
+        field: string;
+        value: unknown;
+        conflictDescription: string;
+      }>;
+      needsAttention?: boolean;
+      attentionReason?: string;
+      requiresHrApproval?: boolean;
     }
 
     const reconciledRows: MutableReconciledRow[] = [];
     const codeToRowsMap = new Map<string, MutableReconciledRow[]>();
-    let generatedRowSeq = 1;
 
     const addRow = (row: MutableReconciledRow) => {
       reconciledRows.push(row);
@@ -630,7 +687,7 @@ export class SmartImportService {
       return v !== undefined && v !== null ? String(v).trim() : '';
     };
 
-    // PASS 1: Base employees from REGULAR_EMPLOYEES sheets
+    // PASS 1: Base employees from REGULAR_EMPLOYEES sheets (e.g. Employee MIS)
     const regularSheets = Object.values(session.sheets).filter(s => s.importable && s.category === 'REGULAR_EMPLOYEES');
     for (const sheet of regularSheets) {
       const mapping = sheet.columnMapping || {};
@@ -648,30 +705,34 @@ export class SmartImportService {
         }
 
         const rawStatus = getFieldVal(raw, mapping, 'employmentStatus');
-        let employmentStatus: 'ONBOARDING' | 'ACTIVE' | 'OFFBOARDING' | 'EXITED' = 'ACTIVE';
-        if (rawStatus) {
-          const norm = rawStatus.toUpperCase();
-          if (['ONBOARDING', 'ACTIVE', 'OFFBOARDING', 'EXITED'].includes(norm)) {
-            employmentStatus = norm as any;
-          } else if (norm.includes('ONBOARD') || norm.includes('JOIN')) {
-            employmentStatus = 'ONBOARDING';
-          } else if (norm.includes('OFFBOARD') || norm.includes('RESIGN') || norm.includes('NOTICE')) {
-            employmentStatus = 'OFFBOARDING';
-          } else if (norm.includes('EXIT') || norm.includes('LEFT') || norm.includes('RELIEV') || norm.includes('TERMINAT')) {
-            employmentStatus = 'EXITED';
-          }
-        }
-
         const rawHireDate = getFieldVal(raw, mapping, 'hireDate');
         const rawLwd = getFieldVal(raw, mapping, 'lastWorkingDay');
         const parsedHire = this.parseDateValue(rawHireDate);
         const parsedLwd = this.parseDateValue(rawLwd);
 
+        const rawEmpRecord: RawEmployeeRecord = {
+          sourceSheet: sheet.sheetName,
+          sourceRowNumber: rowNum,
+          employeeCode: code,
+          fullName: fullName || `${firstName} ${lastName}`.trim(),
+          firstName,
+          lastName,
+          workEmail: getFieldVal(raw, mapping, 'workEmail'),
+          rawStatus,
+          hireDate: parsedHire || rawHireDate,
+          lastWorkingDay: parsedLwd,
+          exitReason: getFieldVal(raw, mapping, 'exitReason') || null,
+        };
+
+        const lifecycleEval = employeeLifecycleReconciliationService.evaluateEmployeeMisLifecycle(rawEmpRecord);
+
         addRow({
           rowIndex: rowNum,
+          sourceRowNumber: rowNum,
           primarySheet: sheet.sheetName,
           sourceSheets: new Set([sheet.sheetName]),
           isHistorical: false,
+          isThirdParty: false,
           originalData: raw,
           employeeCode: code,
           fullName: fullName || `${firstName} ${lastName}`.trim(),
@@ -682,20 +743,28 @@ export class SmartImportService {
           phone: getFieldVal(raw, mapping, 'phone'),
           department: getFieldVal(raw, mapping, 'department'),
           designation: getFieldVal(raw, mapping, 'designation'),
-          employmentStatus,
+          employmentStatus: lifecycleEval.lifecycleStatus,
+          employmentCategory: 'REGULAR',
           hireDate: parsedHire || rawHireDate,
           lastWorkingDay: parsedLwd,
-          exitDate: employmentStatus === 'EXITED' ? parsedLwd : null,
+          exitDate: lifecycleEval.lifecycleStatus === 'EXITED' ? parsedLwd : null,
           exitReason: getFieldVal(raw, mapping, 'exitReason') || null,
           exitNotes: getFieldVal(raw, mapping, 'exitNotes') || null,
           workLocation: getFieldVal(raw, mapping, 'workLocation'),
           reportingManager: getFieldVal(raw, mapping, 'reportingManager'),
           customNotes: [],
+          rawExcelStatus: lifecycleEval.rawExcelStatus,
+          lifecycleReason: lifecycleEval.classificationReason,
+          supportingDates: lifecycleEval.supportingDates,
+          conflicts: lifecycleEval.conflicts,
+          needsAttention: lifecycleEval.needsAttention,
+          attentionReason: lifecycleEval.attentionReason,
+          requiresHrApproval: lifecycleEval.requiresHrApproval,
         });
       });
     }
 
-    // PASS 2: Third party workforce from THIRD_PARTY sheets
+    // PASS 2: Third party workforce from THIRD_PARTY sheets (e.g. Third Party MIS)
     const thirdPartySheets = Object.values(session.sheets).filter(s => s.importable && s.category === 'THIRD_PARTY');
     for (const sheet of thirdPartySheets) {
       const mapping = sheet.columnMapping || {};
@@ -714,21 +783,23 @@ export class SmartImportService {
 
         const rawStatus = getFieldVal(raw, mapping, 'employmentStatus');
         let employmentStatus: 'ONBOARDING' | 'ACTIVE' | 'OFFBOARDING' | 'EXITED' = 'ACTIVE';
-        if (rawStatus && rawStatus.toLowerCase().includes('exit')) {
+        if (rawStatus && (rawStatus.toLowerCase().includes('exit') || rawStatus.toLowerCase().includes('inactive') || rawStatus.toLowerCase().includes('non active'))) {
           employmentStatus = 'EXITED';
         }
 
         const rawHireDate = getFieldVal(raw, mapping, 'hireDate');
         const parsedHire = this.parseDateValue(rawHireDate);
-        const vendor = getFieldVal(raw, mapping, 'vendor');
+        const vendor = getFieldVal(raw, mapping, 'vendor') || String(raw['Payroll'] || raw['payroll'] || raw['Agency'] || raw['agency'] || '').trim();
 
         const existingMatching = code ? codeToRowsMap.get(code.toLowerCase()) : null;
         if (!existingMatching || existingMatching.length === 0) {
           addRow({
             rowIndex: rowNum,
+            sourceRowNumber: rowNum,
             primarySheet: sheet.sheetName,
             sourceSheets: new Set([sheet.sheetName]),
             isHistorical: false,
+            isThirdParty: true,
             originalData: raw,
             employeeCode: code,
             fullName: fullName || `${firstName} ${lastName}`.trim(),
@@ -740,6 +811,7 @@ export class SmartImportService {
             department: getFieldVal(raw, mapping, 'department') || (vendor ? `Third Party (${vendor})` : 'Third Party Workforce'),
             designation: getFieldVal(raw, mapping, 'designation') || 'Contractor',
             employmentStatus,
+            employmentCategory: 'THIRD_PARTY',
             hireDate: parsedHire || rawHireDate,
             lastWorkingDay: null,
             exitDate: null,
@@ -748,6 +820,15 @@ export class SmartImportService {
             workLocation: getFieldVal(raw, mapping, 'workLocation'),
             vendor,
             customNotes: vendor ? [`Vendor: ${vendor}`] : [],
+            rawExcelStatus: rawStatus || 'Active',
+            lifecycleReason: vendor ? `Third-party vendor workforce managed via ${vendor}.` : 'Third-party workforce contractor.',
+            supportingDates: {
+              hireDate: parsedHire || rawHireDate,
+              lastWorkingDay: null,
+            },
+            conflicts: [],
+            needsAttention: !code,
+            attentionReason: !code ? 'Missing contractor/worker code.' : undefined,
           });
         } else {
           for (const existing of existingMatching) {
@@ -769,31 +850,65 @@ export class SmartImportService {
 
         const rawLwd = getFieldVal(raw, mapping, 'lastWorkingDay');
         const parsedLwd = this.parseDateValue(rawLwd);
+        const rawResignDate = getFieldVal(raw, mapping, 'exitDate') || String(raw['Resignation Date'] || raw['resignation date'] || '').trim();
+        const parsedResignDate = this.parseDateValue(rawResignDate);
         const exitReason = getFieldVal(raw, mapping, 'exitReason') || 'Resignation';
         const rawStatus = getFieldVal(raw, mapping, 'employmentStatus');
+        const fnfDone = String(raw['FNF Done'] || raw['fnf done'] || raw['FNF'] || '').trim();
 
-        let statusToSet: 'OFFBOARDING' | 'EXITED' = 'OFFBOARDING';
-        const today = new Date().toISOString().slice(0, 10);
-        if (parsedLwd && parsedLwd < today) {
-          statusToSet = 'EXITED';
-        } else if (rawStatus && (rawStatus.toLowerCase().includes('non active') || rawStatus.toLowerCase().includes('exit'))) {
-          statusToSet = 'EXITED';
-        }
+        const resRecord: RawEmployeeRecord = {
+          sourceSheet: sheet.sheetName,
+          sourceRowNumber: rowNum,
+          employeeCode: code,
+          rawStatus,
+          resignationDate: parsedResignDate || rawResignDate,
+          lastWorkingDay: parsedLwd,
+          exitReason,
+          fnfDone,
+        };
 
         const existingMatching = key ? codeToRowsMap.get(key) : null;
         if (existingMatching && existingMatching.length > 0) {
           for (const existing of existingMatching) {
             existing.sourceSheets.add(sheet.sheetName);
+
+            // Reconcile across Employee MIS and Resignation Tracker
+            const reconciled = employeeLifecycleReconciliationService.reconcileEmployeeLifecycle(
+              {
+                sourceSheet: existing.primarySheet,
+                sourceRowNumber: existing.sourceRowNumber,
+                employeeCode: existing.employeeCode,
+                rawStatus: existing.rawExcelStatus,
+                hireDate: existing.hireDate,
+              },
+              [resRecord]
+            );
+
+            existing.employmentStatus = reconciled.lifecycleStatus;
+            existing.rawExcelStatus = reconciled.rawExcelStatus;
+            existing.lifecycleReason = reconciled.classificationReason;
+            existing.supportingDates = {
+              ...existing.supportingDates,
+              ...reconciled.supportingDates,
+            };
+            existing.conflicts = reconciled.conflicts;
+            if (reconciled.needsAttention) {
+              existing.needsAttention = true;
+              existing.attentionReason = reconciled.attentionReason || existing.attentionReason;
+            }
+            if (reconciled.requiresHrApproval) {
+              existing.requiresHrApproval = true;
+            }
+
             existing.lastWorkingDay = parsedLwd || existing.lastWorkingDay;
             existing.exitReason = exitReason;
-            existing.employmentStatus = statusToSet;
-            if (statusToSet === 'EXITED') {
+            if (reconciled.lifecycleStatus === 'EXITED') {
               existing.exitDate = existing.lastWorkingDay;
             }
-            existing.customNotes.push(`Resignation tracked (${sheet.sheetName})`);
+            existing.customNotes.push(`Resignation tracked (${sheet.sheetName}: ${reconciled.lifecycleStatus})`);
           }
         } else if (code) {
-          // Historical exit record
+          // Historical exit record (not present in Employee MIS)
           const fullName = getFieldVal(raw, mapping, 'fullName');
           let firstName = getFieldVal(raw, mapping, 'firstName');
           let lastName = getFieldVal(raw, mapping, 'lastName');
@@ -805,11 +920,21 @@ export class SmartImportService {
           const rawHireDate = getFieldVal(raw, mapping, 'hireDate');
           const parsedHire = this.parseDateValue(rawHireDate);
 
+          resRecord.fullName = fullName || `${firstName} ${lastName}`.trim();
+          resRecord.firstName = firstName;
+          resRecord.lastName = lastName;
+          resRecord.hireDate = parsedHire || rawHireDate;
+          resRecord.workEmail = getFieldVal(raw, mapping, 'workEmail');
+
+          const evalResult = employeeLifecycleReconciliationService.evaluateResignationTrackerLifecycle(resRecord);
+
           addRow({
             rowIndex: rowNum,
+            sourceRowNumber: rowNum,
             primarySheet: sheet.sheetName,
             sourceSheets: new Set([sheet.sheetName]),
             isHistorical: true,
+            isThirdParty: false,
             originalData: raw,
             employeeCode: code,
             fullName: fullName || `${firstName} ${lastName}`.trim(),
@@ -820,13 +945,21 @@ export class SmartImportService {
             phone: getFieldVal(raw, mapping, 'phone'),
             department: getFieldVal(raw, mapping, 'department') || 'Historical Records',
             designation: getFieldVal(raw, mapping, 'designation') || 'Former Employee',
-            employmentStatus: 'EXITED',
+            employmentStatus: evalResult.lifecycleStatus,
+            employmentCategory: 'HISTORICAL_EXIT',
             hireDate: parsedHire || rawHireDate,
             lastWorkingDay: parsedLwd,
-            exitDate: parsedLwd,
+            exitDate: evalResult.lifecycleStatus === 'EXITED' ? parsedLwd : null,
             exitReason,
             exitNotes: 'Historical exit record imported from Resignation Tracker',
             customNotes: ['Historical departure record'],
+            rawExcelStatus: evalResult.rawExcelStatus,
+            lifecycleReason: evalResult.classificationReason,
+            supportingDates: evalResult.supportingDates,
+            conflicts: evalResult.conflicts,
+            needsAttention: evalResult.needsAttention,
+            attentionReason: evalResult.attentionReason,
+            requiresHrApproval: true,
           });
         }
       });
@@ -836,21 +969,44 @@ export class SmartImportService {
     const retentionSheets = Object.values(session.sheets).filter(s => s.importable && s.category === 'RETENTION_TRACKER');
     for (const sheet of retentionSheets) {
       const mapping = sheet.columnMapping || {};
-      sheet.rawRows.forEach((raw) => {
+      sheet.rawRows.forEach((raw, i) => {
+        const rowNum = sheet.headerRowIndex + 1 + i;
         const code = getFieldVal(raw, mapping, 'employeeCode');
         const key = code ? code.toLowerCase() : null;
         if (!key) return;
+
+        const retRecord: RawEmployeeRecord = {
+          sourceSheet: sheet.sheetName,
+          sourceRowNumber: rowNum,
+          employeeCode: code,
+          rawStatus: getFieldVal(raw, mapping, 'employmentStatus') || 'Active/Resignation Withdrawn',
+          lastWorkingDay: 'Resignation Withdrawn',
+        };
 
         const existingMatching = codeToRowsMap.get(key);
         if (existingMatching && existingMatching.length > 0) {
           for (const existing of existingMatching) {
             existing.sourceSheets.add(sheet.sheetName);
+
+            const reconciled = employeeLifecycleReconciliationService.reconcileEmployeeLifecycle(
+              {
+                sourceSheet: existing.primarySheet,
+                sourceRowNumber: existing.sourceRowNumber,
+                employeeCode: existing.employeeCode,
+                rawStatus: existing.rawExcelStatus,
+              },
+              [retRecord]
+            );
+
             // Restore to Active and clear pending LWD
             existing.employmentStatus = 'ACTIVE';
+            existing.rawExcelStatus = reconciled.rawExcelStatus;
+            existing.lifecycleReason = reconciled.classificationReason;
             existing.lastWorkingDay = null;
             existing.exitDate = null;
             existing.exitReason = null;
-            existing.customNotes.push('Resignation withdrawn: Restored to Active');
+            existing.conflicts = [];
+            existing.customNotes.push('Resignation withdrawn in Retention Tracker: Restored to Active');
           }
         }
       });
@@ -866,7 +1022,7 @@ export class SmartImportService {
         if (!key) return;
 
         const newLocation = getFieldVal(raw, mapping, 'workLocation') || String(raw['Transferred To'] || raw['transferred to'] || '').trim();
-        const effectiveDate = String(raw['Effective Date'] || raw['effective date'] || '').trim();
+        const effectiveDate = String(raw['Effective Date'] || raw['effective date'] || raw['Transfer letter date'] || raw['Transfer letter date '] || '').trim();
 
         const existingMatching = codeToRowsMap.get(key);
         if (existingMatching && existingMatching.length > 0) {
@@ -874,34 +1030,69 @@ export class SmartImportService {
             existing.sourceSheets.add(sheet.sheetName);
             if (newLocation) {
               existing.workLocation = newLocation;
-              existing.customNotes.push(`Transferred to ${newLocation}${effectiveDate ? ` effective ${effectiveDate}` : ''}`);
+              existing.customNotes.push(`Transferred to ${newLocation}${effectiveDate ? ` (Effective: ${effectiveDate})` : ''}`);
             }
           }
         }
       });
     }
 
-    // PASS 6: RECRUITMENT sheets (genuine selected/joining candidates for onboarding)
+    // PASS 6: RECRUITMENT sheets (candidates and open positions)
     const recruitmentSheets = Object.values(session.sheets).filter(s => s.importable && s.category === 'RECRUITMENT');
     for (const sheet of recruitmentSheets) {
       const mapping = sheet.columnMapping || {};
       sheet.rawRows.forEach((raw, i) => {
         const rowNum = sheet.headerRowIndex + 1 + i;
 
-        // Check candidate stage / status
+        // Check vacancy vs candidate
+        const openClose = String(raw['Open/\r\nClose/\r\nWIP'] || raw['Open/Close/WIP'] || raw['Open/Close'] || '').trim().toLowerCase();
         const stageVal = (
           getFieldVal(raw, mapping, 'employmentStatus') ||
-          String(raw['Stage'] || raw['stage'] || raw['Status'] || raw['status'] || raw['Candidate Status'] || '')
+          String(raw['Status'] || raw['status'] || raw['Stage'] || raw['stage'] || raw['Onboarding Status'] || raw['onboarding status'] || '')
         ).trim().toLowerCase();
+        const remarks = String(raw['Remarks'] || raw['remarks'] || raw['Remark'] || raw['remark'] || '').trim();
 
-        // Genuine selected candidates (Offer, Selected, Joining, Hired)
-        const isSelected = ['offer', 'offered', 'selected', 'joining', 'joined', 'hired', 'accepted'].some(s => stageVal.includes(s));
-        if (!isSelected) {
-          // Open vacancies or unselected candidates (Interview, Screening, Applied, Rejected) are ignored!
+        // Vacancy rule: Open positions/vacancies without candidates are NOT employees!
+        if (openClose === 'open' || stageVal === 'open' || stageVal === 'vacant') {
           return;
         }
 
-        const candidateName = getFieldVal(raw, mapping, 'fullName') || String(raw['Candidate'] || raw['Candidate Name'] || raw['candidate'] || '').trim();
+        // Interview rule: Candidates who are still interviewing must NOT become employees!
+        if (
+          stageVal.includes('interview') ||
+          stageVal.includes('screening') ||
+          stageVal.includes('applied') ||
+          (stageVal.includes('wip') && !stageVal.includes('joined') && !stageVal.includes('offer'))
+        ) {
+          return;
+        }
+
+        // Only genuine selected candidates (Offer, Offered, Selected, Joining, Joined, Hired, Accepted)
+        const isSelected = ['offer', 'offered', 'selected', 'joining', 'joined', 'hired', 'accepted'].some(
+          s => stageVal.includes(s) || remarks.toLowerCase().includes(s)
+        );
+        if (!isSelected) {
+          return;
+        }
+
+        // Extract Candidate Name
+        let candidateName = getFieldVal(raw, mapping, 'fullName') || String(raw['Candidate'] || raw['Candidate Name'] || raw['candidate'] || '').trim();
+
+        // In company workbooks, candidate name is often recorded in Remarks e.g. "Karamjeet Singh Joined", "Lokraj Offered"
+        if (!candidateName && remarks) {
+          const match = remarks.match(/^([A-Za-z\s.'-]+?)\s+(joined|offered|accepted|selected|hired)/i);
+          if (match && match[1]) {
+            candidateName = match[1].trim();
+          } else if (!remarks.toLowerCase().includes('position') && remarks.split(/\s+/).length <= 4) {
+            candidateName = remarks;
+          }
+        }
+
+        if (!candidateName) {
+          // If no candidate name, this is an unfilled position/vacancy row -> do not create an employee!
+          return;
+        }
+
         let firstName = getFieldVal(raw, mapping, 'firstName');
         let lastName = getFieldVal(raw, mapping, 'lastName');
         if (candidateName && !firstName) {
@@ -913,16 +1104,28 @@ export class SmartImportService {
         const designation = getFieldVal(raw, mapping, 'designation') || String(raw['Position'] || raw['Role'] || raw['Title'] || '').trim();
         const department = getFieldVal(raw, mapping, 'department') || String(raw['Department'] || raw['Dept'] || '').trim();
         const rawCode = getFieldVal(raw, mapping, 'employeeCode');
-        const rawHireDate = getFieldVal(raw, mapping, 'hireDate');
+        const rawHireDate = getFieldVal(raw, mapping, 'hireDate') || String(raw['Tentative DOJ'] || raw['tentative doj'] || raw['Deployment Date'] || '').trim();
         const parsedHire = this.parseDateValue(rawHireDate);
+
+        // Check if candidate already exists in employee roster (e.g. joined candidate already in Employee MIS)
+        const existingByName = candidateName ? reconciledRows.find(r => r.fullName.toLowerCase() === candidateName.toLowerCase()) : null;
+        if (existingByName) {
+          existingByName.sourceSheets.add(sheet.sheetName);
+          existingByName.customNotes.push(`Recruitment pipeline candidate: ${stageVal || remarks}`);
+          return;
+        }
+
+        const needsCodeAttention = !rawCode;
 
         addRow({
           rowIndex: rowNum,
+          sourceRowNumber: rowNum,
           primarySheet: sheet.sheetName,
           sourceSheets: new Set([sheet.sheetName]),
           isHistorical: false,
+          isThirdParty: false,
           originalData: raw,
-          employeeCode: rawCode,
+          employeeCode: rawCode || '',
           fullName: candidateName || `${firstName} ${lastName}`.trim(),
           firstName,
           lastName,
@@ -932,12 +1135,23 @@ export class SmartImportService {
           department: department || 'Recruitment Onboarding',
           designation: designation || 'Selected Candidate',
           employmentStatus: 'ONBOARDING',
+          employmentCategory: 'ONBOARDING',
           hireDate: parsedHire || rawHireDate,
           lastWorkingDay: null,
           exitDate: null,
           exitReason: null,
-          exitNotes: `Selected candidate from ${sheet.sheetName} (Stage: ${stageVal})`,
-          customNotes: [`Selected candidate (${stageVal})`],
+          exitNotes: `Selected candidate from ${sheet.sheetName} (Stage: ${stageVal || remarks})`,
+          customNotes: [`Selected candidate (${stageVal || remarks})`],
+          rawExcelStatus: stageVal || remarks,
+          lifecycleReason: 'Selected candidate from recruitment pipeline with confirmed offer/joining stage.',
+          supportingDates: {
+            hireDate: parsedHire || rawHireDate,
+            lastWorkingDay: null,
+          },
+          conflicts: [],
+          needsAttention: needsCodeAttention,
+          attentionReason: needsCodeAttention ? 'Missing Employee Code for onboarding candidate. Please assign an official Employee Code.' : undefined,
+          requiresHrApproval: needsCodeAttention,
         });
       });
     }
@@ -1028,7 +1242,7 @@ export class SmartImportService {
         reconciliationType = 'HISTORICAL_EXIT';
         approvedForImport = false;
         warnings.push('Historical departure record. Explicit approval required to create as EXITED employee.');
-      } else if (row.vendor || (row.primarySheet && row.primarySheet.toLowerCase().includes('third party'))) {
+      } else if (row.isThirdParty || row.vendor || (row.primarySheet && row.primarySheet.toLowerCase().includes('third party'))) {
         reconciliationType = 'THIRD_PARTY';
         approvedForImport = true;
       } else {
@@ -1042,6 +1256,23 @@ export class SmartImportService {
       const editedFields = previousRow?.editedFields || [];
       if (previousRow?.approvedForImport !== undefined) {
         approvedForImport = previousRow.approvedForImport;
+      }
+
+      // Preserve manually edited fields on revalidation
+      if (previousRow && previousRow.isEdited && previousRow.mappedData) {
+        if (previousRow.mappedData.employeeCode) row.employeeCode = previousRow.mappedData.employeeCode;
+        if (previousRow.mappedData.fullName) row.fullName = previousRow.mappedData.fullName;
+        if (previousRow.mappedData.firstName) row.firstName = previousRow.mappedData.firstName;
+        if (previousRow.mappedData.lastName) row.lastName = previousRow.mappedData.lastName;
+        if (previousRow.mappedData.workEmail) row.workEmail = previousRow.mappedData.workEmail;
+        if (previousRow.mappedData.personalEmail) row.personalEmail = previousRow.mappedData.personalEmail;
+        if (previousRow.mappedData.phone) row.phone = previousRow.mappedData.phone;
+        if (previousRow.mappedData.department) row.department = previousRow.mappedData.department;
+        if (previousRow.mappedData.designation) row.designation = previousRow.mappedData.designation;
+        if (previousRow.mappedData.employmentStatus) row.employmentStatus = previousRow.mappedData.employmentStatus;
+        if (previousRow.mappedData.hireDate) row.hireDate = previousRow.mappedData.hireDate;
+        if (previousRow.mappedData.lastWorkingDay !== undefined) row.lastWorkingDay = previousRow.mappedData.lastWorkingDay;
+        if (previousRow.mappedData.workLocation) row.workLocation = previousRow.mappedData.workLocation;
       }
 
       // 1. Employee Code Validation (CRITICAL: Never auto-generate!)
@@ -1157,10 +1388,20 @@ export class SmartImportService {
         finalExitNotes = finalExitNotes ? `${finalExitNotes} | ${row.customNotes.join('; ')}` : row.customNotes.join('; ');
       }
 
+      // Handle attention reasons & conflicts
+      if (row.attentionReason) {
+        warnings.push(row.attentionReason);
+      }
+      if (row.conflicts && row.conflicts.length > 0) {
+        for (const c of row.conflicts) {
+          warnings.push(`[${c.sheet}] ${c.conflictDescription}`);
+        }
+      }
+
       let validationStatus: 'VALID' | 'NEEDS_ATTENTION' | 'DUPLICATE' = 'VALID';
       if (errors.some(e => e.message.includes('Duplicate') || e.message.includes('already exists'))) {
         validationStatus = 'DUPLICATE';
-      } else if (errors.length > 0) {
+      } else if (errors.length > 0 || row.needsAttention) {
         validationStatus = 'NEEDS_ATTENTION';
       }
 
@@ -1185,10 +1426,22 @@ export class SmartImportService {
         vendor: row.vendor,
       };
 
-      const isThirdParty = Boolean(row.vendor || (row.primarySheet && row.primarySheet.toLowerCase().includes('third party')));
+      const isThirdParty = Boolean(row.isThirdParty || row.vendor || (row.primarySheet && row.primarySheet.toLowerCase().includes('third party')));
 
       validatedRows.push({
         rowIndex,
+        originalRowIndex: row.rowIndex,
+        sourceRowNumber: row.sourceRowNumber,
+        primarySheet: row.primarySheet,
+        sourceSheets: Array.from(row.sourceSheets),
+        isHistorical: row.isHistorical,
+        isThirdParty,
+        vendor: row.vendor,
+        rawExcelStatus: row.rawExcelStatus || '(Not specified)',
+        lifecycleReason: row.lifecycleReason || 'Classified from source records.',
+        supportingDates: row.supportingDates,
+        conflicts: row.conflicts || [],
+        requiresHrApproval: row.requiresHrApproval || false,
         originalData: row.originalData,
         originalExtractedData,
         mappedData: {
@@ -1210,7 +1463,7 @@ export class SmartImportService {
           workLocation: row.workLocation,
           reportingManager: row.reportingManager,
           vendor: row.vendor,
-          employmentCategory: isThirdParty ? 'THIRD_PARTY' : 'REGULAR',
+          employmentCategory: row.employmentCategory || (isThirdParty ? 'THIRD_PARTY' : 'REGULAR'),
         },
         isEdited,
         editedFields,
@@ -1223,10 +1476,6 @@ export class SmartImportService {
         validationStatus,
         errors,
         warnings,
-        sourceSheets: Array.from(row.sourceSheets),
-        isHistorical: row.isHistorical,
-        isThirdParty,
-        vendor: row.vendor,
       });
     }
 

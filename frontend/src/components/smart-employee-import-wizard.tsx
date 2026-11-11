@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import {
   useUploadImportFile,
+  useSelectSheets,
   useUpdateSheetHeader,
   useUpdateSheetConfig,
   useValidateMultiSheetMapping,
@@ -71,7 +72,7 @@ import type {
   ReconciliationType,
 } from '@/types/api';
 
-type WizardStep = 'upload' | 'preview' | 'commit' | 'complete';
+type WizardStep = 'upload' | 'sheets' | 'preview' | 'commit' | 'complete';
 
 const LIFECYCLE_OPTIONS: SelectOption[] = [
   { value: 'ONBOARDING', label: 'Onboarding', subtext: 'Upcoming new joiner' },
@@ -89,14 +90,16 @@ export function SmartEmployeeImportWizard() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
-  // Wizard Navigation: 3 Main Stages
+  // Wizard Navigation: 4 Main Stages
   const [currentStep, setCurrentStep] = useState<WizardStep>('upload');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sheetInspectorOpen, setSheetInspectorOpen] = useState(false);
 
-  // Session State
+  // Session State & Sheet Selection
   const [uploadData, setUploadData] = useState<UploadExcelResponse | null>(null);
   const [sheets, setSheets] = useState<SheetSessionData[]>([]);
+  const [selectedSheets, setSelectedSheets] = useState<Set<string>>(new Set());
+  const [lifecycleInspectorRow, setLifecycleInspectorRow] = useState<ValidatedImportRow | null>(null);
 
   // Preview Pagination & Filter State
   const [previewFilter, setPreviewFilter] = useState<
@@ -132,6 +135,7 @@ export function SmartEmployeeImportWizard() {
 
   // Mutations & Queries
   const uploadMutation = useUploadImportFile();
+  const selectSheetsMutation = useSelectSheets();
   const updateRowMutation = useUpdatePreviewRow();
   const revertRowMutation = useRevertPreviewRow();
   const toggleApprovalMutation = useToggleRowApproval();
@@ -174,7 +178,7 @@ export function SmartEmployeeImportWizard() {
   const totalFiltered = previewData?.totalFiltered || 0;
 
   // =========================================================================
-  // Stage 1: File Upload Handler (Auto-extracts, reconciles, and transitions)
+  // Stage 1: File Upload Handler & Sheet Initialization
   // =========================================================================
 
   const processUploadedFile = (file: File) => {
@@ -210,13 +214,18 @@ export function SmartEmployeeImportWizard() {
         setUploadData(res);
         setSheets(res.sheets || []);
 
-        // Automatically transitions to Stage 2: Review & Edit Extracted Employees!
-        setCurrentStep('preview');
-        setPreviewPage(1);
+        // Intelligently select relevant employee sheets by default
+        const initialSelected = (res.sheets || [])
+          .filter((s) => s.defaultInclude !== false && s.importable !== false)
+          .map((s) => s.sheetName);
+        setSelectedSheets(new Set(initialSelected));
+
+        // Advance to Stage 2: Choose Sheets
+        setCurrentStep('sheets');
 
         toast({
-          title: 'Workbook Extracted & Reconciled',
-          description: `Extracted ${res.totalRows} employee records across active worksheets. Ready for review.`,
+          title: 'Workbook Analyzed',
+          description: `Identified ${res.sheets?.length || 0} worksheets in ${file.name}. Please confirm the sheets to import.`,
         });
       } catch (err) {
         toast({
@@ -227,6 +236,57 @@ export function SmartEmployeeImportWizard() {
       }
     };
     reader.readAsDataURL(file);
+  };
+
+  // =========================================================================
+  // Stage 2: Worksheet Selection Handlers
+  // =========================================================================
+
+  const toggleSheetSelection = (sheetName: string) => {
+    setSelectedSheets((prev) => {
+      const next = new Set(prev);
+      if (next.has(sheetName)) {
+        next.delete(sheetName);
+      } else {
+        next.add(sheetName);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllSheets = () => {
+    const all = new Set(sheets.map((s) => s.sheetName));
+    setSelectedSheets(all);
+  };
+
+  const handleClearAllSheets = () => {
+    setSelectedSheets(new Set());
+  };
+
+  const handleConfirmSheetSelection = async () => {
+    if (!sessionId) return;
+    try {
+      const res = await selectSheetsMutation.mutateAsync({
+        sessionId,
+        selectedSheets: Array.from(selectedSheets),
+      });
+
+      setSheets(res.sheets || []);
+      setCurrentStep('preview');
+      setPreviewPage(1);
+      refetchPreview();
+
+      toast({
+        title: 'Worksheets Extracted & Reconciled',
+        description: `Reconciled ${res.totalRows} employee records across ${selectedSheets.size} selected sheets. Ready for review.`,
+      });
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: 'Extraction Failed',
+        description: (err as Error).message || 'Failed to extract selected worksheets.',
+      });
+    }
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -612,19 +672,19 @@ export function SmartEmployeeImportWizard() {
       {/* Wizard Progress Bar */}
       <div className="bg-white rounded-xl border border-stone-200 p-4 shadow-sm">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center space-x-2 sm:space-x-4">
+          <div className="flex items-center space-x-2 sm:space-x-3 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
             {/* Step 1 */}
             <div
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
                 currentStep === 'upload'
-                  ? 'bg-primary/10 text-primary font-semibold'
+                  ? 'bg-rose-50 text-rose-900 font-semibold border border-rose-200'
                   : 'text-stone-500 hover:text-stone-700'
               }`}
             >
               <div
                 className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
                   currentStep === 'upload'
-                    ? 'bg-primary text-white'
+                    ? 'bg-rose-900 text-white'
                     : uploadData
                     ? 'bg-emerald-100 text-emerald-700'
                     : 'bg-stone-100 text-stone-500'
@@ -635,20 +695,48 @@ export function SmartEmployeeImportWizard() {
               <span>1. Upload Excel</span>
             </div>
 
-            <ChevronRight className="w-4 h-4 text-stone-400 hidden sm:block" />
+            <ChevronRight className="w-4 h-4 text-stone-300 shrink-0" />
 
-            {/* Step 2 */}
+            {/* Step 2: Choose Sheets */}
             <div
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                currentStep === 'sheets'
+                  ? 'bg-rose-50 text-rose-900 font-semibold border border-rose-200'
+                  : 'text-stone-500'
+              }`}
+            >
+              <div
+                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
+                  currentStep === 'sheets'
+                    ? 'bg-rose-900 text-white'
+                    : currentStep === 'preview' || currentStep === 'commit' || currentStep === 'complete'
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : 'bg-stone-100 text-stone-500'
+                }`}
+              >
+                {currentStep === 'preview' || currentStep === 'commit' || currentStep === 'complete' ? (
+                  <Check className="w-3.5 h-3.5" />
+                ) : (
+                  '2'
+                )}
+              </div>
+              <span>2. Choose Sheets</span>
+            </div>
+
+            <ChevronRight className="w-4 h-4 text-stone-300 shrink-0" />
+
+            {/* Step 3: Review & Edit */}
+            <div
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
                 currentStep === 'preview'
-                  ? 'bg-primary/10 text-primary font-semibold'
+                  ? 'bg-rose-50 text-rose-900 font-semibold border border-rose-200'
                   : 'text-stone-500'
               }`}
             >
               <div
                 className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
                   currentStep === 'preview'
-                    ? 'bg-primary text-white'
+                    ? 'bg-rose-900 text-white'
                     : currentStep === 'commit' || currentStep === 'complete'
                     ? 'bg-emerald-100 text-emerald-700'
                     : 'bg-stone-100 text-stone-500'
@@ -657,32 +745,32 @@ export function SmartEmployeeImportWizard() {
                 {currentStep === 'commit' || currentStep === 'complete' ? (
                   <Check className="w-3.5 h-3.5" />
                 ) : (
-                  '2'
+                  '3'
                 )}
               </div>
-              <span>2. Review & Edit Extracted Employees</span>
+              <span>3. Review & Edit</span>
             </div>
 
-            <ChevronRight className="w-4 h-4 text-stone-400 hidden sm:block" />
+            <ChevronRight className="w-4 h-4 text-stone-300 shrink-0" />
 
-            {/* Step 3 */}
+            {/* Step 4: Final Confirmation */}
             <div
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
                 currentStep === 'commit' || currentStep === 'complete'
-                  ? 'bg-primary/10 text-primary font-semibold'
+                  ? 'bg-rose-50 text-rose-900 font-semibold border border-rose-200'
                   : 'text-stone-500'
               }`}
             >
               <div
                 className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
                   currentStep === 'commit' || currentStep === 'complete'
-                    ? 'bg-primary text-white'
+                    ? 'bg-rose-900 text-white'
                     : 'bg-stone-100 text-stone-500'
                 }`}
               >
-                {currentStep === 'complete' ? <Check className="w-3.5 h-3.5" /> : '3'}
+                {currentStep === 'complete' ? <Check className="w-3.5 h-3.5" /> : '4'}
               </div>
-              <span>3. Final Confirmation</span>
+              <span>4. Final Confirmation</span>
             </div>
           </div>
 
@@ -803,6 +891,156 @@ export function SmartEmployeeImportWizard() {
                   <p className="text-stone-500">Review and edit any field before importing to PostgreSQL.</p>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* STAGE 2: CHOOSE SHEETS TO IMPORT                                         */}
+      {/* ========================================================================= */}
+      {currentStep === 'sheets' && (
+        <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-6 sm:p-8 space-y-6">
+          <div className="max-w-4xl mx-auto space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-stone-100 pb-5">
+              <div>
+                <h2 className="text-xl sm:text-2xl font-serif font-bold text-stone-900">
+                  Choose Sheets to Import
+                </h2>
+                <p className="text-stone-500 text-xs sm:text-sm mt-1">
+                  We detected multiple worksheets in your workbook. Select which sheets to extract employees from:
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 self-end sm:self-auto">
+                <span className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-stone-100 text-stone-700 border border-stone-200">
+                  {selectedSheets.size} of {sheets.length} sheets selected
+                </span>
+                <button
+                  type="button"
+                  onClick={handleSelectAllSheets}
+                  className="px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/5 rounded border border-primary/20 transition-colors"
+                >
+                  Select All
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearAllSheets}
+                  className="px-2.5 py-1 text-xs font-medium text-stone-600 hover:bg-stone-100 rounded border border-stone-200 transition-colors"
+                >
+                  Clear All
+                </button>
+              </div>
+            </div>
+
+            {/* Sheet List */}
+            <div className="space-y-3">
+              {sheets.map((sheet) => {
+                const isSelected = selectedSheets.has(sheet.sheetName);
+                const isDefaultIncluded = sheet.defaultInclude !== false && sheet.importable !== false;
+
+                return (
+                  <div
+                    key={sheet.sheetName}
+                    onClick={() => toggleSheetSelection(sheet.sheetName)}
+                    className={`p-4 rounded-xl border transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                      isSelected
+                        ? 'bg-white border-primary/40 shadow-sm ring-1 ring-primary/20'
+                        : 'bg-stone-50/60 border-stone-200 opacity-75 hover:opacity-100'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3.5">
+                      <div className="pt-0.5">
+                        {isSelected ? (
+                          <CheckSquare className="w-5 h-5 text-primary" />
+                        ) : (
+                          <Square className="w-5 h-5 text-stone-300" />
+                        )}
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-semibold text-stone-900 text-sm">
+                            {sheet.sheetName}
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-medium border ${
+                              sheet.category === 'REGULAR_EMPLOYEES'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : sheet.category === 'RESIGNATION_TRACKER'
+                                ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                : sheet.category === 'THIRD_PARTY'
+                                ? 'bg-sky-50 text-sky-700 border-sky-200'
+                                : sheet.category === 'TRANSFER'
+                                ? 'bg-cyan-50 text-cyan-700 border-cyan-200'
+                                : sheet.category === 'RETENTION_TRACKER'
+                                ? 'bg-teal-50 text-teal-700 border-teal-200'
+                                : sheet.category === 'RECRUITMENT'
+                                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                : 'bg-stone-100 text-stone-600 border-stone-200'
+                            }`}
+                          >
+                            {sheet.detectedContentType || sheet.categoryLabel}
+                          </span>
+
+                          {!isDefaultIncluded && (
+                            <span className="text-[10px] text-stone-400 italic">
+                              (Ignored by default)
+                            </span>
+                          )}
+                        </div>
+
+                        <p className="text-xs text-stone-600">
+                          {sheet.contentDescription || `Contains approximately ${sheet.estimatedDataRows} rows with columns: ${sheet.detectedHeaders.slice(0, 4).join(', ')}...`}
+                        </p>
+
+                        <div className="flex items-center gap-4 text-[11px] text-stone-400 font-mono pt-0.5">
+                          <span>~{sheet.estimatedDataRows} data rows</span>
+                          <span>•</span>
+                          <span>{sheet.columnCount} columns</span>
+                          <span>•</span>
+                          <span>Header Row {sheet.headerRowIndex}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 sm:self-center shrink-0">
+                      <span
+                        className={`text-xs font-medium px-2.5 py-1 rounded-full ${
+                          isSelected
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            : 'bg-stone-100 text-stone-500 border border-stone-200'
+                        }`}
+                      >
+                        {isSelected ? 'Include' : 'Ignore'}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center justify-between pt-4 border-t border-stone-100">
+              <button
+                type="button"
+                onClick={() => setCurrentStep('upload')}
+                className="px-4 py-2 rounded-lg border border-stone-200 bg-white hover:bg-stone-50 text-stone-700 text-xs font-medium transition-colors flex items-center gap-1.5"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Back to Upload</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleConfirmSheetSelection}
+                disabled={selectedSheets.size === 0 || selectSheetsMutation.isPending}
+                className="px-5 py-2.5 rounded-lg bg-primary hover:bg-primary/95 text-white text-xs font-semibold shadow-sm transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {selectSheetsMutation.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>Extract & Review Employees ({selectedSheets.size} sheets)</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
             </div>
           </div>
         </div>
@@ -991,11 +1229,11 @@ export function SmartEmployeeImportWizard() {
               {/* Actions & Navigation */}
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setSheetInspectorOpen(true)}
+                  onClick={() => setCurrentStep('sheets')}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-stone-700 bg-stone-50 hover:bg-stone-100 rounded-lg border border-stone-200 transition-colors"
                 >
                   <Layers className="w-3.5 h-3.5 text-stone-500" />
-                  <span>Worksheets ({sheets.length})</span>
+                  <span>Choose Sheets ({selectedSheets.size}/{sheets.length})</span>
                 </button>
 
                 {summary.needsAttentionRecords > 0 && (
@@ -1231,9 +1469,17 @@ export function SmartEmployeeImportWizard() {
                             {row.mappedData.workLocation || '—'}
                           </td>
 
-                          {/* Lifecycle Status */}
+                          {/* Lifecycle Status with Click-to-Inspect */}
                           <td className="py-3 px-3">
-                            {getStatusBadge(row.mappedData.employmentStatus)}
+                            <button
+                              type="button"
+                              onClick={() => setLifecycleInspectorRow(row)}
+                              className="group inline-flex items-center gap-1 cursor-pointer transition-transform hover:scale-105 focus:outline-none"
+                              title="Click to inspect lifecycle reasoning & history"
+                            >
+                              {getStatusBadge(row.mappedData.employmentStatus)}
+                              <Info className="w-3 h-3 text-stone-400 group-hover:text-primary transition-colors" />
+                            </button>
                           </td>
 
                           {/* Category */}
@@ -1241,20 +1487,16 @@ export function SmartEmployeeImportWizard() {
                             {getReconciliationBadge(row)}
                           </td>
 
-                          {/* Source Sheet */}
+                          {/* Source Sheet & Row */}
                           <td className="py-3 px-3">
-                            <div className="flex flex-wrap gap-1">
-                              {row.sourceSheets && row.sourceSheets.length > 0 ? (
-                                row.sourceSheets.map((sh, idx) => (
-                                  <span
-                                    key={idx}
-                                    className="px-1.5 py-0.5 text-[10px] rounded bg-stone-100 text-stone-600 border border-stone-200"
-                                  >
-                                    {sh}
-                                  </span>
-                                ))
-                              ) : (
-                                <span className="text-stone-400">—</span>
+                            <div className="space-y-0.5">
+                              <span className="inline-block px-1.5 py-0.5 text-[10px] rounded bg-stone-100 text-stone-700 font-medium border border-stone-200">
+                                {row.primarySheet || row.sourceSheets?.[0] || '—'}
+                              </span>
+                              {row.sourceRowNumber && (
+                                <p className="text-[10px] text-stone-400 font-mono">
+                                  Row {row.sourceRowNumber}
+                                </p>
                               )}
                             </div>
                           </td>
@@ -2095,6 +2337,131 @@ export function SmartEmployeeImportWizard() {
               ))
             )}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ========================================================================= */}
+      {/* MODAL 5: LIFECYCLE INSPECTOR MODAL                                        */}
+      {/* ========================================================================= */}
+      <Dialog
+        open={Boolean(lifecycleInspectorRow)}
+        onOpenChange={(open) => !open && setLifecycleInspectorRow(null)}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="font-serif text-lg text-stone-900 flex items-center gap-2">
+              <Info className="w-5 h-5 text-primary" />
+              <span>Lifecycle Intelligence Inspector</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-stone-500">
+              Complete audit trail of how People Journey determined this employee's lifecycle status.
+            </DialogDescription>
+          </DialogHeader>
+
+          {lifecycleInspectorRow && (
+            <div className="space-y-4 pt-2 text-xs">
+              {/* Employee Summary Card */}
+              <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 flex items-center justify-between">
+                <div>
+                  <p className="font-semibold text-stone-900 text-sm">
+                    {lifecycleInspectorRow.mappedData.fullName || 'Unnamed Employee'}
+                  </p>
+                  <p className="text-stone-500 font-mono text-[11px]">
+                    Code: {lifecycleInspectorRow.mappedData.employeeCode || 'Missing'} • {lifecycleInspectorRow.mappedData.department || 'No Department'}
+                  </p>
+                </div>
+                <div>
+                  {getStatusBadge(lifecycleInspectorRow.mappedData.employmentStatus)}
+                </div>
+              </div>
+
+              {/* Lifecycle Audit Details */}
+              <div className="border border-stone-200 rounded-xl overflow-hidden divide-y divide-stone-100">
+                <div className="p-3 bg-white flex justify-between items-center">
+                  <span className="text-stone-500 font-medium">Original Excel Status:</span>
+                  <span className="font-mono font-semibold text-stone-800 bg-stone-100 px-2 py-0.5 rounded">
+                    {lifecycleInspectorRow.rawExcelStatus || 'Not specified'}
+                  </span>
+                </div>
+
+                <div className="p-3 bg-white flex justify-between items-center">
+                  <span className="text-stone-500 font-medium">Detected Lifecycle:</span>
+                  <span className="font-semibold text-stone-900">
+                    {lifecycleInspectorRow.mappedData.employmentStatus}
+                  </span>
+                </div>
+
+                <div className="p-3 bg-white flex justify-between items-center">
+                  <span className="text-stone-500 font-medium">Source Worksheet & Row:</span>
+                  <span className="text-stone-800 font-medium">
+                    {lifecycleInspectorRow.primarySheet || lifecycleInspectorRow.sourceSheets?.[0] || 'Unknown'}
+                    {lifecycleInspectorRow.sourceRowNumber ? ` (Row ${lifecycleInspectorRow.sourceRowNumber})` : ''}
+                  </span>
+                </div>
+
+                {lifecycleInspectorRow.supportingDates && (
+                  <div className="p-3 bg-white space-y-1.5">
+                    <span className="text-stone-500 font-medium block">Supporting Dates:</span>
+                    <div className="grid grid-cols-2 gap-2 text-[11px] bg-stone-50 p-2.5 rounded-lg border border-stone-200">
+                      <div>
+                        <span className="text-stone-400">Date of Joining (DOJ):</span>
+                        <p className="font-medium text-stone-700">{lifecycleInspectorRow.supportingDates.hireDate || '—'}</p>
+                      </div>
+                      <div>
+                        <span className="text-stone-400">Resignation Date:</span>
+                        <p className="font-medium text-stone-700">{lifecycleInspectorRow.supportingDates.resignationDate || '—'}</p>
+                      </div>
+                      <div className="col-span-2">
+                        <span className="text-stone-400">Last Working Day (LWD):</span>
+                        <p className="font-medium text-stone-700 flex items-center gap-1.5">
+                          {lifecycleInspectorRow.supportingDates.lastWorkingDay || '—'}
+                          {lifecycleInspectorRow.supportingDates.isPastLwd && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-stone-200 text-stone-700">Past LWD</span>
+                          )}
+                          {lifecycleInspectorRow.supportingDates.isFutureLwd && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">Future LWD</span>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="p-3 bg-white space-y-1">
+                  <span className="text-stone-500 font-medium block">Classification Reasoning:</span>
+                  <p className="text-stone-700 bg-stone-50 p-2.5 rounded-lg border border-stone-200 leading-relaxed">
+                    {lifecycleInspectorRow.lifecycleReason || 'Classified based on standard roster mapping.'}
+                  </p>
+                </div>
+
+                {lifecycleInspectorRow.conflicts && lifecycleInspectorRow.conflicts.length > 0 && (
+                  <div className="p-3 bg-white space-y-1.5">
+                    <span className="text-amber-800 font-medium flex items-center gap-1">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                      Resolved Cross-Sheet Conflicts:
+                    </span>
+                    <div className="space-y-1 bg-amber-50/60 p-2.5 rounded-lg border border-amber-200">
+                      {lifecycleInspectorRow.conflicts.map((c, i) => (
+                        <p key={i} className="text-[11px] text-amber-900">
+                          • <span className="font-semibold">{c.sheet}</span> ({c.field}): {c.conflictDescription}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setLifecycleInspectorRow(null)}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-stone-800 hover:bg-stone-900 rounded-lg transition-colors"
+                >
+                  Close Inspector
+                </button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

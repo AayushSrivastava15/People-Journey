@@ -3,6 +3,7 @@ import {
   uploadExcelFile,
   updateSheetHeader,
   updateSheetConfig,
+  selectSheets,
   validateMapping,
   validateMultiSheetMapping,
   getPreviewRows,
@@ -30,6 +31,7 @@ router.get('/history', employeeLimiter, getImportHistory);
 
 // Upload and Sheet Configuration
 router.post('/upload', employeeLimiter, uploadExcelFile);
+router.post('/sessions/:sessionId/select-sheets', employeeLimiter, selectSheets);
 router.post('/sheet-header', employeeLimiter, updateSheetHeader);
 router.post('/sheet-config', employeeLimiter, updateSheetConfig);
 router.post('/validate-mapping', employeeLimiter, validateMapping);

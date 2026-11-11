@@ -1,4 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
+import { DismissableLayerBranch } from '@radix-ui/react-dismissable-layer';
 import {
   X, Mail, Send, Copy, Check, AlertCircle, Sparkles, ExternalLink,
   Loader2, Info, ChevronDown, CheckCircle2, FileText, ArrowRight
@@ -241,13 +243,17 @@ export function EmailPreparationDialog({
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        onClose();
+      }
     };
-    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, true);
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keydown', handleKeyDown, true);
       document.body.style.overflow = originalOverflow;
     };
   }, [isOpen, onClose]);

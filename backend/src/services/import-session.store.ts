@@ -30,10 +30,30 @@ export type ReconciliationType =
 export interface ValidatedImportRow {
   rowIndex: number; // 1-indexed row number from original Excel
   originalRowIndex?: number;
+  sourceRowNumber?: number;
+  primarySheet?: string;
   sourceSheets: string[];
   isHistorical?: boolean;
   isThirdParty?: boolean;
   vendor?: string;
+
+  // Raw Excel status and human-readable lifecycle tracking
+  rawExcelStatus?: string;
+  lifecycleReason?: string;
+  supportingDates?: {
+    hireDate?: string | null;
+    resignationDate?: string | null;
+    lastWorkingDay?: string | null;
+    isPastLwd?: boolean;
+    isFutureLwd?: boolean;
+  };
+  conflicts?: Array<{
+    sheet: string;
+    field: string;
+    value: unknown;
+    conflictDescription: string;
+  }>;
+  requiresHrApproval?: boolean;
 
   // Immutable original values extracted before any manual edits
   originalExtractedData: Record<string, unknown>;
@@ -60,7 +80,7 @@ export interface ValidatedImportRow {
     workLocation?: string;
     reportingManager?: string;
     vendor?: string;
-    employmentCategory?: 'REGULAR' | 'THIRD_PARTY';
+    employmentCategory?: 'REGULAR' | 'THIRD_PARTY' | 'HISTORICAL_EXIT' | 'ONBOARDING';
   };
 
   // Change tracking
@@ -101,6 +121,9 @@ export interface SheetSessionData {
   sheetName: string;
   category: SheetCategory;
   categoryLabel: string;
+  detectedContentType?: string;
+  contentDescription?: string;
+  defaultInclude?: boolean;
   importable: boolean;
   headerRowIndex: number; // 1-indexed
   confidence: number;
@@ -367,12 +390,15 @@ class ImportSessionStore {
     sheet.importable = importable;
 
     const labels: Record<SheetCategory, string> = {
-      REGULAR_EMPLOYEES: 'Regular Employees',
-      THIRD_PARTY: 'Third Party Workforce',
-      RESIGNATION_TRACKER: 'Lifecycle Updates / Historical Employees',
-      RETENTION_TRACKER: 'Employee Restoration',
-      TRANSFER: 'Employee Location Updates',
-      RECRUITMENT: 'Recruitment Onboarding',
+      REGULAR_EMPLOYEES: 'Employee records',
+      THIRD_PARTY: 'Vendor workforce',
+      RESIGNATION_TRACKER: 'Employee resignations and exits',
+      RETENTION_TRACKER: 'Withdrawn resignations',
+      TRANSFER: 'Employee transfers',
+      RECRUITMENT: 'Candidates and open positions',
+      DASHBOARD: 'HR summary and metrics',
+      CLOSED_VACANCIES: 'Closed vacancies',
+      PROJECTS: 'Project planning',
       IGNORE: 'Ignored',
     };
     sheet.categoryLabel = labels[category] || 'Custom';

@@ -34,6 +34,7 @@ import type {
   UserNotificationItem,
   UserNotificationsResponse,
   UploadExcelResponse,
+  SelectSheetsResponse,
   ValidateMappingResponse,
   ImportPreviewResponse,
   CommitImportResponse,
@@ -806,6 +807,27 @@ export function useUpdateSheetConfig() {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
+  });
+}
+
+export function useSelectSheets() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      sessionId,
+      selectedSheets,
+    }: {
+      sessionId: string;
+      selectedSheets: string[];
+    }) =>
+      apiClient<SelectSheetsResponse>(`/employees/import/sessions/${sessionId}/select-sheets`, {
+        method: 'POST',
+        body: JSON.stringify({ selectedSheets }),
+      }),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['importPreview', variables.sessionId] });
+    },
   });
 }
 

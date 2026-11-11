@@ -88,11 +88,11 @@ describe('Smart Employee Import Multi-Sheet & Editable Preview Integration Tests
     assert.strictEqual(readme.importable, false);
 
     const dash = excelSheetAnalyzer.classifySheet('Dashboard', ['Metric', 'Value']);
-    assert.strictEqual(dash.category, 'IGNORE');
+    assert.strictEqual(dash.category, 'DASHBOARD');
     assert.strictEqual(dash.importable, false);
 
     const closed = excelSheetAnalyzer.classifySheet('closed position', ['Position ID', 'Role', 'Department']);
-    assert.strictEqual(closed.category, 'IGNORE');
+    assert.strictEqual(closed.category, 'CLOSED_VACANCIES');
     assert.strictEqual(closed.importable, false);
   });
 

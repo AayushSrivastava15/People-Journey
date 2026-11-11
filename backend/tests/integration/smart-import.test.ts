@@ -210,6 +210,7 @@ describe('Smart Employee Import Integration Tests', () => {
         'Full Name': 'Fixable Employee',
         'Office Email': 'fixable@company.local',
         'Join Date': '2026-01-01',
+        'Status': 'Active',
       },
     ]);
 

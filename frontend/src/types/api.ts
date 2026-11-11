@@ -606,6 +606,9 @@ export type SheetCategory =
   | 'RETENTION_TRACKER'
   | 'TRANSFER'
   | 'RECRUITMENT'
+  | 'DASHBOARD'
+  | 'CLOSED_VACANCIES'
+  | 'PROJECTS'
   | 'IGNORE';
 
 export interface FieldDiff {
@@ -629,6 +632,9 @@ export interface SheetSessionData {
   sheetName: string;
   category: SheetCategory;
   categoryLabel: string;
+  detectedContentType?: string;
+  contentDescription?: string;
+  defaultInclude?: boolean;
   importable: boolean;
   headerRowIndex: number;
   confidence: number;
@@ -655,6 +661,16 @@ export interface UploadExcelResponse {
   previewRows?: ValidatedImportRow[];
 }
 
+export interface SelectSheetsResponse {
+  success: boolean;
+  sessionId: string;
+  summary: ImportSummary;
+  totalRows: number;
+  sheets: SheetSessionData[];
+  sheetOrder: string[];
+  previewRows: ValidatedImportRow[];
+}
+
 export interface ImportSummary {
   totalRecords: number;
   validRecords: number;
@@ -675,10 +691,28 @@ export interface ImportSummary {
 export interface ValidatedImportRow {
   rowIndex: number;
   originalRowIndex?: number;
+  sourceRowNumber?: number;
+  primarySheet?: string;
   sourceSheets: string[];
   isHistorical?: boolean;
   isThirdParty?: boolean;
   vendor?: string;
+  rawExcelStatus?: string;
+  lifecycleReason?: string;
+  supportingDates?: {
+    hireDate?: string | null;
+    resignationDate?: string | null;
+    lastWorkingDay?: string | null;
+    isPastLwd?: boolean;
+    isFutureLwd?: boolean;
+  };
+  conflicts?: Array<{
+    sheet: string;
+    field: string;
+    value: unknown;
+    conflictDescription: string;
+  }>;
+  requiresHrApproval?: boolean;
   originalExtractedData?: Record<string, unknown>;
   originalData: Record<string, unknown>;
   mappedData: {
@@ -700,7 +734,7 @@ export interface ValidatedImportRow {
     workLocation?: string;
     reportingManager?: string;
     vendor?: string;
-    employmentCategory?: 'REGULAR' | 'THIRD_PARTY';
+    employmentCategory?: 'REGULAR' | 'THIRD_PARTY' | 'HISTORICAL_EXIT' | 'ONBOARDING';
   };
   isEdited?: boolean;
   editedFields?: string[];

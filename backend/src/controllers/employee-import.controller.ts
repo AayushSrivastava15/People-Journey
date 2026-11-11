@@ -103,6 +103,52 @@ export async function updateSheetConfig(req: Request, res: Response): Promise<vo
   }
 }
 
+export async function selectSheets(req: Request, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } });
+    return;
+  }
+
+  const sessionId = String(req.params.sessionId);
+  const { selectedSheets } = req.body || {};
+
+  if (!sessionId || !Array.isArray(selectedSheets)) {
+    res.status(400).json({
+      success: false,
+      error: { code: 'INVALID_PAYLOAD', message: 'sessionId and selectedSheets array are required.' },
+    });
+    return;
+  }
+
+  try {
+    const session = await smartImportService.selectSheetsForImport(sessionId, userId, selectedSheets);
+    res.status(200).json({
+      success: true,
+      sessionId: session.sessionId,
+      summary: session.summary,
+      totalRows: session.validatedRows.length,
+      sheets: Object.values(session.sheets),
+      sheetOrder: session.sheetOrder,
+      previewRows: session.validatedRows.slice(0, 10),
+    });
+  } catch (err) {
+    const error = err as Error;
+    if (error.message.includes('expired')) {
+      res.status(410).json({
+        success: false,
+        error: { code: 'SESSION_EXPIRED', message: error.message },
+      });
+      return;
+    }
+    logger.error({ message: error.message, sessionId, userId }, 'Failed to apply sheet selection');
+    res.status(500).json({
+      success: false,
+      error: { code: 'SHEET_SELECTION_FAILED', message: error.message },
+    });
+  }
+}
+
 export async function validateMultiSheetMapping(req: Request, res: Response): Promise<void> {
   const userId = req.user?.id;
   if (!userId) {
