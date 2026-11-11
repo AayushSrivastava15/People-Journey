@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { DismissableLayerBranch } from '@radix-ui/react-dismissable-layer';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { ChevronDown, Check, Search } from 'lucide-react';
 
@@ -328,13 +329,16 @@ export function AnimatedSelect({
         createPortal(
           <AnimatePresence>
             {isOpen && (
-              <motion.div
-                ref={menuRef}
-                role="listbox"
-                aria-label={ariaLabel || placeholder}
-                onPointerDown={e => e.stopPropagation()}
-                onMouseDown={e => e.stopPropagation()}
-                onClick={e => e.stopPropagation()}
+              <DismissableLayerBranch asChild>
+                <motion.div
+                  ref={menuRef}
+                  role="listbox"
+                  data-animated-select-dropdown="true"
+                  className="animated-select-dropdown"
+                  aria-label={ariaLabel || placeholder}
+                  onPointerDown={e => e.stopPropagation()}
+                  onMouseDown={e => e.stopPropagation()}
+                  onClick={e => e.stopPropagation()}
                 initial={
                   shouldReduceMotion
                     ? { opacity: 0 }
