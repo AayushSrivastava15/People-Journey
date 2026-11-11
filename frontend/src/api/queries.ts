@@ -40,6 +40,8 @@ import type {
   ImportHistoryItem,
   ValidatedImportRow,
   ImportSummary,
+  SheetCategory,
+  SheetSessionData,
 } from '../types/api';
 import { buildApiUrl } from './client';
 import { auth } from '../lib/firebase';
@@ -781,6 +783,40 @@ export function useValidateImportMapping() {
   return useMutation({
     mutationFn: (payload: { sessionId: string; columnMapping: Record<string, string>; saveMappingForWorkspace?: boolean }) =>
       apiClient<ValidateMappingResponse>('/employees/import/validate-mapping', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+  });
+}
+
+export function useUpdateSheetHeader() {
+  return useMutation({
+    mutationFn: (payload: { sessionId: string; sheetName: string; headerRowIndex: number }) =>
+      apiClient<{ success: boolean; sheet: SheetSessionData }>('/employees/import/sheet-header', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+  });
+}
+
+export function useUpdateSheetConfig() {
+  return useMutation({
+    mutationFn: (payload: { sessionId: string; sheetName: string; category: SheetCategory; importable: boolean }) =>
+      apiClient<{ success: boolean; sheet: SheetSessionData }>('/employees/import/sheet-config', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+  });
+}
+
+export function useValidateMultiSheetMapping() {
+  return useMutation({
+    mutationFn: (payload: {
+      sessionId: string;
+      sheetMappings: Record<string, Record<string, string>>;
+      saveMappingForWorkspace?: boolean;
+    }) =>
+      apiClient<ValidateMappingResponse>('/employees/import/validate-multi-mapping', {
         method: 'POST',
         body: JSON.stringify(payload),
       }),

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { logger } from '../utils/logger.js';
+import type { SheetCategory } from './excel-sheet-analyzer.js';
 
 export type RowValidationStatus = 'VALID' | 'NEEDS_ATTENTION' | 'DUPLICATE';
 
@@ -32,6 +33,8 @@ export interface ValidatedImportRow {
   validationStatus: RowValidationStatus;
   errors: RowValidationError[];
   warnings: string[];
+  sourceSheets?: string[];
+  isHistorical?: boolean;
 }
 
 export interface ImportSummary {
@@ -47,6 +50,25 @@ export interface ImportSummary {
   };
 }
 
+export interface SheetSessionData {
+  sheetName: string;
+  category: SheetCategory;
+  categoryLabel: string;
+  importable: boolean;
+  headerRowIndex: number; // 1-indexed
+  confidence: number;
+  isLowConfidence: boolean;
+  totalRows: number;
+  estimatedDataRows: number;
+  columnCount: number;
+  detectedHeaders: string[];
+  columnMapping: Record<string, string>; // Excel header -> canonical field
+  rawGrid: any[][];
+  rawRows: Record<string, unknown>[];
+  sampleRows: Record<string, string>[];
+  previewGrid: Array<{ rowIndex: number; cells: string[] }>;
+}
+
 export interface ImportSession {
   sessionId: string;
   ownerUserId: string;
@@ -54,6 +76,9 @@ export interface ImportSession {
   fileSize: number;
   uploadedAt: Date;
   expiresAt: Date;
+  sheets: Record<string, SheetSessionData>;
+  sheetOrder: string[];
+  // Primary sheet backwards-compatibility aliases
   detectedHeaders: string[];
   rawRows: Record<string, unknown>[];
   columnMapping: Record<string, string>;
@@ -82,7 +107,6 @@ class ImportSessionStore {
     this.cleanupExpired();
 
     if (this.sessions.size >= this.MAX_SESSIONS) {
-      // Evict oldest session
       const oldestKey = this.sessions.keys().next().value;
       if (oldestKey) {
         this.sessions.delete(oldestKey);
@@ -93,6 +117,26 @@ class ImportSessionStore {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + this.TTL_MS);
 
+    // Create a default sheet entry for backwards compatibility
+    const defaultSheet: SheetSessionData = {
+      sheetName: 'Sheet1',
+      category: 'REGULAR_EMPLOYEES',
+      categoryLabel: 'Regular Employees',
+      importable: true,
+      headerRowIndex: 1,
+      confidence: 0.95,
+      isLowConfidence: false,
+      totalRows: rawRows.length + 1,
+      estimatedDataRows: rawRows.length,
+      columnCount: detectedHeaders.length,
+      detectedHeaders,
+      columnMapping,
+      rawGrid: [],
+      rawRows,
+      sampleRows: rawRows.slice(0, 5) as Record<string, string>[],
+      previewGrid: [],
+    };
+
     const session: ImportSession = {
       sessionId,
       ownerUserId,
@@ -100,6 +144,8 @@ class ImportSessionStore {
       fileSize,
       uploadedAt: now,
       expiresAt,
+      sheets: { Sheet1: defaultSheet },
+      sheetOrder: ['Sheet1'],
       detectedHeaders,
       rawRows,
       columnMapping,
@@ -118,6 +164,66 @@ class ImportSessionStore {
     return session;
   }
 
+  createMultiSheetSession(
+    ownerUserId: string,
+    fileName: string,
+    fileSize: number,
+    sheets: SheetSessionData[]
+  ): ImportSession {
+    this.cleanupExpired();
+
+    if (this.sessions.size >= this.MAX_SESSIONS) {
+      const oldestKey = this.sessions.keys().next().value;
+      if (oldestKey) {
+        this.sessions.delete(oldestKey);
+      }
+    }
+
+    const sessionId = crypto.randomUUID();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + this.TTL_MS);
+
+    const sheetMap: Record<string, SheetSessionData> = {};
+    const sheetOrder: string[] = [];
+
+    sheets.forEach((s) => {
+      sheetMap[s.sheetName] = s;
+      sheetOrder.push(s.sheetName);
+    });
+
+    // Primary importable sheet (e.g. Employee MIS)
+    const primarySheet =
+      sheets.find(s => s.importable && s.category === 'REGULAR_EMPLOYEES') ||
+      sheets.find(s => s.importable) ||
+      sheets[0];
+
+    const session: ImportSession = {
+      sessionId,
+      ownerUserId,
+      fileName,
+      fileSize,
+      uploadedAt: now,
+      expiresAt,
+      sheets: sheetMap,
+      sheetOrder,
+      detectedHeaders: primarySheet?.detectedHeaders || [],
+      rawRows: primarySheet?.rawRows || [],
+      columnMapping: primarySheet?.columnMapping || {},
+      validatedRows: [],
+      summary: {
+        totalRecords: primarySheet?.rawRows.length || 0,
+        validRecords: 0,
+        needsAttentionRecords: 0,
+        duplicateRecords: 0,
+        statusBreakdown: { onboarding: 0, active: 0, offboarding: 0, exited: 0 },
+      },
+    };
+
+    this.sessions.set(sessionId, session);
+    logger.info({ sessionId, ownerUserId, fileName, sheetCount: sheets.length }, 'Created multi-sheet import session');
+    return session;
+  }
+
   getSession(sessionId: string, ownerUserId: string): ImportSession | null {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
@@ -127,15 +233,116 @@ class ImportSessionStore {
       return null;
     }
 
-    if (new Date() > session.expiresAt) {
-      this.sessions.delete(sessionId);
-      logger.info({ sessionId }, 'Import preview session expired and removed');
-      return null;
-    }
-
-    // Refresh expiration on activity
+    // Refresh TTL on active access
     session.expiresAt = new Date(Date.now() + this.TTL_MS);
     return session;
+  }
+
+  updateSheetHeaderRow(
+    sessionId: string,
+    ownerUserId: string,
+    sheetName: string,
+    newHeaderRow: number // 1-indexed
+  ): SheetSessionData | null {
+    const session = this.getSession(sessionId, ownerUserId);
+    if (!session || !session.sheets[sheetName]) return null;
+
+    const sheet = session.sheets[sheetName];
+    const grid = sheet.rawGrid;
+    if (!grid || newHeaderRow < 1 || newHeaderRow > grid.length) return null;
+
+    const headerIdx = newHeaderRow - 1;
+    const rawHeaders = (grid[headerIdx] || []).map((c, idx) => {
+      const val = String(c ?? '').trim();
+      return val || `Column_${idx + 1}`;
+    });
+
+    // Trim trailing placeholder columns
+    let lastValidIdx = rawHeaders.length - 1;
+    while (lastValidIdx >= 0 && rawHeaders[lastValidIdx].startsWith('Column_')) {
+      lastValidIdx--;
+    }
+    const detectedHeaders = rawHeaders.slice(0, lastValidIdx + 1);
+
+    // Re-extract data rows
+    const rawRows: Record<string, unknown>[] = [];
+    const sampleRows: Record<string, string>[] = [];
+
+    for (let r = newHeaderRow; r < grid.length; r++) {
+      const row = grid[r] || [];
+      const hasData = row.some(c => c !== '' && c !== null && c !== undefined);
+      if (hasData) {
+        const rowObj: Record<string, unknown> = {};
+        detectedHeaders.forEach((h, colIdx) => {
+          rowObj[h] = row[colIdx] ?? '';
+        });
+        rawRows.push(rowObj);
+        if (sampleRows.length < 5) {
+          const sampleObj: Record<string, string> = {};
+          detectedHeaders.forEach((h, colIdx) => {
+            sampleObj[h] = row[colIdx] !== undefined && row[colIdx] !== null ? String(row[colIdx]).trim() : '';
+          });
+          sampleRows.push(sampleObj);
+        }
+      }
+    }
+
+    sheet.headerRowIndex = newHeaderRow;
+    sheet.detectedHeaders = detectedHeaders;
+    sheet.columnCount = detectedHeaders.length;
+    sheet.rawRows = rawRows;
+    sheet.estimatedDataRows = rawRows.length;
+    sheet.sampleRows = sampleRows;
+    sheet.confidence = 1.0; // Confirmed by manual user action
+    sheet.isLowConfidence = false;
+
+    // If this is the primary sheet, also update root aliases
+    if (session.sheetOrder[0] === sheetName || sheet.category === 'REGULAR_EMPLOYEES') {
+      session.detectedHeaders = detectedHeaders;
+      session.rawRows = rawRows;
+    }
+
+    return sheet;
+  }
+
+  updateSheetConfig(
+    sessionId: string,
+    ownerUserId: string,
+    sheetName: string,
+    category: SheetCategory,
+    importable: boolean
+  ): SheetSessionData | null {
+    const session = this.getSession(sessionId, ownerUserId);
+    if (!session || !session.sheets[sheetName]) return null;
+
+    const sheet = session.sheets[sheetName];
+    sheet.category = category;
+    sheet.importable = importable;
+
+    const labels: Record<SheetCategory, string> = {
+      REGULAR_EMPLOYEES: 'Regular Employees',
+      THIRD_PARTY: 'Third Party Workforce',
+      RESIGNATION_TRACKER: 'Lifecycle Updates / Historical Employees',
+      RETENTION_TRACKER: 'Employee Restoration',
+      TRANSFER: 'Employee Location Updates',
+      IGNORE: 'Ignored',
+    };
+    sheet.categoryLabel = labels[category] || 'Custom';
+
+    return sheet;
+  }
+
+  updateSheetMapping(
+    sessionId: string,
+    ownerUserId: string,
+    sheetName: string,
+    mapping: Record<string, string>
+  ): SheetSessionData | null {
+    const session = this.getSession(sessionId, ownerUserId);
+    if (!session || !session.sheets[sheetName]) return null;
+
+    session.sheets[sheetName].columnMapping = mapping;
+    return session.sheets[sheetName];
   }
 
   updateSessionValidation(
@@ -151,7 +358,6 @@ class ImportSessionStore {
     session.columnMapping = columnMapping;
     session.validatedRows = validatedRows;
     session.summary = summary;
-    session.expiresAt = new Date(Date.now() + this.TTL_MS);
     return session;
   }
 
@@ -172,7 +378,7 @@ class ImportSessionStore {
       ...updatedMappedData,
     };
 
-    // Keep rawRows in sync so revalidation reflects inline edits
+    // Keep rawRows in sync
     const rawIdx = rowIndex - 2;
     if (session.rawRows[rawIdx]) {
       for (const [canonicalField, newVal] of Object.entries(updatedMappedData)) {

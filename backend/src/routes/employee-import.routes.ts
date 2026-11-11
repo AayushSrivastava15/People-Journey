@@ -1,7 +1,10 @@
 import { Router, type IRouter } from 'express';
 import {
   uploadExcelFile,
+  updateSheetHeader,
+  updateSheetConfig,
   validateMapping,
+  validateMultiSheetMapping,
   getPreviewRows,
   updatePreviewRow,
   deletePreviewRow,
@@ -22,9 +25,12 @@ router.use(authenticateToken);
 router.get('/template', exportLimiter, getStarterTemplate);
 router.get('/history', employeeLimiter, getImportHistory);
 
-// Upload and Column Validation
+// Upload and Sheet Configuration
 router.post('/upload', employeeLimiter, uploadExcelFile);
+router.post('/sheet-header', employeeLimiter, updateSheetHeader);
+router.post('/sheet-config', employeeLimiter, updateSheetConfig);
 router.post('/validate-mapping', employeeLimiter, validateMapping);
+router.post('/validate-multi-mapping', employeeLimiter, validateMultiSheetMapping);
 
 // Paginated Preview & Row Operations
 router.get('/preview/:sessionId', employeeLimiter, getPreviewRows);
@@ -36,3 +42,4 @@ router.post('/commit', employeeLimiter, commitImport);
 router.get('/errors/:sessionId', exportLimiter, exportSessionErrors);
 
 export default router;
+

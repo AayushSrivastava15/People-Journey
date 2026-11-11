@@ -599,6 +599,31 @@ export interface ColumnDetectionResult {
   savedMappingMatched: boolean;
 }
 
+export type SheetCategory =
+  | 'REGULAR_EMPLOYEES'
+  | 'THIRD_PARTY'
+  | 'RESIGNATION_TRACKER'
+  | 'RETENTION_TRACKER'
+  | 'TRANSFER'
+  | 'IGNORE';
+
+export interface SheetSessionData {
+  sheetName: string;
+  category: SheetCategory;
+  categoryLabel: string;
+  importable: boolean;
+  headerRowIndex: number;
+  confidence: number;
+  isLowConfidence: boolean;
+  totalRows: number;
+  estimatedDataRows: number;
+  columnCount: number;
+  detectedHeaders: string[];
+  columnMapping: Record<string, string>;
+  sampleRows: Record<string, string>[];
+  previewGrid: Array<{ rowIndex: number; cells: string[] }>;
+}
+
 export interface UploadExcelResponse {
   success: boolean;
   sessionId: string;
@@ -606,6 +631,8 @@ export interface UploadExcelResponse {
   totalRows: number;
   canonicalFields: CanonicalFieldDefinition[];
   detection: ColumnDetectionResult;
+  sheets?: SheetSessionData[];
+  sheetOrder?: string[];
 }
 
 export interface ImportSummary {
@@ -640,10 +667,15 @@ export interface ValidatedImportRow {
     exitDate: string | null;
     exitReason: string | null;
     exitNotes: string | null;
+    workLocation?: string;
+    reportingManager?: string;
+    vendor?: string;
   };
   validationStatus: 'VALID' | 'NEEDS_ATTENTION' | 'DUPLICATE';
   errors: Array<{ field: string; message: string; critical: boolean }>;
   warnings: string[];
+  sourceSheets?: string[];
+  isHistorical?: boolean;
 }
 
 export interface ImportPreviewResponse {

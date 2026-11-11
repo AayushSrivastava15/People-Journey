@@ -38,6 +38,8 @@ export async function uploadExcelFile(req: Request, res: Response): Promise<void
       totalRows: result.session.rawRows.length,
       canonicalFields: CANONICAL_IMPORT_FIELDS,
       detection: result.detection,
+      sheets: result.sheets,
+      sheetOrder: result.sheetOrder,
     });
   } catch (err) {
     const error = err as Error;
@@ -45,6 +47,104 @@ export async function uploadExcelFile(req: Request, res: Response): Promise<void
     res.status(400).json({
       success: false,
       error: { code: 'IMPORT_PARSE_ERROR', message: error.message },
+    });
+  }
+}
+
+export async function updateSheetHeader(req: Request, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } });
+    return;
+  }
+
+  const { sessionId, sheetName, headerRowIndex } = req.body || {};
+  if (!sessionId || !sheetName || typeof headerRowIndex !== 'number') {
+    res.status(400).json({
+      success: false,
+      error: { code: 'INVALID_PAYLOAD', message: 'sessionId, sheetName, and numeric headerRowIndex are required.' },
+    });
+    return;
+  }
+
+  try {
+    const sheet = await smartImportService.updateSheetHeader(sessionId, userId, sheetName, headerRowIndex);
+    res.status(200).json({ success: true, sheet });
+  } catch (err) {
+    const error = err as Error;
+    res.status(400).json({ success: false, error: { code: 'UPDATE_FAILED', message: error.message } });
+  }
+}
+
+export async function updateSheetConfig(req: Request, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } });
+    return;
+  }
+
+  const { sessionId, sheetName, category, importable } = req.body || {};
+  if (!sessionId || !sheetName || !category) {
+    res.status(400).json({
+      success: false,
+      error: { code: 'INVALID_PAYLOAD', message: 'sessionId, sheetName, and category are required.' },
+    });
+    return;
+  }
+
+  try {
+    const sheet = await smartImportService.updateSheetConfig(sessionId, userId, sheetName, category, Boolean(importable));
+    res.status(200).json({ success: true, sheet });
+  } catch (err) {
+    const error = err as Error;
+    res.status(400).json({ success: false, error: { code: 'UPDATE_FAILED', message: error.message } });
+  }
+}
+
+export async function validateMultiSheetMapping(req: Request, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } });
+    return;
+  }
+
+  const { sessionId, sheetMappings, saveMappingForWorkspace } = req.body || {};
+  if (!sessionId || typeof sheetMappings !== 'object') {
+    res.status(400).json({
+      success: false,
+      error: { code: 'INVALID_PAYLOAD', message: 'sessionId and sheetMappings object are required.' },
+    });
+    return;
+  }
+
+  try {
+    const session = await smartImportService.validateMultiSheetMapping(
+      sessionId,
+      userId,
+      sheetMappings,
+      Boolean(saveMappingForWorkspace)
+    );
+
+    res.status(200).json({
+      success: true,
+      sessionId: session.sessionId,
+      summary: session.summary,
+      previewRows: session.validatedRows.slice(0, 10),
+      totalRows: session.validatedRows.length,
+    });
+  } catch (err) {
+    const error = err as Error;
+    if (error.message.includes('expired')) {
+      res.status(410).json({
+        success: false,
+        error: { code: 'SESSION_EXPIRED', message: error.message },
+      });
+      return;
+    }
+    logger.error({ message: error.message, sessionId, userId }, 'Failed to validate multi-sheet import mapping');
+    res.status(500).json({
+      success: false,
+      error: { code: 'VALIDATION_FAILED', message: error.message },
     });
   }
 }

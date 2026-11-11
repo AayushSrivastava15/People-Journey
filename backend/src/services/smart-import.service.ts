@@ -10,7 +10,9 @@ import {
   type RowValidationError,
   type ImportSummary,
   type ImportSession,
+  type SheetSessionData,
 } from './import-session.store.js';
+import { excelSheetAnalyzer, type SheetAnalysis, type SheetCategory } from './excel-sheet-analyzer.js';
 
 export interface ColumnAliasDefinition {
   field: string;
@@ -24,7 +26,7 @@ export const CANONICAL_IMPORT_FIELDS: ColumnAliasDefinition[] = [
   {
     field: 'employeeCode',
     label: 'Employee ID / Code',
-    aliases: ['employee code', 'employee id', 'staff id', 'emp code', 'emp id', 'staff code', 'id', 'emp no', 'employee no', 'code', 'worker id'],
+    aliases: ['employee code', 'employee id', 'staff id', 'emp code', 'emp id', 'staff code', 'id', 'emp no', 'employee no', 'code', 'worker id', 'worker ref', 'ref'],
     required: true,
     description: 'Unique company employee code or staff ID. Never auto-generated.',
   },
@@ -118,6 +120,27 @@ export const CANONICAL_IMPORT_FIELDS: ColumnAliasDefinition[] = [
     aliases: ['exit notes', 'remarks', 'notes', 'comments', 'handover notes'],
     required: false,
     description: 'Transition and handover comments.',
+  },
+  {
+    field: 'workLocation',
+    label: 'Work Location / Site',
+    aliases: ['location', 'site', 'work location', 'office location', 'city', 'branch', 'transferred to', 'transfer destination'],
+    required: false,
+    description: 'Office site, city, or work location.',
+  },
+  {
+    field: 'reportingManager',
+    label: 'Reporting Manager',
+    aliases: ['reporting manager', 'manager', 'supervisor', 'reports to', 'lead'],
+    required: false,
+    description: 'Direct reporting manager or team supervisor.',
+  },
+  {
+    field: 'vendor',
+    label: 'Third Party Vendor',
+    aliases: ['vendor', 'agency', 'provider', 'third party', 'supplier', 'contractor agency'],
+    required: false,
+    description: 'Third-party vendor or staffing agency name.',
   },
 ];
 
@@ -238,62 +261,21 @@ export class SmartImportService {
   }
 
   /**
-   * Parse uploaded Excel buffer and detect columns intelligently
+   * Helper to suggest canonical column mappings for detected headers
    */
-  async parseAndDetectColumns(
-    buffer: Buffer,
-    fileName: string,
-    ownerUserId: string
-  ): Promise<{
-    session: ImportSession;
-    detection: ColumnDetectionResult;
-  }> {
-    let workbook: XLSX.WorkBook;
-    try {
-      workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
-    } catch (err) {
-      throw new Error('Failed to read Excel file. Please ensure the file is a valid .xlsx or .xls document.');
-    }
-
-    const firstSheetName = workbook.SheetNames[0];
-    if (!firstSheetName) {
-      throw new Error('The uploaded Excel document does not contain any sheets.');
-    }
-
-    const worksheet = workbook.Sheets[firstSheetName];
-    // Convert to JSON with headers
-    const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, { defval: '', raw: false });
-
-    if (rawRows.length === 0) {
-      throw new Error('The uploaded Excel sheet contains no data rows.');
-    }
-
-    if (rawRows.length > 2500) {
-      throw new Error(`File row count (${rawRows.length}) exceeds the maximum import limit of 2,500 rows per batch.`);
-    }
-
-    // Extract headers across all rows so columns with empty first cells are never missed
-    const headerSet = new Set<string>();
-    for (const row of rawRows) {
-      for (const k of Object.keys(row)) {
-        if (k && !k.startsWith('__EMPTY')) {
-          headerSet.add(k);
-        }
-      }
-    }
-    const detectedHeaders = Array.from(headerSet);
-    if (detectedHeaders.length === 0) {
-      throw new Error('No column headers detected in your sheet.');
-    }
-
-    // Retrieve saved workspace mappings
-    const savedMapping = await this.getSavedWorkspaceMapping(ownerUserId);
-
+  suggestMappingForHeaders(
+    detectedHeaders: string[],
+    savedMapping: Record<string, string> = {}
+  ): {
+    suggestedMapping: Record<string, string>;
+    confidence: Record<string, number>;
+    savedMappingMatched: boolean;
+  } {
     const suggestedMapping: Record<string, string> = {};
     const confidence: Record<string, number> = {};
     let savedMappingMatched = false;
 
-    // First check saved mappings
+    // 1. First check saved mappings
     for (const header of detectedHeaders) {
       if (savedMapping[header]) {
         suggestedMapping[header] = savedMapping[header];
@@ -302,7 +284,7 @@ export class SmartImportService {
       }
     }
 
-    // For unmapped headers, apply alias matching
+    // 2. For unmapped headers, apply alias matching
     for (const header of detectedHeaders) {
       if (suggestedMapping[header]) continue;
 
@@ -321,7 +303,7 @@ export class SmartImportService {
         // Substring check
         for (const alias of def.aliases) {
           if (norm.includes(alias) || alias.includes(norm)) {
-            const score = Math.min(norm.length, alias.length) / Math.max(norm.length, alias.length) * 0.8;
+            const score = (Math.min(norm.length, alias.length) / Math.max(norm.length, alias.length)) * 0.8;
             if (score > highestScore) {
               highestScore = score;
               bestField = def.field;
@@ -344,35 +326,176 @@ export class SmartImportService {
       }
     }
 
-    // Create session in bounded memory store
-    const session = importSessionStore.createSession(
+    return { suggestedMapping, confidence, savedMappingMatched };
+  }
+
+  /**
+   * Parse uploaded Excel buffer and detect columns intelligently across all sheets
+   */
+  async parseAndDetectColumns(
+    buffer: Buffer,
+    fileName: string,
+    ownerUserId: string
+  ): Promise<{
+    session: ImportSession;
+    detection: ColumnDetectionResult;
+    sheets: SheetSessionData[];
+    sheetOrder: string[];
+    canonicalFields: ColumnAliasDefinition[];
+  }> {
+    let workbook: XLSX.WorkBook;
+    try {
+      workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+    } catch {
+      throw new Error('Failed to read Excel file. Please ensure the file is a valid .xlsx or .xls document.');
+    }
+
+    if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+      throw new Error('The uploaded Excel document does not contain any sheets.');
+    }
+
+    // 1. Analyze all sheets using excelSheetAnalyzer
+    const workbookAnalysis = excelSheetAnalyzer.analyzeWorkbook(buffer, fileName);
+    const savedMapping = await this.getSavedWorkspaceMapping(ownerUserId);
+
+    // 2. Build SheetSessionData for every sheet in workbook
+    const sheetSessionList: SheetSessionData[] = [];
+
+    for (const sheetAnalysis of workbookAnalysis.sheets) {
+      const worksheet = workbook.Sheets[sheetAnalysis.sheetName];
+      if (!worksheet) continue;
+
+      const rawGrid = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1, defval: '' });
+      const headerRowIndex = sheetAnalysis.headerRowIndex; // 1-indexed
+      const detectedHeaders = sheetAnalysis.detectedHeaders;
+
+      // Extract raw rows (rows from headerRowIndex to end of grid)
+      const rawRows: Record<string, unknown>[] = [];
+      const sampleRows: Record<string, string>[] = [];
+
+      for (let r = headerRowIndex; r < rawGrid.length; r++) {
+        const row = rawGrid[r] || [];
+        const hasData = row.some(c => c !== '' && c !== null && c !== undefined);
+        if (hasData) {
+          const rowObj: Record<string, unknown> = {};
+          detectedHeaders.forEach((h, colIdx) => {
+            rowObj[h] = row[colIdx] ?? '';
+          });
+          rawRows.push(rowObj);
+
+          if (sampleRows.length < 5) {
+            const sampleObj: Record<string, string> = {};
+            detectedHeaders.forEach((h, colIdx) => {
+              sampleObj[h] = row[colIdx] !== undefined && row[colIdx] !== null ? String(row[colIdx]).trim() : '';
+            });
+            sampleRows.push(sampleObj);
+          }
+        }
+      }
+
+      // Compute suggested column mappings for this sheet
+      const mappingResult = this.suggestMappingForHeaders(detectedHeaders, savedMapping);
+
+      sheetSessionList.push({
+        sheetName: sheetAnalysis.sheetName,
+        category: sheetAnalysis.suggestedCategory,
+        categoryLabel: sheetAnalysis.categoryLabel,
+        importable: sheetAnalysis.importable,
+        headerRowIndex,
+        confidence: sheetAnalysis.confidence,
+        isLowConfidence: sheetAnalysis.isLowConfidence,
+        totalRows: sheetAnalysis.totalRows,
+        estimatedDataRows: rawRows.length,
+        columnCount: detectedHeaders.length,
+        detectedHeaders,
+        columnMapping: mappingResult.suggestedMapping,
+        rawGrid,
+        rawRows,
+        sampleRows,
+        previewGrid: sheetAnalysis.previewGrid,
+      });
+    }
+
+    // 3. Create multi-sheet session in session store
+    const session = importSessionStore.createMultiSheetSession(
       ownerUserId,
       fileName,
       buffer.length,
-      detectedHeaders,
-      rawRows,
-      suggestedMapping
+      sheetSessionList
     );
+
+    // Primary sheet detection result for backwards compatibility
+    const primarySheet =
+      sheetSessionList.find(s => s.importable && s.category === 'REGULAR_EMPLOYEES') ||
+      sheetSessionList.find(s => s.importable) ||
+      sheetSessionList[0];
+
+    const primaryMapping = primarySheet ? this.suggestMappingForHeaders(primarySheet.detectedHeaders, savedMapping) : {
+      suggestedMapping: {},
+      confidence: {},
+      savedMappingMatched: false,
+    };
 
     return {
       session,
       detection: {
-        detectedHeaders,
-        suggestedMapping,
-        confidence,
-        previewSampleRows: rawRows.slice(0, 5),
-        savedMappingMatched,
+        detectedHeaders: primarySheet?.detectedHeaders || [],
+        suggestedMapping: primaryMapping.suggestedMapping,
+        confidence: primaryMapping.confidence,
+        previewSampleRows: primarySheet?.rawRows.slice(0, 5) || [],
+        savedMappingMatched: primaryMapping.savedMappingMatched,
       },
+      sheets: Object.values(session.sheets),
+      sheetOrder: session.sheetOrder,
+      canonicalFields: CANONICAL_IMPORT_FIELDS,
     };
   }
 
   /**
-   * Run deep validation on all extracted rows using the confirmed column mapping
+   * Update header row for a specific worksheet and re-extract headers and mapping
    */
-  async validateSessionRows(
+  async updateSheetHeader(
     sessionId: string,
     ownerUserId: string,
-    columnMapping: Record<string, string>,
+    sheetName: string,
+    newHeaderRow: number
+  ): Promise<SheetSessionData> {
+    const updated = importSessionStore.updateSheetHeaderRow(sessionId, ownerUserId, sheetName, newHeaderRow);
+    if (!updated) {
+      throw new Error(`Unable to update header row for sheet "${sheetName}". Sheet not found or invalid row index.`);
+    }
+
+    const savedMapping = await this.getSavedWorkspaceMapping(ownerUserId);
+    const mappingResult = this.suggestMappingForHeaders(updated.detectedHeaders, savedMapping);
+    updated.columnMapping = mappingResult.suggestedMapping;
+
+    return updated;
+  }
+
+  /**
+   * Update category or importable state for a specific worksheet
+   */
+  async updateSheetConfig(
+    sessionId: string,
+    ownerUserId: string,
+    sheetName: string,
+    category: SheetCategory,
+    importable: boolean
+  ): Promise<SheetSessionData> {
+    const updated = importSessionStore.updateSheetConfig(sessionId, ownerUserId, sheetName, category, importable);
+    if (!updated) {
+      throw new Error(`Unable to update configuration for sheet "${sheetName}".`);
+    }
+    return updated;
+  }
+
+  /**
+   * Reconcile all active worksheets and validate unified employee records
+   */
+  async validateMultiSheetMapping(
+    sessionId: string,
+    ownerUserId: string,
+    sheetMappings: Record<string, Record<string, string>> = {},
     saveMappingForWorkspace = false
   ): Promise<ImportSession> {
     const session = importSessionStore.getSession(sessionId, ownerUserId);
@@ -380,19 +503,20 @@ export class SmartImportService {
       throw new Error('Your import session has expired. Please upload the Excel file again.');
     }
 
-    const activeMapping = (columnMapping && Object.keys(columnMapping).length > 0)
-      ? columnMapping 
-      : (session.columnMapping || {});
-
-    if (saveMappingForWorkspace) {
-      await this.saveWorkspaceMapping(ownerUserId, activeMapping);
+    // Update each sheet's mapping from payload
+    for (const [sheetName, mapping] of Object.entries(sheetMappings)) {
+      if (session.sheets[sheetName]) {
+        session.sheets[sheetName].columnMapping = mapping;
+      }
     }
 
-    // Invert mapping for quick lookup: canonicalField -> excelHeader
-    const fieldToHeader: Record<string, string> = {};
-    for (const [header, field] of Object.entries(activeMapping)) {
-      if (field) {
-        fieldToHeader[field] = header;
+    // Save primary sheet mapping if requested
+    if (saveMappingForWorkspace) {
+      const primarySheet =
+        Object.values(session.sheets).find(s => s.importable && s.category === 'REGULAR_EMPLOYEES') ||
+        Object.values(session.sheets).find(s => s.importable);
+      if (primarySheet && primarySheet.columnMapping) {
+        await this.saveWorkspaceMapping(ownerUserId, primarySheet.columnMapping);
       }
     }
 
@@ -414,96 +538,357 @@ export class SmartImportService {
         .filter(Boolean)
     );
 
-    // Pre-calculate code frequencies within the file to flag all occurrences of intra-file duplicates
-    const codeOccurrences = new Map<string, number[]>();
-    const codeHeader = fieldToHeader['employeeCode'];
-    if (codeHeader) {
-      for (let i = 0; i < session.rawRows.length; i++) {
-        const raw = session.rawRows[i] || {};
-        const rowIndex = i + 2;
-        const v = raw[codeHeader];
-        if (v !== undefined && v !== null) {
-          const code = String(v).trim().toLowerCase();
-          if (code) {
-            const list = codeOccurrences.get(code) || [];
-            list.push(rowIndex);
-            codeOccurrences.set(code, list);
+    // Reconciled employee internal model
+    interface MutableReconciledRow {
+      rowIndex: number;
+      primarySheet: string;
+      sourceSheets: Set<string>;
+      isHistorical: boolean;
+      originalData: Record<string, unknown>;
+      employeeCode: string;
+      fullName: string;
+      firstName: string;
+      lastName: string;
+      workEmail: string;
+      personalEmail: string;
+      phone: string;
+      department: string;
+      designation: string;
+      employmentStatus: 'ONBOARDING' | 'ACTIVE' | 'OFFBOARDING' | 'EXITED';
+      hireDate: string;
+      lastWorkingDay: string | null;
+      exitDate: string | null;
+      exitReason: string | null;
+      exitNotes: string | null;
+      workLocation?: string;
+      reportingManager?: string;
+      vendor?: string;
+      customNotes: string[];
+    }
+
+    const reconciledRows: MutableReconciledRow[] = [];
+    const codeToRowsMap = new Map<string, MutableReconciledRow[]>();
+    let generatedRowSeq = 1;
+
+    const addRow = (row: MutableReconciledRow) => {
+      reconciledRows.push(row);
+      if (row.employeeCode) {
+        const lower = row.employeeCode.toLowerCase();
+        const list = codeToRowsMap.get(lower) || [];
+        list.push(row);
+        codeToRowsMap.set(lower, list);
+      }
+    };
+
+    // Helper to extract a mapped field from a raw row
+    const getFieldVal = (raw: Record<string, unknown>, mapping: Record<string, string>, field: string): string => {
+      const header = Object.keys(mapping).find(h => mapping[h] === field);
+      if (!header) return '';
+      const v = raw[header];
+      return v !== undefined && v !== null ? String(v).trim() : '';
+    };
+
+    // PASS 1: Base employees from REGULAR_EMPLOYEES sheets
+    const regularSheets = Object.values(session.sheets).filter(s => s.importable && s.category === 'REGULAR_EMPLOYEES');
+    for (const sheet of regularSheets) {
+      const mapping = sheet.columnMapping || {};
+      sheet.rawRows.forEach((raw, i) => {
+        const rowNum = sheet.headerRowIndex + 1 + i;
+        const code = getFieldVal(raw, mapping, 'employeeCode');
+
+        const fullName = getFieldVal(raw, mapping, 'fullName');
+        let firstName = getFieldVal(raw, mapping, 'firstName');
+        let lastName = getFieldVal(raw, mapping, 'lastName');
+        if (fullName && !firstName) {
+          const parts = fullName.split(/\s+/);
+          firstName = parts[0] || '';
+          lastName = parts.slice(1).join(' ') || lastName;
+        }
+
+        const rawStatus = getFieldVal(raw, mapping, 'employmentStatus');
+        let employmentStatus: 'ONBOARDING' | 'ACTIVE' | 'OFFBOARDING' | 'EXITED' = 'ACTIVE';
+        if (rawStatus) {
+          const norm = rawStatus.toUpperCase();
+          if (['ONBOARDING', 'ACTIVE', 'OFFBOARDING', 'EXITED'].includes(norm)) {
+            employmentStatus = norm as any;
+          } else if (norm.includes('ONBOARD') || norm.includes('JOIN')) {
+            employmentStatus = 'ONBOARDING';
+          } else if (norm.includes('OFFBOARD') || norm.includes('RESIGN') || norm.includes('NOTICE')) {
+            employmentStatus = 'OFFBOARDING';
+          } else if (norm.includes('EXIT') || norm.includes('LEFT') || norm.includes('RELIEV') || norm.includes('TERMINAT')) {
+            employmentStatus = 'EXITED';
           }
         }
+
+        const rawHireDate = getFieldVal(raw, mapping, 'hireDate');
+        const rawLwd = getFieldVal(raw, mapping, 'lastWorkingDay');
+        const parsedHire = this.parseDateValue(rawHireDate);
+        const parsedLwd = this.parseDateValue(rawLwd);
+
+        addRow({
+          rowIndex: rowNum,
+          primarySheet: sheet.sheetName,
+          sourceSheets: new Set([sheet.sheetName]),
+          isHistorical: false,
+          originalData: raw,
+          employeeCode: code,
+          fullName: fullName || `${firstName} ${lastName}`.trim(),
+          firstName,
+          lastName,
+          workEmail: getFieldVal(raw, mapping, 'workEmail'),
+          personalEmail: getFieldVal(raw, mapping, 'personalEmail'),
+          phone: getFieldVal(raw, mapping, 'phone'),
+          department: getFieldVal(raw, mapping, 'department'),
+          designation: getFieldVal(raw, mapping, 'designation'),
+          employmentStatus,
+          hireDate: parsedHire || rawHireDate,
+          lastWorkingDay: parsedLwd,
+          exitDate: employmentStatus === 'EXITED' ? parsedLwd : null,
+          exitReason: getFieldVal(raw, mapping, 'exitReason') || null,
+          exitNotes: getFieldVal(raw, mapping, 'exitNotes') || null,
+          workLocation: getFieldVal(raw, mapping, 'workLocation'),
+          reportingManager: getFieldVal(raw, mapping, 'reportingManager'),
+          customNotes: [],
+        });
+      });
+    }
+
+    // PASS 2: Third party workforce from THIRD_PARTY sheets
+    const thirdPartySheets = Object.values(session.sheets).filter(s => s.importable && s.category === 'THIRD_PARTY');
+    for (const sheet of thirdPartySheets) {
+      const mapping = sheet.columnMapping || {};
+      sheet.rawRows.forEach((raw, i) => {
+        const rowNum = sheet.headerRowIndex + 1 + i;
+        const code = getFieldVal(raw, mapping, 'employeeCode');
+
+        const fullName = getFieldVal(raw, mapping, 'fullName');
+        let firstName = getFieldVal(raw, mapping, 'firstName');
+        let lastName = getFieldVal(raw, mapping, 'lastName');
+        if (fullName && !firstName) {
+          const parts = fullName.split(/\s+/);
+          firstName = parts[0] || '';
+          lastName = parts.slice(1).join(' ') || lastName;
+        }
+
+        const rawStatus = getFieldVal(raw, mapping, 'employmentStatus');
+        let employmentStatus: 'ONBOARDING' | 'ACTIVE' | 'OFFBOARDING' | 'EXITED' = 'ACTIVE';
+        if (rawStatus && rawStatus.toLowerCase().includes('exit')) {
+          employmentStatus = 'EXITED';
+        }
+
+        const rawHireDate = getFieldVal(raw, mapping, 'hireDate');
+        const parsedHire = this.parseDateValue(rawHireDate);
+        const vendor = getFieldVal(raw, mapping, 'vendor');
+
+        const existingMatching = code ? codeToRowsMap.get(code.toLowerCase()) : null;
+        if (!existingMatching || existingMatching.length === 0) {
+          addRow({
+            rowIndex: rowNum,
+            primarySheet: sheet.sheetName,
+            sourceSheets: new Set([sheet.sheetName]),
+            isHistorical: false,
+            originalData: raw,
+            employeeCode: code,
+            fullName: fullName || `${firstName} ${lastName}`.trim(),
+            firstName,
+            lastName,
+            workEmail: getFieldVal(raw, mapping, 'workEmail'),
+            personalEmail: getFieldVal(raw, mapping, 'personalEmail'),
+            phone: getFieldVal(raw, mapping, 'phone'),
+            department: getFieldVal(raw, mapping, 'department') || (vendor ? `Third Party (${vendor})` : 'Third Party Workforce'),
+            designation: getFieldVal(raw, mapping, 'designation') || 'Contractor',
+            employmentStatus,
+            hireDate: parsedHire || rawHireDate,
+            lastWorkingDay: null,
+            exitDate: null,
+            exitReason: null,
+            exitNotes: vendor ? `Vendor: ${vendor}` : null,
+            workLocation: getFieldVal(raw, mapping, 'workLocation'),
+            vendor,
+            customNotes: vendor ? [`Vendor: ${vendor}`] : [],
+          });
+        } else {
+          for (const existing of existingMatching) {
+            existing.sourceSheets.add(sheet.sheetName);
+            if (vendor) existing.vendor = vendor;
+          }
+        }
+      });
+    }
+
+    // PASS 3: RESIGNATION_TRACKER sheets (lifecycle updates / historical departures)
+    const resignationSheets = Object.values(session.sheets).filter(s => s.importable && s.category === 'RESIGNATION_TRACKER');
+    for (const sheet of resignationSheets) {
+      const mapping = sheet.columnMapping || {};
+      sheet.rawRows.forEach((raw, i) => {
+        const rowNum = sheet.headerRowIndex + 1 + i;
+        const code = getFieldVal(raw, mapping, 'employeeCode');
+        const key = code ? code.toLowerCase() : null;
+
+        const rawLwd = getFieldVal(raw, mapping, 'lastWorkingDay');
+        const parsedLwd = this.parseDateValue(rawLwd);
+        const exitReason = getFieldVal(raw, mapping, 'exitReason') || 'Resignation';
+        const rawStatus = getFieldVal(raw, mapping, 'employmentStatus');
+
+        let statusToSet: 'OFFBOARDING' | 'EXITED' = 'OFFBOARDING';
+        const today = new Date().toISOString().slice(0, 10);
+        if (parsedLwd && parsedLwd < today) {
+          statusToSet = 'EXITED';
+        } else if (rawStatus && (rawStatus.toLowerCase().includes('non active') || rawStatus.toLowerCase().includes('exit'))) {
+          statusToSet = 'EXITED';
+        }
+
+        const existingMatching = key ? codeToRowsMap.get(key) : null;
+        if (existingMatching && existingMatching.length > 0) {
+          for (const existing of existingMatching) {
+            existing.sourceSheets.add(sheet.sheetName);
+            existing.lastWorkingDay = parsedLwd || existing.lastWorkingDay;
+            existing.exitReason = exitReason;
+            existing.employmentStatus = statusToSet;
+            if (statusToSet === 'EXITED') {
+              existing.exitDate = existing.lastWorkingDay;
+            }
+            existing.customNotes.push(`Resignation tracked (${sheet.sheetName})`);
+          }
+        } else if (code) {
+          // Historical exit record
+          const fullName = getFieldVal(raw, mapping, 'fullName');
+          let firstName = getFieldVal(raw, mapping, 'firstName');
+          let lastName = getFieldVal(raw, mapping, 'lastName');
+          if (fullName && !firstName) {
+            const parts = fullName.split(/\s+/);
+            firstName = parts[0] || '';
+            lastName = parts.slice(1).join(' ') || lastName;
+          }
+          const rawHireDate = getFieldVal(raw, mapping, 'hireDate');
+          const parsedHire = this.parseDateValue(rawHireDate);
+
+          addRow({
+            rowIndex: rowNum,
+            primarySheet: sheet.sheetName,
+            sourceSheets: new Set([sheet.sheetName]),
+            isHistorical: true,
+            originalData: raw,
+            employeeCode: code,
+            fullName: fullName || `${firstName} ${lastName}`.trim(),
+            firstName,
+            lastName,
+            workEmail: getFieldVal(raw, mapping, 'workEmail'),
+            personalEmail: getFieldVal(raw, mapping, 'personalEmail'),
+            phone: getFieldVal(raw, mapping, 'phone'),
+            department: getFieldVal(raw, mapping, 'department') || 'Historical Records',
+            designation: getFieldVal(raw, mapping, 'designation') || 'Former Employee',
+            employmentStatus: 'EXITED',
+            hireDate: parsedHire || rawHireDate,
+            lastWorkingDay: parsedLwd,
+            exitDate: parsedLwd,
+            exitReason,
+            exitNotes: 'Historical exit record imported from Resignation Tracker',
+            customNotes: ['Historical departure record'],
+          });
+        }
+      });
+    }
+
+    // PASS 4: RETENTION_TRACKER sheets (resignation withdrawals & employee restoration)
+    const retentionSheets = Object.values(session.sheets).filter(s => s.importable && s.category === 'RETENTION_TRACKER');
+    for (const sheet of retentionSheets) {
+      const mapping = sheet.columnMapping || {};
+      sheet.rawRows.forEach((raw) => {
+        const code = getFieldVal(raw, mapping, 'employeeCode');
+        const key = code ? code.toLowerCase() : null;
+        if (!key) return;
+
+        const existingMatching = codeToRowsMap.get(key);
+        if (existingMatching && existingMatching.length > 0) {
+          for (const existing of existingMatching) {
+            existing.sourceSheets.add(sheet.sheetName);
+            // Restore to Active and clear pending LWD
+            existing.employmentStatus = 'ACTIVE';
+            existing.lastWorkingDay = null;
+            existing.exitDate = null;
+            existing.exitReason = null;
+            existing.customNotes.push('Resignation withdrawn: Restored to Active');
+          }
+        }
+      });
+    }
+
+    // PASS 5: TRANSFER sheets (location updates)
+    const transferSheets = Object.values(session.sheets).filter(s => s.importable && s.category === 'TRANSFER');
+    for (const sheet of transferSheets) {
+      const mapping = sheet.columnMapping || {};
+      sheet.rawRows.forEach((raw) => {
+        const code = getFieldVal(raw, mapping, 'employeeCode');
+        const key = code ? code.toLowerCase() : null;
+        if (!key) return;
+
+        const newLocation = getFieldVal(raw, mapping, 'workLocation') || String(raw['Transferred To'] || raw['transferred to'] || '').trim();
+        const effectiveDate = String(raw['Effective Date'] || raw['effective date'] || '').trim();
+
+        const existingMatching = codeToRowsMap.get(key);
+        if (existingMatching && existingMatching.length > 0) {
+          for (const existing of existingMatching) {
+            existing.sourceSheets.add(sheet.sheetName);
+            if (newLocation) {
+              existing.workLocation = newLocation;
+              existing.customNotes.push(`Transferred to ${newLocation}${effectiveDate ? ` effective ${effectiveDate}` : ''}`);
+            }
+          }
+        }
+      });
+    }
+
+    // Compute intra-batch code occurrences for duplicate checking
+    const codeOccurrences = new Map<string, number[]>();
+    for (const row of reconciledRows) {
+      if (row.employeeCode) {
+        const lowerCode = row.employeeCode.toLowerCase();
+        const list = codeOccurrences.get(lowerCode) || [];
+        list.push(row.rowIndex);
+        codeOccurrences.set(lowerCode, list);
       }
     }
 
-    const fileSeenEmails = new Map<string, number>(); // email -> first rowIndex
-
+    const fileSeenEmails = new Map<string, number>();
     const validatedRows: ValidatedImportRow[] = [];
-
     const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-    // Process every row
-    for (let i = 0; i < session.rawRows.length; i++) {
-      const raw = session.rawRows[i] || {};
-      const rowIndex = i + 2; // Excel row number (1 is header)
+    // VALIDATION PHASE
+    let displayRowIndex = 2;
+    for (const row of reconciledRows) {
+      const rowIndex = displayRowIndex++;
       const errors: RowValidationError[] = [];
       const warnings: string[] = [];
 
-      // Extract raw mapped values
-      const getVal = (field: string): string => {
-        const header = fieldToHeader[field];
-        if (!header) return '';
-        const v = raw[header];
-        return v !== undefined && v !== null ? String(v).trim() : '';
-      };
-
-      const employeeCode = getVal('employeeCode');
-      const fullName = getVal('fullName');
-      let firstName = getVal('firstName');
-      let lastName = getVal('lastName');
-
-      if (fullName && !firstName) {
-        const parts = fullName.split(/\s+/);
-        firstName = parts[0] || '';
-        lastName = parts.slice(1).join(' ') || lastName;
-      }
-
-      const workEmail = getVal('workEmail');
-      const personalEmail = getVal('personalEmail');
-      const phone = getVal('phone');
-      const department = getVal('department');
-      const designation = getVal('designation');
-      const rawStatus = getVal('employmentStatus');
-      const rawHireDate = getVal('hireDate');
-      const rawLwd = getVal('lastWorkingDay');
-      const exitReason = getVal('exitReason') || null;
-      const exitNotes = getVal('exitNotes') || null;
-
       // 1. Employee Code Validation (CRITICAL: Never auto-generate!)
-      if (!employeeCode) {
+      if (!row.employeeCode) {
         errors.push({
           field: 'employeeCode',
           message: 'Employee ID / Code is missing. HR must supply an employee identifier.',
           critical: true,
         });
       } else {
-        const lowerCode = employeeCode.toLowerCase();
+        const lowerCode = row.employeeCode.toLowerCase();
         const dupRows = codeOccurrences.get(lowerCode) || [];
         if (existingCodes.has(lowerCode)) {
           errors.push({
             field: 'employeeCode',
-            message: `Employee Code "${employeeCode}" already exists in your workspace. Overwrites are not permitted.`,
+            message: `Employee Code "${row.employeeCode}" already exists in your workspace. Overwrites are not permitted.`,
             critical: true,
           });
         } else if (dupRows.length > 1) {
-          const otherRows = dupRows.filter(r => r !== rowIndex).join(', ');
+          const otherRows = dupRows.filter(r => r !== row.rowIndex).join(', ');
           errors.push({
             field: 'employeeCode',
-            message: `Duplicate Employee Code "${employeeCode}" within file (also appears in Row ${otherRows}).`,
+            message: `Duplicate Employee Code "${row.employeeCode}" within file (also appears in Row ${otherRows}).`,
             critical: true,
           });
         }
       }
 
       // 2. Name Validation
-      if (!firstName && !fullName) {
+      if (!row.firstName && !row.fullName) {
         errors.push({
           field: 'firstName',
           message: 'Employee name is required.',
@@ -512,93 +897,54 @@ export class SmartImportService {
       }
 
       // 3. Email Validation
-      if (workEmail) {
-        if (!EMAIL_REGEX.test(workEmail)) {
+      if (row.workEmail) {
+        if (!EMAIL_REGEX.test(row.workEmail)) {
           errors.push({
             field: 'workEmail',
-            message: `Invalid work email format: "${workEmail}".`,
+            message: `Invalid work email format: "${row.workEmail}".`,
             critical: true,
           });
         } else {
-          const lowerEmail = workEmail.toLowerCase();
+          const lowerEmail = row.workEmail.toLowerCase();
           if (existingEmails.has(lowerEmail)) {
-            warnings.push(`Work email "${workEmail}" is already used by an existing employee.`);
+            warnings.push(`Work email "${row.workEmail}" is already used by an existing employee.`);
           }
           if (fileSeenEmails.has(lowerEmail)) {
-            warnings.push(`Work email "${workEmail}" appears multiple times in this file (matches Row ${fileSeenEmails.get(lowerEmail)}).`);
+            warnings.push(`Work email "${row.workEmail}" appears multiple times in this import.`);
           } else {
             fileSeenEmails.set(lowerEmail, rowIndex);
           }
         }
       }
 
-      if (personalEmail && !EMAIL_REGEX.test(personalEmail)) {
+      if (row.personalEmail && !EMAIL_REGEX.test(row.personalEmail)) {
         errors.push({
           field: 'personalEmail',
-          message: `Invalid personal email format: "${personalEmail}".`,
+          message: `Invalid personal email format: "${row.personalEmail}".`,
           critical: true,
         });
       }
 
       // 4. Date & Lifecycle Resolution
-      const hireDate = this.parseDateValue(rawHireDate);
+      const hireDate = this.parseDateValue(row.hireDate);
       if (!hireDate) {
         errors.push({
           field: 'hireDate',
-          message: rawHireDate ? `Invalid joining date: "${rawHireDate}". Expected format: YYYY-MM-DD or DD/MM/YYYY.` : 'Date of Joining is required.',
+          message: row.hireDate ? `Invalid joining date: "${row.hireDate}". Expected format: YYYY-MM-DD or DD/MM/YYYY.` : 'Date of Joining is required.',
           critical: true,
         });
       }
 
-      const lastWorkingDay = this.parseDateValue(rawLwd);
-      if (rawLwd && !lastWorkingDay) {
+      const lastWorkingDay = this.parseDateValue(row.lastWorkingDay);
+      if (row.lastWorkingDay && !lastWorkingDay) {
         errors.push({
           field: 'lastWorkingDay',
-          message: `Invalid last working day / exit date: "${rawLwd}".`,
+          message: `Invalid last working day / exit date: "${row.lastWorkingDay}".`,
           critical: true,
         });
       }
 
-      // Resolve Lifecycle Status
-      let resolvedStatus: 'ONBOARDING' | 'ACTIVE' | 'OFFBOARDING' | 'EXITED' = 'ACTIVE';
-      const normStatus = rawStatus.toUpperCase().trim();
-
-      if (['ONBOARDING', 'ACTIVE', 'OFFBOARDING', 'EXITED'].includes(normStatus)) {
-        resolvedStatus = normStatus as typeof resolvedStatus;
-      } else if (normStatus) {
-        if (normStatus.includes('ONBOARD') || normStatus.includes('JOIN')) {
-          resolvedStatus = 'ONBOARDING';
-        } else if (normStatus.includes('OFFBOARD') || normStatus.includes('RESIGN') || normStatus.includes('NOTICE')) {
-          resolvedStatus = 'OFFBOARDING';
-        } else if (normStatus.includes('EXIT') || normStatus.includes('LEFT') || normStatus.includes('RELIEV') || normStatus.includes('TERMINAT')) {
-          resolvedStatus = 'EXITED';
-        } else if (normStatus.includes('ACT') || normStatus.includes('WORK') || normStatus.includes('EMPLOY')) {
-          resolvedStatus = 'ACTIVE';
-        } else {
-          errors.push({
-            field: 'employmentStatus',
-            message: `Unrecognized lifecycle status: "${rawStatus}". Must be Onboarding, Active, Offboarding, or Exited.`,
-            critical: true,
-          });
-        }
-      } else {
-        // Date-based inference only if status absent and unambiguous
-        const today = new Date().toISOString().slice(0, 10);
-        if (lastWorkingDay) {
-          if (lastWorkingDay < today) {
-            resolvedStatus = 'EXITED';
-          } else {
-            resolvedStatus = 'OFFBOARDING';
-          }
-        } else if (hireDate && hireDate > today) {
-          resolvedStatus = 'ONBOARDING';
-        } else {
-          resolvedStatus = 'ACTIVE';
-        }
-      }
-
-      // Specific lifecycle rule validations
-      if (resolvedStatus === 'OFFBOARDING' && !lastWorkingDay) {
+      if (row.employmentStatus === 'OFFBOARDING' && !lastWorkingDay) {
         errors.push({
           field: 'lastWorkingDay',
           message: 'Last working day is mandatory for offboarding employees.',
@@ -606,7 +952,7 @@ export class SmartImportService {
         });
       }
 
-      if (resolvedStatus === 'EXITED' && !lastWorkingDay) {
+      if (row.employmentStatus === 'EXITED' && !lastWorkingDay) {
         errors.push({
           field: 'lastWorkingDay',
           message: 'Exit date is mandatory for exited employees.',
@@ -622,6 +968,12 @@ export class SmartImportService {
         });
       }
 
+      // Append custom notes to exitNotes
+      let finalExitNotes = row.exitNotes || '';
+      if (row.customNotes.length > 0) {
+        finalExitNotes = finalExitNotes ? `${finalExitNotes} | ${row.customNotes.join('; ')}` : row.customNotes.join('; ');
+      }
+
       let validationStatus: 'VALID' | 'NEEDS_ATTENTION' | 'DUPLICATE' = 'VALID';
       if (errors.some(e => e.message.includes('Duplicate') || e.message.includes('already exists'))) {
         validationStatus = 'DUPLICATE';
@@ -631,31 +983,33 @@ export class SmartImportService {
 
       validatedRows.push({
         rowIndex,
-        originalData: raw,
+        originalData: row.originalData,
         mappedData: {
-          employeeCode,
-          firstName,
-          lastName,
-          fullName: `${firstName} ${lastName}`.trim() || firstName,
-          workEmail,
-          personalEmail,
-          phone,
-          department,
-          designation,
-          employmentStatus: resolvedStatus,
-          hireDate: hireDate || rawHireDate,
+          employeeCode: row.employeeCode,
+          firstName: row.firstName,
+          lastName: row.lastName,
+          fullName: row.fullName || `${row.firstName} ${row.lastName}`.trim(),
+          workEmail: row.workEmail,
+          personalEmail: row.personalEmail,
+          phone: row.phone,
+          department: row.department,
+          designation: row.designation,
+          employmentStatus: row.employmentStatus,
+          hireDate: hireDate || row.hireDate,
           lastWorkingDay: lastWorkingDay || null,
-          exitDate: resolvedStatus === 'EXITED' ? lastWorkingDay : null,
-          exitReason,
-          exitNotes,
+          exitDate: row.employmentStatus === 'EXITED' ? lastWorkingDay : null,
+          exitReason: row.exitReason,
+          exitNotes: finalExitNotes || null,
         },
         validationStatus,
         errors,
         warnings,
+        sourceSheets: Array.from(row.sourceSheets),
+        isHistorical: row.isHistorical,
       });
     }
 
-    // Build summary counts
+    // Build summary
     let valid = 0;
     let attention = 0;
     let duplicate = 0;
@@ -683,15 +1037,43 @@ export class SmartImportService {
       statusBreakdown: breakdown,
     };
 
+    // Primary mapping alias
+    const primaryMapping = (session.sheetOrder[0] && session.sheets[session.sheetOrder[0]])
+      ? session.sheets[session.sheetOrder[0]].columnMapping
+      : {};
+
     const updatedSession = importSessionStore.updateSessionValidation(
       sessionId,
       ownerUserId,
-      columnMapping,
+      primaryMapping,
       validatedRows,
       summary
     );
 
     return updatedSession!;
+  }
+
+  /**
+   * Run validation on all extracted rows using the confirmed column mapping (backward compatible)
+   */
+  async validateSessionRows(
+    sessionId: string,
+    ownerUserId: string,
+    columnMapping: Record<string, string>,
+    saveMappingForWorkspace = false
+  ): Promise<ImportSession> {
+    const session = importSessionStore.getSession(sessionId, ownerUserId);
+    if (!session) {
+      throw new Error('Your import session has expired. Please upload the Excel file again.');
+    }
+
+    // Apply columnMapping to all active sheets or primary sheet
+    const sheetMappings: Record<string, Record<string, string>> = {};
+    for (const sheetName of session.sheetOrder) {
+      sheetMappings[sheetName] = columnMapping;
+    }
+
+    return this.validateMultiSheetMapping(sessionId, ownerUserId, sheetMappings, saveMappingForWorkspace);
   }
 
   /**

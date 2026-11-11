@@ -23,10 +23,14 @@ import {
   Eye,
   Info,
   Calendar,
+  Layers,
+  Settings2,
 } from 'lucide-react';
 import {
   useUploadImportFile,
-  useValidateImportMapping,
+  useUpdateSheetHeader,
+  useUpdateSheetConfig,
+  useValidateMultiSheetMapping,
   useImportPreview,
   useUpdatePreviewRow,
   useDeletePreviewRow,
@@ -43,15 +47,27 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog';
+import { AnimatedSelect, type SelectOption } from '@/components/ui/animated-select';
 import type {
   UploadExcelResponse,
   ColumnDetectionResult,
   CanonicalFieldDefinition,
   ValidatedImportRow,
   ImportSummary,
+  SheetSessionData,
+  SheetCategory,
 } from '@/types/api';
 
-type WizardStep = 'upload' | 'mapping' | 'preview' | 'commit' | 'complete';
+type WizardStep = 'upload' | 'sheets' | 'mapping' | 'preview' | 'commit' | 'complete';
+
+const SHEET_CATEGORY_OPTIONS: SelectOption[] = [
+  { value: 'REGULAR_EMPLOYEES', label: 'Regular Employees', subtext: 'Primary workforce roster' },
+  { value: 'THIRD_PARTY', label: 'Third Party Workforce', subtext: 'Contractors, agency staff (Worker Ref)' },
+  { value: 'RESIGNATION_TRACKER', label: 'Lifecycle Updates / Exits', subtext: 'LWD, resignation dates, departures' },
+  { value: 'RETENTION_TRACKER', label: 'Employee Restoration', subtext: 'Resignation withdrawals (restores Active)' },
+  { value: 'TRANSFER', label: 'Employee Location Updates', subtext: 'Site & office relocations' },
+  { value: 'IGNORE', label: 'Ignore Sheet', subtext: 'Do not import this sheet' },
+];
 
 export function SmartEmployeeImportWizard() {
   const [, setLocation] = useLocation();
@@ -61,10 +77,15 @@ export function SmartEmployeeImportWizard() {
   const [currentStep, setCurrentStep] = useState<WizardStep>('upload');
   const [historyOpen, setHistoryOpen] = useState(false);
 
-  // Session State
+  // Session & Multi-Sheet State
   const [uploadData, setUploadData] = useState<UploadExcelResponse | null>(null);
-  const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
+  const [sheets, setSheets] = useState<SheetSessionData[]>([]);
+  const [activeSheetName, setActiveSheetName] = useState<string>('');
+  const [sheetMappings, setSheetMappings] = useState<Record<string, Record<string, string>>>({});
   const [saveWorkspaceMapping, setSaveWorkspaceMapping] = useState(true);
+
+  // Header Row Selection Modal
+  const [headerModalSheet, setHeaderModalSheet] = useState<SheetSessionData | null>(null);
 
   // Preview Pagination & Filter State
   const [previewFilter, setPreviewFilter] = useState<'all' | 'needs_attention' | 'valid' | 'duplicates'>('all');
@@ -87,7 +108,9 @@ export function SmartEmployeeImportWizard() {
 
   // Mutations & Queries
   const uploadMutation = useUploadImportFile();
-  const validateMutation = useValidateImportMapping();
+  const updateSheetHeaderMutation = useUpdateSheetHeader();
+  const updateSheetConfigMutation = useUpdateSheetConfig();
+  const validateMultiMutation = useValidateMultiSheetMapping();
   const updateRowMutation = useUpdatePreviewRow();
   const deleteRowMutation = useDeletePreviewRow();
   const commitMutation = useCommitImport();
@@ -106,8 +129,36 @@ export function SmartEmployeeImportWizard() {
     search: previewSearch,
   });
 
-  // Extract canonical field definitions
+  // Canonical field definitions
   const canonicalFields = uploadData?.canonicalFields || [];
+
+  // Active sheets that are marked importable
+  const importableSheets = useMemo(() => {
+    return sheets.filter((s) => s.importable && s.category !== 'IGNORE');
+  }, [sheets]);
+
+  // Current active sheet for column mapping
+  const activeSheet = useMemo(() => {
+    return sheets.find((s) => s.sheetName === activeSheetName) || importableSheets[0] || sheets[0];
+  }, [sheets, activeSheetName, importableSheets]);
+
+  // AnimatedSelect options for Column Mapping
+  const columnSelectOptions: SelectOption[] = useMemo(() => {
+    const unmappedOption: SelectOption = {
+      value: '',
+      label: '— Do not import this column —',
+      subtext: 'Ignore values in this column',
+    };
+
+    const fieldOptions: SelectOption[] = canonicalFields.map((f) => ({
+      value: f.field,
+      label: f.label,
+      badge: f.required ? 'Required' : undefined,
+      subtext: f.description,
+    }));
+
+    return [unmappedOption, ...fieldOptions];
+  }, [canonicalFields]);
 
   // =========================================================================
   // Step 1: File Upload Handlers
@@ -144,12 +195,38 @@ export function SmartEmployeeImportWizard() {
         });
 
         setUploadData(res);
-        setColumnMapping(res.detection.suggestedMapping || {});
-        setCurrentStep('mapping');
-        toast({
-          title: 'Excel File Parsed',
-          description: `Detected ${res.detection.detectedHeaders.length} columns and ${res.totalRows} data rows.`,
+        const incomingSheets = res.sheets || [];
+        setSheets(incomingSheets);
+
+        // Pre-fill initial per-sheet mappings
+        const initialMappings: Record<string, Record<string, string>> = {};
+        incomingSheets.forEach((s) => {
+          initialMappings[s.sheetName] = s.columnMapping || {};
         });
+        setSheetMappings(initialMappings);
+
+        // Set default active sheet
+        const firstImportable = incomingSheets.find((s) => s.importable && s.category === 'REGULAR_EMPLOYEES') ||
+          incomingSheets.find((s) => s.importable) ||
+          incomingSheets[0];
+        if (firstImportable) {
+          setActiveSheetName(firstImportable.sheetName);
+        }
+
+        // Navigate to Step 2: Sheet Detection if workbook has multiple sheets, else Column Mapping
+        if (incomingSheets.length > 1) {
+          setCurrentStep('sheets');
+          toast({
+            title: 'Workbook Analyzed',
+            description: `Detected ${incomingSheets.length} worksheets. Please review classifications below.`,
+          });
+        } else {
+          setCurrentStep('mapping');
+          toast({
+            title: 'Excel File Parsed',
+            description: `Detected ${res.detection.detectedHeaders.length} columns and ${res.totalRows} data rows.`,
+          });
+        }
       } catch (err) {
         toast({
           variant: 'destructive',
@@ -187,7 +264,7 @@ export function SmartEmployeeImportWizard() {
         title: 'Template Downloaded',
         description: 'The standard employee template was saved to your device.',
       });
-    } catch (err) {
+    } catch {
       toast({
         variant: 'destructive',
         title: 'Download Failed',
@@ -207,7 +284,7 @@ export function SmartEmployeeImportWizard() {
         title: 'Error Report Exported',
         description: 'Downloaded rows requiring attention.',
       });
-    } catch (err) {
+    } catch {
       toast({
         variant: 'destructive',
         title: 'Export Failed',
@@ -219,67 +296,148 @@ export function SmartEmployeeImportWizard() {
   };
 
   // =========================================================================
-  // Step 2: Mapping Handlers
+  // Step 2: Sheet Detection Handlers
   // =========================================================================
 
-  const handleMappingChange = (header: string, field: string) => {
-    setColumnMapping((prev) => {
-      const next = { ...prev };
+  const handleSheetCategoryChange = async (sheetName: string, category: SheetCategory) => {
+    if (!sessionId) return;
+    const isImportable = category !== 'IGNORE';
+    try {
+      const res = await updateSheetConfigMutation.mutateAsync({
+        sessionId,
+        sheetName,
+        category,
+        importable: isImportable,
+      });
+
+      setSheets((prev) => prev.map((s) => (s.sheetName === sheetName ? res.sheet : s)));
+      toast({
+        title: 'Sheet Updated',
+        description: `"${sheetName}" classified as ${res.sheet.categoryLabel}.`,
+      });
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: 'Update Failed',
+        description: (err as Error).message || 'Failed to update sheet classification.',
+      });
+    }
+  };
+
+  const handleToggleSheetImport = async (sheetName: string, importable: boolean) => {
+    if (!sessionId) return;
+    const sheet = sheets.find((s) => s.sheetName === sheetName);
+    if (!sheet) return;
+
+    try {
+      const category = !importable ? 'IGNORE' : sheet.category === 'IGNORE' ? 'REGULAR_EMPLOYEES' : sheet.category;
+      const res = await updateSheetConfigMutation.mutateAsync({
+        sessionId,
+        sheetName,
+        category,
+        importable,
+      });
+
+      setSheets((prev) => prev.map((s) => (s.sheetName === sheetName ? res.sheet : s)));
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: 'Update Failed',
+        description: (err as Error).message,
+      });
+    }
+  };
+
+  const handleSelectHeaderRow = async (sheetName: string, rowIndex: number) => {
+    if (!sessionId) return;
+    try {
+      const res = await updateSheetHeaderMutation.mutateAsync({
+        sessionId,
+        sheetName,
+        headerRowIndex: rowIndex,
+      });
+
+      setSheets((prev) => prev.map((s) => (s.sheetName === sheetName ? res.sheet : s)));
+      setSheetMappings((prev) => ({
+        ...prev,
+        [sheetName]: res.sheet.columnMapping || {},
+      }));
+
+      setHeaderModalSheet(null);
+      toast({
+        title: 'Header Row Updated',
+        description: `Header row set to Row ${rowIndex} for "${sheetName}". Detected ${res.sheet.detectedHeaders.length} columns.`,
+      });
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: 'Update Failed',
+        description: (err as Error).message || 'Could not update header row.',
+      });
+    }
+  };
+
+  // =========================================================================
+  // Step 3: Column Mapping Handlers
+  // =========================================================================
+
+  const handleMappingChange = (sheetName: string, header: string, field: string) => {
+    setSheetMappings((prev) => {
+      const sheetMap = { ...(prev[sheetName] || {}) };
       if (!field || field === 'none') {
-        delete next[header];
+        delete sheetMap[header];
       } else {
-        // Prevent duplicate canonical field assignment across different headers
-        for (const [k, v] of Object.entries(next)) {
+        // Prevent duplicate canonical field assignment across different headers within the same sheet
+        for (const [k, v] of Object.entries(sheetMap)) {
           if (v === field && k !== header) {
-            delete next[k];
+            delete sheetMap[k];
           }
         }
-        next[header] = field;
+        sheetMap[header] = field;
       }
-      return next;
+      return {
+        ...prev,
+        [sheetName]: sheetMap,
+      };
     });
   };
 
   const handleConfirmMapping = async () => {
     if (!sessionId) return;
 
-    // Check required fields: employeeCode and hireDate
-    const mappedFields = Object.values(columnMapping);
-    const hasCode = mappedFields.includes('employeeCode');
-    const hasName = mappedFields.includes('fullName') || mappedFields.includes('firstName');
-    const hasHireDate = mappedFields.includes('hireDate');
+    // Validate that at least one importable sheet has employeeCode and hireDate mapped
+    let hasAnyCode = false;
+    let hasAnyHireDate = false;
 
-    if (!hasCode) {
+    for (const sheet of importableSheets) {
+      const mapping = sheetMappings[sheet.sheetName] || {};
+      const fields = Object.values(mapping);
+      if (fields.includes('employeeCode')) hasAnyCode = true;
+      if (fields.includes('hireDate')) hasAnyHireDate = true;
+    }
+
+    if (!hasAnyCode) {
       toast({
         variant: 'destructive',
         title: 'Missing Required Mapping',
-        description: 'Please map an Excel header to "Employee ID / Code". People Journey will never auto-generate employee IDs.',
+        description: 'Please map an Excel header to "Employee ID / Code" in at least one employee sheet. People Journey will never auto-generate employee IDs.',
       });
       return;
     }
 
-    if (!hasName) {
+    if (!hasAnyHireDate) {
       toast({
         variant: 'destructive',
         title: 'Missing Required Mapping',
-        description: 'Please map an Excel header to "Full Name" or "First Name".',
-      });
-      return;
-    }
-
-    if (!hasHireDate) {
-      toast({
-        variant: 'destructive',
-        title: 'Missing Required Mapping',
-        description: 'Please map an Excel header to "Date of Joining".',
+        description: 'Please map an Excel header to "Date of Joining" in your employee sheets.',
       });
       return;
     }
 
     try {
-      await validateMutation.mutateAsync({
+      await validateMultiMutation.mutateAsync({
         sessionId,
-        columnMapping,
+        sheetMappings,
         saveMappingForWorkspace: saveWorkspaceMapping,
       });
 
@@ -287,8 +445,8 @@ export function SmartEmployeeImportWizard() {
       setPreviewPage(1);
       refetchPreview();
       toast({
-        title: 'Mapping Confirmed',
-        description: 'Records extracted and validated against workspace rules.',
+        title: 'Multi-Sheet Reconciliation Complete',
+        description: 'Records merged, reconciled, and validated across all active sheets.',
       });
     } catch (err) {
       toast({
@@ -300,7 +458,7 @@ export function SmartEmployeeImportWizard() {
   };
 
   // =========================================================================
-  // Step 3: Inline Row Editing Handlers
+  // Step 4: Inline Row Editing Handlers
   // =========================================================================
 
   const handleOpenRowEdit = (row: ValidatedImportRow) => {
@@ -355,7 +513,7 @@ export function SmartEmployeeImportWizard() {
   };
 
   // =========================================================================
-  // Step 4: Final Batch Commit Handler
+  // Step 5: Final Batch Commit Handler
   // =========================================================================
 
   const handleCommitImport = async (mode: 'valid_only' | 'all') => {
@@ -398,8 +556,17 @@ export function SmartEmployeeImportWizard() {
     statusBreakdown: { onboarding: 0, active: 0, offboarding: 0, exited: 0 },
   };
 
+  // Step definition for UI header
+  const wizardSteps: { id: WizardStep; label: string }[] = [
+    { id: 'upload', label: '1. Upload File' },
+    ...(sheets.length > 1 ? [{ id: 'sheets' as WizardStep, label: '2. Sheet Detection' }] : []),
+    { id: 'mapping', label: `${sheets.length > 1 ? '3' : '2'}. Column Mapping` },
+    { id: 'preview', label: `${sheets.length > 1 ? '4' : '3'}. Preview & Correct` },
+    { id: 'commit', label: `${sheets.length > 1 ? '5' : '4'}. Final Commit` },
+  ];
+
   return (
-    <div style={{ maxWidth: '1100px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    <div style={{ maxWidth: '1140px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* Header controls & step indicator */}
       <div
         style={{
@@ -415,19 +582,13 @@ export function SmartEmployeeImportWizard() {
         }}
       >
         {/* Step tabs */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {[
-            { id: 'upload', label: '1. Upload File' },
-            { id: 'mapping', label: '2. Column Mapping' },
-            { id: 'preview', label: '3. Preview & Correct' },
-            { id: 'commit', label: '4. Final Commit' },
-          ].map((s, idx) => {
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          {wizardSteps.map((s, idx) => {
             const isActive = currentStep === s.id;
-            const isCompleted =
-              (s.id === 'upload' && currentStep !== 'upload') ||
-              (s.id === 'mapping' && (currentStep === 'preview' || currentStep === 'commit' || currentStep === 'complete')) ||
-              (s.id === 'preview' && (currentStep === 'commit' || currentStep === 'complete')) ||
-              (s.id === 'commit' && currentStep === 'complete');
+            const stepOrder: WizardStep[] = ['upload', 'sheets', 'mapping', 'preview', 'commit', 'complete'];
+            const currentIndex = stepOrder.indexOf(currentStep);
+            const stepIndex = stepOrder.indexOf(s.id);
+            const isCompleted = currentIndex > stepIndex;
 
             return (
               <React.Fragment key={s.id}>
@@ -447,7 +608,7 @@ export function SmartEmployeeImportWizard() {
                   {isCompleted ? <Check size={14} style={{ color: '#16a34a' }} /> : null}
                   <span>{s.label}</span>
                 </div>
-                {idx < 3 && <ChevronRight size={14} style={{ color: '#d3c7ce' }} />}
+                {idx < wizardSteps.length - 1 && <ChevronRight size={14} style={{ color: '#d3c7ce' }} />}
               </React.Fragment>
             );
           })}
@@ -521,7 +682,7 @@ export function SmartEmployeeImportWizard() {
               Upload Employee Spreadsheet
             </h3>
             <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#887582' }}>
-              Upload your employee list from Excel or HR export. Intelligent column detection will automatically match your headers.
+              Upload your employee workbook or HR export. Intelligent header scanning inspects candidate rows to isolate banners, instructions, and multiple worksheets.
             </p>
           </div>
 
@@ -580,10 +741,10 @@ export function SmartEmployeeImportWizard() {
 
             <div>
               <b style={{ fontSize: '15px', color: '#3a2d36', display: 'block' }}>
-                {uploadMutation.isPending ? 'Analyzing spreadsheet…' : 'Click to select or drag and drop your Excel file'}
+                {uploadMutation.isPending ? 'Intelligently scanning workbook sheets…' : 'Click to select or drag and drop your Excel file'}
               </b>
               <span style={{ fontSize: '12px', color: '#887582', marginTop: '4px', display: 'block' }}>
-                Supports Microsoft Excel files (.xlsx, .xls) up to 10MB (max 2,500 rows per batch)
+                Supports Microsoft Excel (.xlsx, .xls) up to 10MB · Multi-sheet auto-detection enabled
               </span>
             </div>
           </div>
@@ -603,9 +764,19 @@ export function SmartEmployeeImportWizard() {
             <div style={{ display: 'flex', gap: '10px' }}>
               <CheckCircle2 size={18} style={{ color: '#16a34a', flexShrink: 0, marginTop: '2px' }} />
               <div>
-                <b style={{ fontSize: '13px', color: '#3a2d36' }}>Header row in Row 1</b>
+                <b style={{ fontSize: '13px', color: '#3a2d36' }}>Intelligent Header Scanning</b>
                 <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#887582' }}>
-                  Column titles should be on the first row of your sheet (e.g. Employee ID, Full Name, Email, Department).
+                  Titles, banners, and instruction notes on early rows are ignored. The true table header row is automatically isolated.
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <Layers size={18} style={{ color: '#bd7b92', flexShrink: 0, marginTop: '2px' }} />
+              <div>
+                <b style={{ fontSize: '13px', color: '#3a2d36' }}>Multi-Sheet Reconciliation</b>
+                <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#887582' }}>
+                  Regular employees, contractors, resignations, retention, and transfers across multiple tabs are reconciled into unified profiles.
                 </p>
               </div>
             </div>
@@ -613,19 +784,9 @@ export function SmartEmployeeImportWizard() {
             <div style={{ display: 'flex', gap: '10px' }}>
               <AlertCircle size={18} style={{ color: '#ea580c', flexShrink: 0, marginTop: '2px' }} />
               <div>
-                <b style={{ fontSize: '13px', color: '#3a2d36' }}>Employee IDs are required</b>
+                <b style={{ fontSize: '13px', color: '#3a2d36' }}>Employee IDs Never Auto-Generated</b>
                 <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#887582' }}>
-                  To protect your organization’s ID integrity, People Journey will <b>never auto-generate employee IDs</b>.
-                </p>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <Calendar size={18} style={{ color: '#bd7b92', flexShrink: 0, marginTop: '2px' }} />
-              <div>
-                <b style={{ fontSize: '13px', color: '#3a2d36' }}>Flexible date parsing</b>
-                <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#887582' }}>
-                  Dates formatted as YYYY-MM-DD, DD/MM/YYYY, or native Excel date formats are automatically recognized.
+                  To guarantee database audit integrity, People Journey will <b>never fabricate artificial employee codes</b>.
                 </p>
               </div>
             </div>
@@ -634,9 +795,9 @@ export function SmartEmployeeImportWizard() {
       )}
 
       {/* =====================================================================
-          STEP 2: COLUMN MAPPING
+          STEP 2: SHEET DETECTION & CLASSIFICATION SCREEN
       ====================================================================== */}
-      {currentStep === 'mapping' && uploadData && (
+      {currentStep === 'sheets' && (
         <div
           style={{
             background: '#fffdfa',
@@ -651,98 +812,136 @@ export function SmartEmployeeImportWizard() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
             <div>
               <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#3a2d36' }}>
-                Verify & Map Columns
+                Detected Worksheets & Classification
               </h3>
-              <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#887582' }}>
-                We matched {Object.keys(columnMapping).length} of {uploadData.detection.detectedHeaders.length} columns from{' '}
-                <b>{uploadData.fileName}</b>. Match any unmapped columns below.
+              <p style={{ margin: '4px 0 0', fontSize: '12.5px', color: '#887582' }}>
+                Found <b>{sheets.length} worksheets</b> in <b>{uploadData?.fileName}</b>. Verify the detected header rows and business classifications before proceeding to column mapping.
               </p>
             </div>
 
-            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', color: '#58404c' }}>
-              <input
-                type="checkbox"
-                checked={saveWorkspaceMapping}
-                onChange={(e) => setSaveWorkspaceMapping(e.target.checked)}
-                style={{ width: 16, height: 16, accentColor: '#bd7b92' }}
-              />
-              <b>Remember this mapping for my workspace</b>
-            </label>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <span style={{ fontSize: '12px', color: '#887582' }}>
+                Active for import: <b>{importableSheets.length} of {sheets.length} sheets</b>
+              </span>
+            </div>
           </div>
 
-          {/* Mapping Table */}
+          {/* Sheets List Table */}
           <div style={{ overflowX: 'auto', border: '1px solid #ebdada', borderRadius: '12px' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
               <thead>
                 <tr style={{ background: '#fbf5f7', borderBottom: '1px solid #ebdada' }}>
-                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#3a2d36', width: '28%' }}>
-                    Excel Column Header
-                  </th>
-                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#3a2d36', width: '32%' }}>
-                    Sample Data Preview
-                  </th>
-                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#3a2d36', width: '40%' }}>
-                    Maps To Field
-                  </th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#3a2d36', width: '22%' }}>Worksheet</th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#3a2d36', width: '28%' }}>Classification</th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#3a2d36', width: '18%' }}>Header Row</th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#3a2d36', width: '16%' }}>Data Rows</th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#3a2d36', width: '16%', textAlign: 'center' }}>Import</th>
                 </tr>
               </thead>
               <tbody>
-                {uploadData.detection.detectedHeaders.map((header) => {
-                  const mappedField = columnMapping[header] || '';
-                  const conf = uploadData.detection.confidence[header] || 0;
-                  const samples = (uploadData.detection.previewSampleRows || [])
-                    .slice(0, 3)
-                    .map((r) => String(r[header] ?? ''))
-                    .filter(Boolean)
-                    .join(' · ');
+                {sheets.map((sheet) => {
+                  const isIgnored = sheet.category === 'IGNORE' || !sheet.importable;
 
                   return (
-                    <tr key={header} style={{ borderBottom: '1px solid #f2e7e7' }}>
-                      <td style={{ padding: '12px 16px', fontWeight: 600, color: '#3a2d36' }}>
-                        <span>{header}</span>
-                        {conf >= 0.9 && (
+                    <tr
+                      key={sheet.sheetName}
+                      style={{
+                        borderBottom: '1px solid #f2e7e7',
+                        background: isIgnored ? '#faf8f8' : '#ffffff',
+                        opacity: isIgnored ? 0.75 : 1,
+                      }}
+                    >
+                      <td style={{ padding: '14px 16px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <FileSpreadsheet
+                            size={16}
+                            style={{ color: isIgnored ? '#a89aa2' : '#bd7b92', flexShrink: 0 }}
+                          />
+                          <div>
+                            <b style={{ color: isIgnored ? '#887582' : '#3a2d36', fontSize: '13.5px' }}>
+                              {sheet.sheetName}
+                            </b>
+                            <div style={{ fontSize: '11px', color: '#a89aa2', marginTop: '2px' }}>
+                              {sheet.columnCount} columns detected
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+
+                      <td style={{ padding: '14px 16px' }}>
+                        <div style={{ width: '100%', maxWidth: '280px' }}>
+                          <AnimatedSelect
+                            options={SHEET_CATEGORY_OPTIONS}
+                            value={sheet.category}
+                            onChange={(val) => handleSheetCategoryChange(sheet.sheetName, val as SheetCategory)}
+                            variant="form"
+                          />
+                        </div>
+                      </td>
+
+                      <td style={{ padding: '14px 16px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <span
                             style={{
-                              marginLeft: '8px',
-                              fontSize: '10px',
-                              padding: '2px 6px',
-                              borderRadius: '4px',
-                              background: '#ecfdf5',
-                              color: '#059669',
+                              fontSize: '12px',
                               fontWeight: 600,
+                              color: '#3a2d36',
+                              background: '#f4e4ea',
+                              padding: '3px 8px',
+                              borderRadius: '6px',
                             }}
                           >
-                            Auto-matched
+                            Row {sheet.headerRowIndex}
                           </span>
+
+                          <button
+                            type="button"
+                            onClick={() => setHeaderModalSheet(sheet)}
+                            style={{
+                              border: '1px solid #dfc9d0',
+                              background: '#ffffff',
+                              color: '#58404c',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              padding: '3px 8px',
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                            }}
+                          >
+                            <Settings2 size={12} />
+                            Change
+                          </button>
+                        </div>
+
+                        {sheet.isLowConfidence && (
+                          <div style={{ fontSize: '10.5px', color: '#b45309', marginTop: '4px' }}>
+                            Low confidence — verify header
+                          </div>
                         )}
                       </td>
-                      <td style={{ padding: '12px 16px', color: '#887582', fontSize: '12px' }}>
-                        {samples || <span style={{ color: '#c7b8c0' }}>—</span>}
+
+                      <td style={{ padding: '14px 16px', color: '#58404c' }}>
+                        <b>{sheet.estimatedDataRows}</b> rows
+                        <span style={{ fontSize: '11px', color: '#a89aa2', display: 'block' }}>
+                          Confidence: {Math.round(sheet.confidence * 100)}%
+                        </span>
                       </td>
-                      <td style={{ padding: '12px 16px' }}>
-                        <select
-                          value={mappedField}
-                          onChange={(e) => handleMappingChange(header, e.target.value)}
-                          style={{
-                            width: '100%',
-                            maxWidth: '320px',
-                            padding: '8px 12px',
-                            borderRadius: '8px',
-                            border: mappedField ? '1px solid #dfc9d0' : '1px solid #ebdada',
-                            background: mappedField ? '#ffffff' : '#fafafa',
-                            color: '#3a2d36',
-                            fontSize: '13px',
-                            cursor: 'pointer',
-                            outline: 'none',
-                          }}
-                        >
-                          <option value="">— Do not import this column —</option>
-                          {canonicalFields.map((f) => (
-                            <option key={f.field} value={f.field}>
-                              {f.label} {f.required ? '(Required)' : ''}
-                            </option>
-                          ))}
-                        </select>
+
+                      <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={sheet.importable && sheet.category !== 'IGNORE'}
+                            onChange={(e) => handleToggleSheetImport(sheet.sheetName, e.target.checked)}
+                            style={{ width: 17, height: 17, accentColor: '#bd7b92' }}
+                          />
+                          <span style={{ fontSize: '12px', fontWeight: 600, color: isIgnored ? '#a89aa2' : '#3a2d36' }}>
+                            {sheet.importable && sheet.category !== 'IGNORE' ? 'Active' : 'Skip'}
+                          </span>
+                        </label>
                       </td>
                     </tr>
                   );
@@ -775,7 +974,252 @@ export function SmartEmployeeImportWizard() {
 
             <button
               type="button"
-              disabled={validateMutation.isPending}
+              disabled={importableSheets.length === 0}
+              onClick={() => {
+                if (importableSheets.length > 0) {
+                  setActiveSheetName(importableSheets[0].sheetName);
+                }
+                setCurrentStep('mapping');
+              }}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '10px 22px',
+                borderRadius: '8px',
+                border: 'none',
+                background: 'linear-gradient(135deg, #bd7b92, #a85c74)',
+                color: '#ffffff',
+                fontSize: '13px',
+                fontWeight: 600,
+                cursor: importableSheets.length === 0 ? 'not-allowed' : 'pointer',
+                opacity: importableSheets.length === 0 ? 0.6 : 1,
+              }}
+            >
+              Continue to Column Mapping ({importableSheets.length} Active Sheets) <ArrowRight size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          STEP 3: SHEET-SPECIFIC COLUMN MAPPING SCREEN
+      ====================================================================== */}
+      {currentStep === 'mapping' && activeSheet && (
+        <div
+          style={{
+            background: '#fffdfa',
+            border: '1px solid #eee3e2',
+            borderRadius: '18px',
+            padding: '28px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '20px',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#3a2d36' }}>
+                Verify & Map Columns
+              </h3>
+              <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#887582' }}>
+                Match sheet columns to People Journey canonical employee fields using the dropdowns below.
+              </p>
+            </div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', color: '#58404c' }}>
+              <input
+                type="checkbox"
+                checked={saveWorkspaceMapping}
+                onChange={(e) => setSaveWorkspaceMapping(e.target.checked)}
+                style={{ width: 16, height: 16, accentColor: '#bd7b92' }}
+              />
+              <b>Remember this mapping for my workspace</b>
+            </label>
+          </div>
+
+          {/* Worksheet Tabs for Multi-Sheet Navigation */}
+          {importableSheets.length > 1 && (
+            <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid #ebdada', paddingBottom: '8px', overflowX: 'auto' }}>
+              {importableSheets.map((s) => {
+                const isCurrentTab = s.sheetName === activeSheet.sheetName;
+                const mapping = sheetMappings[s.sheetName] || {};
+                const mappedCount = Object.keys(mapping).length;
+                const totalCols = s.detectedHeaders.length;
+
+                return (
+                  <button
+                    key={s.sheetName}
+                    type="button"
+                    onClick={() => setActiveSheetName(s.sheetName)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '8px 16px',
+                      borderRadius: '8px',
+                      border: '1px solid',
+                      cursor: 'pointer',
+                      fontSize: '12.5px',
+                      fontWeight: 600,
+                      background: isCurrentTab ? '#f4e4ea' : '#ffffff',
+                      borderColor: isCurrentTab ? '#bd7b92' : '#dfc9d0',
+                      color: isCurrentTab ? '#bd7b92' : '#58404c',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <FileSpreadsheet size={14} />
+                    <span>{s.sheetName}</span>
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        padding: '1px 6px',
+                        borderRadius: '10px',
+                        background: isCurrentTab ? '#bd7b92' : '#f0e6ea',
+                        color: isCurrentTab ? '#ffffff' : '#58404c',
+                      }}
+                    >
+                      {mappedCount}/{totalCols}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Active sheet metadata banner */}
+          <div
+            style={{
+              padding: '10px 14px',
+              borderRadius: '10px',
+              background: '#f9f5f7',
+              border: '1px solid #ebdada',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              fontSize: '12.5px',
+              color: '#58404c',
+            }}
+          >
+            <div>
+              Active sheet: <b>{activeSheet.sheetName}</b> · Category: <b>{activeSheet.categoryLabel}</b> · Header row: <b>Row {activeSheet.headerRowIndex}</b>
+            </div>
+            <button
+              type="button"
+              onClick={() => setHeaderModalSheet(activeSheet)}
+              style={{
+                border: '1px solid #dfc9d0',
+                background: '#fff',
+                padding: '3px 8px',
+                borderRadius: '6px',
+                fontSize: '11px',
+                cursor: 'pointer',
+                fontWeight: 600,
+                color: '#58404c',
+              }}
+            >
+              Change Header Row
+            </button>
+          </div>
+
+          {/* Mapping Table */}
+          <div style={{ overflowX: 'auto', border: '1px solid #ebdada', borderRadius: '12px' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
+              <thead>
+                <tr style={{ background: '#fbf5f7', borderBottom: '1px solid #ebdada' }}>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#3a2d36', width: '28%' }}>
+                    Excel Column Header
+                  </th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#3a2d36', width: '32%' }}>
+                    Sample Data Preview
+                  </th>
+                  <th style={{ padding: '12px 16px', fontWeight: 600, color: '#3a2d36', width: '40%' }}>
+                    Maps To Field
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {activeSheet.detectedHeaders.map((header) => {
+                  const currentSheetMapping = sheetMappings[activeSheet.sheetName] || {};
+                  const mappedField = currentSheetMapping[header] || '';
+
+                  // Extract real sample values from actual data rows (NOT instructions)
+                  const samples = (activeSheet.sampleRows || [])
+                    .slice(0, 3)
+                    .map((r) => String(r[header] ?? ''))
+                    .filter(Boolean)
+                    .join(' · ');
+
+                  return (
+                    <tr key={header} style={{ borderBottom: '1px solid #f2e7e7' }}>
+                      <td style={{ padding: '12px 16px', fontWeight: 600, color: '#3a2d36' }}>
+                        <span>{header}</span>
+                        {mappedField && (
+                          <span
+                            style={{
+                              marginLeft: '8px',
+                              fontSize: '10px',
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                              background: '#ecfdf5',
+                              color: '#059669',
+                              fontWeight: 600,
+                            }}
+                          >
+                            Auto-matched
+                          </span>
+                        )}
+                      </td>
+
+                      <td style={{ padding: '12px 16px', color: '#887582', fontSize: '12px' }}>
+                        {samples || <span style={{ color: '#c7b8c0' }}>—</span>}
+                      </td>
+
+                      <td style={{ padding: '12px 16px' }}>
+                        <div style={{ width: '100%', maxWidth: '340px' }}>
+                          <AnimatedSelect
+                            options={columnSelectOptions}
+                            value={mappedField}
+                            onChange={(val) => handleMappingChange(activeSheet.sheetName, header, val)}
+                            placeholder="— Do not import this column —"
+                            variant="form"
+                            searchable
+                            searchPlaceholder="Search fields…"
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Action buttons */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+            <button
+              type="button"
+              onClick={() => setCurrentStep(sheets.length > 1 ? 'sheets' : 'upload')}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '9px 16px',
+                borderRadius: '8px',
+                border: '1px solid #eee3e2',
+                background: '#fffdfa',
+                color: '#58404c',
+                fontSize: '13px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              <ArrowLeft size={14} /> Back to {sheets.length > 1 ? 'Sheet Detection' : 'Upload'}
+            </button>
+
+            <button
+              type="button"
+              disabled={validateMultiMutation.isPending}
               onClick={handleConfirmMapping}
               style={{
                 display: 'inline-flex',
@@ -788,18 +1232,18 @@ export function SmartEmployeeImportWizard() {
                 color: '#ffffff',
                 fontSize: '13px',
                 fontWeight: 600,
-                cursor: validateMutation.isPending ? 'not-allowed' : 'pointer',
-                opacity: validateMutation.isPending ? 0.7 : 1,
+                cursor: validateMultiMutation.isPending ? 'not-allowed' : 'pointer',
+                opacity: validateMultiMutation.isPending ? 0.7 : 1,
               }}
             >
-              {validateMutation.isPending ? (
+              {validateMultiMutation.isPending ? (
                 <>
                   <Loader2 size={14} className="animate-spin" />
-                  Validating Records…
+                  Reconciling Across Sheets…
                 </>
               ) : (
                 <>
-                  Validate & Preview Rows <ArrowRight size={14} />
+                  Validate & Preview Reconciled Records <ArrowRight size={14} />
                 </>
               )}
             </button>
@@ -808,7 +1252,7 @@ export function SmartEmployeeImportWizard() {
       )}
 
       {/* =====================================================================
-          STEP 3: PREVIEW & "NEEDS ATTENTION" TABLE
+          STEP 4: UNIFIED RECONCILED PREVIEW & "NEEDS ATTENTION" TABLE
       ====================================================================== */}
       {currentStep === 'preview' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -826,7 +1270,7 @@ export function SmartEmployeeImportWizard() {
               }}
             >
               <span style={{ fontSize: '11.5px', color: '#887582', fontWeight: 600, textTransform: 'uppercase' }}>
-                Total Records
+                Total Reconciled Records
               </span>
               <b style={{ fontSize: '24px', color: '#3a2d36' }}>{summary.totalRecords}</b>
             </div>
@@ -877,7 +1321,7 @@ export function SmartEmployeeImportWizard() {
               }}
             >
               <span style={{ fontSize: '11.5px', color: '#991b1b', fontWeight: 600, textTransform: 'uppercase' }}>
-                Duplicate Codes
+                Duplicates Blocked
               </span>
               <b style={{ fontSize: '24px', color: '#dc2626' }}>{summary.duplicateRecords}</b>
             </div>
@@ -1006,7 +1450,7 @@ export function SmartEmployeeImportWizard() {
                       <th style={{ padding: '12px 14px', color: '#3a2d36', fontWeight: 600 }}>Email & Contact</th>
                       <th style={{ padding: '12px 14px', color: '#3a2d36', fontWeight: 600 }}>Dept & Role</th>
                       <th style={{ padding: '12px 14px', color: '#3a2d36', fontWeight: 600 }}>Lifecycle & Dates</th>
-                      <th style={{ padding: '12px 14px', color: '#3a2d36', fontWeight: 600 }}>Validation Details</th>
+                      <th style={{ padding: '12px 14px', color: '#3a2d36', fontWeight: 600 }}>Sources & Details</th>
                       <th style={{ padding: '12px 14px', width: '90px', textAlign: 'center', color: '#3a2d36', fontWeight: 600 }}>Actions</th>
                     </tr>
                   </thead>
@@ -1099,6 +1543,11 @@ export function SmartEmployeeImportWizard() {
                           <td style={{ padding: '10px 14px', color: '#58404c', fontSize: '12px' }}>
                             <div>{d.department || 'General'}</div>
                             <div style={{ fontSize: '11px', color: '#887582' }}>{d.designation || 'Team Member'}</div>
+                            {d.workLocation && (
+                              <div style={{ fontSize: '10.5px', color: '#bd7b92', marginTop: '2px' }}>
+                                Site: {d.workLocation}
+                              </div>
+                            )}
                           </td>
                           <td style={{ padding: '10px 14px', fontSize: '12px' }}>
                             <div style={{ fontWeight: 600, color: '#3a2d36' }}>{d.employmentStatus}</div>
@@ -1112,6 +1561,41 @@ export function SmartEmployeeImportWizard() {
                             )}
                           </td>
                           <td style={{ padding: '10px 14px', fontSize: '11.5px' }}>
+                            {/* Source sheets badges */}
+                            {row.sourceSheets && row.sourceSheets.length > 0 && (
+                              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                                {row.sourceSheets.map((src) => (
+                                  <span
+                                    key={src}
+                                    style={{
+                                      fontSize: '10px',
+                                      padding: '1px 5px',
+                                      borderRadius: '4px',
+                                      background: '#f4e4ea',
+                                      color: '#bd7b92',
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    {src}
+                                  </span>
+                                ))}
+                                {row.isHistorical && (
+                                  <span
+                                    style={{
+                                      fontSize: '10px',
+                                      padding: '1px 5px',
+                                      borderRadius: '4px',
+                                      background: '#e0e7ff',
+                                      color: '#4338ca',
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    Historical Record
+                                  </span>
+                                )}
+                              </div>
+                            )}
+
                             {row.errors.length > 0 && (
                               <ul style={{ margin: 0, paddingLeft: '14px', color: '#b91c1c' }}>
                                 {row.errors.map((err, i) => (
@@ -1127,7 +1611,7 @@ export function SmartEmployeeImportWizard() {
                               </ul>
                             )}
                             {row.errors.length === 0 && row.warnings.length === 0 && (
-                              <span style={{ color: '#16a34a' }}>All checks passed</span>
+                              <span style={{ color: '#16a34a' }}>Reconciled & validated</span>
                             )}
                           </td>
                           <td style={{ padding: '10px 14px', textAlign: 'center' }}>
@@ -1292,7 +1776,7 @@ export function SmartEmployeeImportWizard() {
       )}
 
       {/* =====================================================================
-          STEP 4: COMMIT CONFIRMATION & EXECUTION
+          STEP 5: COMMIT CONFIRMATION & EXECUTION
       ====================================================================== */}
       {currentStep === 'commit' && (
         <div
@@ -1311,7 +1795,7 @@ export function SmartEmployeeImportWizard() {
               Confirm Batch Import
             </h3>
             <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#887582' }}>
-              Review the records that will be committed to your workspace employee database.
+              Review the unified employee records that will be committed to your workspace employee database.
             </p>
           </div>
 
@@ -1441,7 +1925,7 @@ export function SmartEmployeeImportWizard() {
       )}
 
       {/* =====================================================================
-          STEP 5: IMPORT COMPLETION SCREEN
+          STEP 6: IMPORT COMPLETION SCREEN
       ====================================================================== */}
       {currentStep === 'complete' && commitResult && (
         <div
@@ -1507,6 +1991,7 @@ export function SmartEmployeeImportWizard() {
               onClick={() => {
                 setCurrentStep('upload');
                 setUploadData(null);
+                setSheets([]);
                 setCommitResult(null);
               }}
               style={{
@@ -1547,7 +2032,111 @@ export function SmartEmployeeImportWizard() {
       )}
 
       {/* =====================================================================
-          ROW EDIT MODAL
+          HEADER ROW SELECTOR MODAL (Step 2 Sheet Inspector)
+      ====================================================================== */}
+      <Dialog open={Boolean(headerModalSheet)} onOpenChange={(o) => { if (!o) setHeaderModalSheet(null); }}>
+        <DialogContent
+          style={{
+            maxWidth: '750px',
+            width: '100%',
+            background: '#fffdfa',
+            border: '1px solid #eee3e2',
+            borderRadius: '16px',
+            padding: '24px',
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle style={{ fontSize: '17px', fontWeight: 700, color: '#3a2d36' }}>
+              Select Table Header Row — {headerModalSheet?.sheetName}
+            </DialogTitle>
+            <DialogDescription style={{ fontSize: '12px', color: '#887582' }}>
+              Click on the row containing your column titles (e.g. Employee Code, Name, Email). Rows above will be treated as title banners or instructions.
+            </DialogDescription>
+          </DialogHeader>
+
+          {headerModalSheet && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '12px' }}>
+              <div style={{ maxHeight: '360px', overflowY: 'auto', border: '1px solid #ebdada', borderRadius: '10px' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <tbody>
+                    {(headerModalSheet.previewGrid || []).map((row) => {
+                      const isCurrentHeader = row.rowIndex === headerModalSheet.headerRowIndex;
+
+                      return (
+                        <tr
+                          key={row.rowIndex}
+                          onClick={() => handleSelectHeaderRow(headerModalSheet.sheetName, row.rowIndex)}
+                          style={{
+                            borderBottom: '1px solid #f2e7e7',
+                            background: isCurrentHeader ? '#f4e4ea' : 'transparent',
+                            cursor: 'pointer',
+                            transition: 'background 0.15s ease',
+                          }}
+                        >
+                          <td
+                            style={{
+                              padding: '8px 12px',
+                              width: '80px',
+                              fontWeight: 700,
+                              color: isCurrentHeader ? '#bd7b92' : '#887582',
+                              background: isCurrentHeader ? '#eedae2' : '#faf5f7',
+                              borderRight: '1px solid #ebdada',
+                              textAlign: 'center',
+                            }}
+                          >
+                            Row {row.rowIndex}
+                            {isCurrentHeader && <div style={{ fontSize: '9.5px', color: '#bd7b92' }}>(Current)</div>}
+                          </td>
+                          <td style={{ padding: '8px 12px', color: '#3a2d36' }}>
+                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                              {row.cells.map((cell, idx) => (
+                                <span
+                                  key={idx}
+                                  style={{
+                                    padding: '2px 8px',
+                                    borderRadius: '4px',
+                                    background: isCurrentHeader ? '#ffffff' : '#f5f0f2',
+                                    border: '1px solid #e8dfe3',
+                                    fontSize: '11.5px',
+                                  }}
+                                >
+                                  {cell || <span style={{ color: '#c7b8c0' }}>—</span>}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setHeaderModalSheet(null)}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    border: '1px solid #eee3e2',
+                    background: '#ffffff',
+                    color: '#58404c',
+                    fontSize: '12.5px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* =====================================================================
+          ROW EDIT MODAL (with AnimatedSelect for Lifecycle Status)
       ====================================================================== */}
       <Dialog open={Boolean(editingRow)} onOpenChange={(o) => { if (!o) setEditingRow(null); }}>
         <DialogContent
@@ -1599,6 +2188,7 @@ export function SmartEmployeeImportWizard() {
                     type="text"
                     value={editFormData.firstName || ''}
                     onChange={(e) => setEditFormData({ ...editFormData, firstName: e.target.value })}
+                    placeholder="First name"
                     style={{
                       width: '100%',
                       padding: '8px 12px',
@@ -1616,6 +2206,7 @@ export function SmartEmployeeImportWizard() {
                     type="text"
                     value={editFormData.lastName || ''}
                     onChange={(e) => setEditFormData({ ...editFormData, lastName: e.target.value })}
+                    placeholder="Last name"
                     style={{
                       width: '100%',
                       padding: '8px 12px',
@@ -1627,22 +2218,82 @@ export function SmartEmployeeImportWizard() {
                 </div>
               </div>
 
-              <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#3a2d36', marginBottom: '4px' }}>
-                  Work Email
-                </label>
-                <input
-                  type="email"
-                  value={editFormData.workEmail || ''}
-                  onChange={(e) => setEditFormData({ ...editFormData, workEmail: e.target.value })}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    borderRadius: '8px',
-                    border: '1px solid #ebdada',
-                    fontSize: '13px',
-                  }}
-                />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#3a2d36', marginBottom: '4px' }}>
+                    Work Email
+                  </label>
+                  <input
+                    type="email"
+                    value={editFormData.workEmail || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, workEmail: e.target.value })}
+                    placeholder="employee@company.com"
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      border: '1px solid #ebdada',
+                      fontSize: '13px',
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#3a2d36', marginBottom: '4px' }}>
+                    Phone Number
+                  </label>
+                  <input
+                    type="text"
+                    value={editFormData.phone || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, phone: e.target.value })}
+                    placeholder="+1-555-0100"
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      border: '1px solid #ebdada',
+                      fontSize: '13px',
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#3a2d36', marginBottom: '4px' }}>
+                    Department
+                  </label>
+                  <input
+                    type="text"
+                    value={editFormData.department || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, department: e.target.value })}
+                    placeholder="e.g. Engineering"
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      border: '1px solid #ebdada',
+                      fontSize: '13px',
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#3a2d36', marginBottom: '4px' }}>
+                    Designation / Role
+                  </label>
+                  <input
+                    type="text"
+                    value={editFormData.designation || ''}
+                    onChange={(e) => setEditFormData({ ...editFormData, designation: e.target.value })}
+                    placeholder="e.g. Senior Analyst"
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      border: '1px solid #ebdada',
+                      fontSize: '13px',
+                    }}
+                  />
+                </div>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
@@ -1668,23 +2319,17 @@ export function SmartEmployeeImportWizard() {
                   <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#3a2d36', marginBottom: '4px' }}>
                     Lifecycle Status
                   </label>
-                  <select
+                  <AnimatedSelect
+                    options={[
+                      { value: 'ACTIVE', label: 'Active', badge: 'Employed' },
+                      { value: 'ONBOARDING', label: 'Onboarding', badge: 'Pre-hire' },
+                      { value: 'OFFBOARDING', label: 'Offboarding', badge: 'Notice' },
+                      { value: 'EXITED', label: 'Exited', badge: 'Departed' },
+                    ]}
                     value={editFormData.employmentStatus || 'ACTIVE'}
-                    onChange={(e) => setEditFormData({ ...editFormData, employmentStatus: e.target.value as any })}
-                    style={{
-                      width: '100%',
-                      padding: '8px 12px',
-                      borderRadius: '8px',
-                      border: '1px solid #ebdada',
-                      fontSize: '13px',
-                      background: '#fff',
-                    }}
-                  >
-                    <option value="ACTIVE">Active</option>
-                    <option value="ONBOARDING">Onboarding</option>
-                    <option value="OFFBOARDING">Offboarding</option>
-                    <option value="EXITED">Exited</option>
-                  </select>
+                    onChange={(val) => setEditFormData({ ...editFormData, employmentStatus: val as any })}
+                    variant="form"
+                  />
                 </div>
               </div>
 
@@ -1709,7 +2354,7 @@ export function SmartEmployeeImportWizard() {
                 </div>
               )}
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '12px' }}>
                 <button
                   type="button"
                   onClick={() => setEditingRow(null)}
@@ -1717,8 +2362,10 @@ export function SmartEmployeeImportWizard() {
                     padding: '8px 16px',
                     borderRadius: '8px',
                     border: '1px solid #eee3e2',
-                    background: '#fff',
+                    background: '#ffffff',
+                    color: '#58404c',
                     fontSize: '13px',
+                    fontWeight: 600,
                     cursor: 'pointer',
                   }}
                 >
@@ -1729,20 +2376,20 @@ export function SmartEmployeeImportWizard() {
                   disabled={updateRowMutation.isPending}
                   onClick={handleSaveRowEdit}
                   style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
                     padding: '8px 18px',
                     borderRadius: '8px',
                     border: 'none',
-                    background: '#bd7b92',
-                    color: '#fff',
+                    background: 'linear-gradient(135deg, #bd7b92, #a85c74)',
+                    color: '#ffffff',
                     fontSize: '13px',
                     fontWeight: 600,
-                    cursor: 'pointer',
+                    cursor: updateRowMutation.isPending ? 'not-allowed' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
                   }}
                 >
-                  {updateRowMutation.isPending && <Loader2 size={13} className="animate-spin" />}
+                  {updateRowMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
                   Save & Re-validate
                 </button>
               </div>
@@ -1757,7 +2404,7 @@ export function SmartEmployeeImportWizard() {
       <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
         <DialogContent
           style={{
-            maxWidth: '750px',
+            maxWidth: '680px',
             width: '100%',
             background: '#fffdfa',
             border: '1px solid #eee3e2',
@@ -1767,71 +2414,64 @@ export function SmartEmployeeImportWizard() {
         >
           <DialogHeader>
             <DialogTitle style={{ fontSize: '17px', fontWeight: 700, color: '#3a2d36' }}>
-              Workspace Import History
+              Import History
             </DialogTitle>
             <DialogDescription style={{ fontSize: '12px', color: '#887582' }}>
-              Past employee batches imported into your workspace.
+              Past employee batch import operations in your workspace.
             </DialogDescription>
           </DialogHeader>
 
-          {historyLoading ? (
-            <div style={{ padding: '36px', textAlign: 'center', color: '#887582' }}>
-              <Loader2 size={24} className="animate-spin" style={{ margin: '0 auto 8px auto', color: '#bd7b92' }} />
-              <span>Loading import logs…</span>
-            </div>
-          ) : (
-            <div style={{ overflowX: 'auto', marginTop: '12px', maxHeight: '400px' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '12.5px' }}>
-                <thead>
-                  <tr style={{ background: '#fbf5f7', borderBottom: '1px solid #ebdada' }}>
-                    <th style={{ padding: '10px 12px', color: '#3a2d36', fontWeight: 600 }}>Date</th>
-                    <th style={{ padding: '10px 12px', color: '#3a2d36', fontWeight: 600 }}>Filename</th>
-                    <th style={{ padding: '10px 12px', color: '#3a2d36', fontWeight: 600 }}>Total</th>
-                    <th style={{ padding: '10px 12px', color: '#3a2d36', fontWeight: 600 }}>Imported</th>
-                    <th style={{ padding: '10px 12px', color: '#3a2d36', fontWeight: 600 }}>Skipped</th>
-                    <th style={{ padding: '10px 12px', color: '#3a2d36', fontWeight: 600 }}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {importHistory.map((h) => (
-                    <tr key={h.id} style={{ borderBottom: '1px solid #f3e6e6' }}>
-                      <td style={{ padding: '10px 12px', color: '#887582' }}>
-                        {new Date(h.uploadedAt).toLocaleDateString()} {new Date(h.uploadedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </td>
-                      <td style={{ padding: '10px 12px', fontWeight: 600, color: '#3a2d36' }}>
-                        {h.filename}
-                      </td>
-                      <td style={{ padding: '10px 12px', color: '#3a2d36' }}>{h.totalRecords}</td>
-                      <td style={{ padding: '10px 12px', color: '#16a34a', fontWeight: 600 }}>{h.importedRecords}</td>
-                      <td style={{ padding: '10px 12px', color: '#ea580c' }}>{h.skippedRecords}</td>
-                      <td style={{ padding: '10px 12px' }}>
-                        <span
-                          style={{
-                            fontSize: '11px',
-                            fontWeight: 600,
-                            padding: '2px 8px',
-                            borderRadius: '4px',
-                            background: h.status === 'COMPLETED' ? '#dcfce7' : h.status === 'PARTIAL' ? '#fef3c7' : '#fee2e2',
-                            color: h.status === 'COMPLETED' ? '#15803d' : h.status === 'PARTIAL' ? '#b45309' : '#b91c1c',
-                          }}
-                        >
-                          {h.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+          <div style={{ marginTop: '16px', maxHeight: '400px', overflowY: 'auto' }}>
+            {historyLoading ? (
+              <div style={{ padding: '24px', textAlign: 'center', color: '#887582' }}>
+                <Loader2 size={20} className="animate-spin" style={{ margin: '0 auto 6px auto', color: '#bd7b92' }} />
+                <span>Loading history…</span>
+              </div>
+            ) : importHistory.length === 0 ? (
+              <div style={{ padding: '36px', textAlign: 'center', color: '#887582', fontSize: '13px' }}>
+                No past imports found in this workspace.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {importHistory.map((item) => (
+                  <div
+                    key={item.id}
+                    style={{
+                      padding: '12px 16px',
+                      borderRadius: '10px',
+                      background: '#ffffff',
+                      border: '1px solid #ebdada',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <div>
+                      <b style={{ fontSize: '13px', color: '#3a2d36' }}>{item.filename}</b>
+                      <div style={{ fontSize: '11px', color: '#887582', marginTop: '2px' }}>
+                        {new Date(item.uploadedAt).toLocaleString()} · {item.totalRecords} total records
+                      </div>
+                    </div>
 
-                  {importHistory.length === 0 && (
-                    <tr>
-                      <td colSpan={6} style={{ padding: '24px', textAlign: 'center', color: '#887582' }}>
-                        No past import records found for this workspace.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span
+                        style={{
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          padding: '3px 8px',
+                          borderRadius: '6px',
+                          background: item.status === 'COMPLETED' ? '#dcfce7' : item.status === 'PARTIAL' ? '#fef3c7' : '#fee2e2',
+                          color: item.status === 'COMPLETED' ? '#15803d' : item.status === 'PARTIAL' ? '#b45309' : '#b91c1c',
+                        }}
+                      >
+                        {item.importedRecords} imported
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>
