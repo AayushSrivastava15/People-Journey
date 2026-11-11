@@ -98,3 +98,4 @@ describe('Employee Soft Deletion Integration Tests', () => {
     assert.strictEqual(auditRes.rows[0].action_type, 'DELETE_EMPLOYEE');
   });
 });
+

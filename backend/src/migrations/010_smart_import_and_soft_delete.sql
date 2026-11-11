@@ -38,3 +38,4 @@ CREATE INDEX IF NOT EXISTS idx_hr_import_history_owner
 
 -- 4. Grant runtime role permissions
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE hr_employee_import_history TO people_journey_app;
+
