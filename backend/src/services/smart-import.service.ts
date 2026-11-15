@@ -8,6 +8,7 @@ import {
   importSessionStore,
   type ValidatedImportRow,
   type RowValidationError,
+  type RowValidationStatus,
   type ImportSummary,
   type ImportSession,
   type SheetSessionData,
@@ -544,9 +545,9 @@ export class SmartImportService {
       throw new Error('Your import session has expired. Please upload the Excel file again.');
     }
 
-    // Update each sheet's mapping from payload
+    // Update each sheet's mapping from payload only if non-empty
     for (const [sheetName, mapping] of Object.entries(sheetMappings)) {
-      if (session.sheets[sheetName]) {
+      if (session.sheets[sheetName] && mapping && Object.keys(mapping).length > 0) {
         session.sheets[sheetName].columnMapping = mapping;
       }
     }
@@ -607,16 +608,18 @@ export class SmartImportService {
       }
     }
 
-    // Map existing rows to preserve manual edits
-    const existingRowMap = new Map<number, ValidatedImportRow>();
+    // Map existing rows to preserve manual edits by stable rowId or rowIndex
+    const existingRowMap = new Map<string | number, ValidatedImportRow>();
     if (session.validatedRows && session.validatedRows.length > 0) {
       for (const r of session.validatedRows) {
+        if (r.rowId) existingRowMap.set(r.rowId, r);
         existingRowMap.set(r.rowIndex, r);
       }
     }
 
     // Reconciled employee internal model
     interface MutableReconciledRow {
+      rowId: string;
       rowIndex: number;
       sourceRowNumber: number;
       primarySheet: string;
@@ -726,7 +729,14 @@ export class SmartImportService {
 
         const lifecycleEval = employeeLifecycleReconciliationService.evaluateEmployeeMisLifecycle(rawEmpRecord);
 
+        const sheetSlug = sheet.sheetName.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const rowId = `rec_${session.sessionId.slice(0, 8)}_${sheetSlug}_row_${rowNum}_${i + 1}`;
+        if (session.deletedRowIds && session.deletedRowIds.has(rowId)) {
+          return;
+        }
+
         addRow({
+          rowId,
           rowIndex: rowNum,
           sourceRowNumber: rowNum,
           primarySheet: sheet.sheetName,
@@ -791,9 +801,16 @@ export class SmartImportService {
         const parsedHire = this.parseDateValue(rawHireDate);
         const vendor = getFieldVal(raw, mapping, 'vendor') || String(raw['Payroll'] || raw['payroll'] || raw['Agency'] || raw['agency'] || '').trim();
 
+        const sheetSlug = sheet.sheetName.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const rowId = `rec_${session.sessionId.slice(0, 8)}_${sheetSlug}_row_${rowNum}_${i + 1}`;
+        if (session.deletedRowIds && session.deletedRowIds.has(rowId)) {
+          return;
+        }
+
         const existingMatching = code ? codeToRowsMap.get(code.toLowerCase()) : null;
         if (!existingMatching || existingMatching.length === 0) {
           addRow({
+            rowId,
             rowIndex: rowNum,
             sourceRowNumber: rowNum,
             primarySheet: sheet.sheetName,
@@ -928,7 +945,14 @@ export class SmartImportService {
 
           const evalResult = employeeLifecycleReconciliationService.evaluateResignationTrackerLifecycle(resRecord);
 
+          const sheetSlug = sheet.sheetName.replace(/[^a-zA-Z0-9_-]/g, '_');
+          const rowId = `rec_${session.sessionId.slice(0, 8)}_${sheetSlug}_row_${rowNum}_${i + 1}`;
+          if (session.deletedRowIds && session.deletedRowIds.has(rowId)) {
+            return;
+          }
+
           addRow({
+            rowId,
             rowIndex: rowNum,
             sourceRowNumber: rowNum,
             primarySheet: sheet.sheetName,
@@ -1117,7 +1141,14 @@ export class SmartImportService {
 
         const needsCodeAttention = !rawCode;
 
+        const sheetSlug = sheet.sheetName.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const rowId = `rec_${session.sessionId.slice(0, 8)}_${sheetSlug}_row_${rowNum}_${i + 1}`;
+        if (session.deletedRowIds && session.deletedRowIds.has(rowId)) {
+          return;
+        }
+
         addRow({
+          rowId,
           rowIndex: rowNum,
           sourceRowNumber: rowNum,
           primarySheet: sheet.sheetName,
@@ -1251,7 +1282,7 @@ export class SmartImportService {
       }
 
       // Check if row was previously manually edited in session
-      const previousRow = existingRowMap.get(rowIndex);
+      const previousRow = existingRowMap.get(row.rowId) || existingRowMap.get(rowIndex);
       const isEdited = previousRow?.isEdited || false;
       const editedFields = previousRow?.editedFields || [];
       if (previousRow?.approvedForImport !== undefined) {
@@ -1429,8 +1460,9 @@ export class SmartImportService {
       const isThirdParty = Boolean(row.isThirdParty || row.vendor || (row.primarySheet && row.primarySheet.toLowerCase().includes('third party')));
 
       validatedRows.push({
+        rowId: row.rowId,
         rowIndex,
-        originalRowIndex: row.rowIndex,
+        originalRowIndex: row.sourceRowNumber || row.rowIndex,
         sourceRowNumber: row.sourceRowNumber,
         primarySheet: row.primarySheet,
         sourceSheets: Array.from(row.sourceSheets),
@@ -1541,13 +1573,138 @@ export class SmartImportService {
       throw new Error('Your import session has expired. Please upload the Excel file again.');
     }
 
-    // Apply columnMapping to all active sheets or primary sheet
+    // Apply columnMapping to all active sheets or primary sheet only if non-empty
     const sheetMappings: Record<string, Record<string, string>> = {};
-    for (const sheetName of session.sheetOrder) {
-      sheetMappings[sheetName] = columnMapping;
+    if (columnMapping && Object.keys(columnMapping).length > 0) {
+      for (const sheetName of session.sheetOrder) {
+        sheetMappings[sheetName] = columnMapping;
+      }
     }
 
     return this.validateMultiSheetMapping(sessionId, ownerUserId, sheetMappings, saveMappingForWorkspace);
+  }
+
+  /**
+   * Fast in-memory revalidation of active preview rows.
+   * Recalculates duplicate detection and rule validations across remaining rows
+   * without re-parsing raw Excel sheets, preserving all original extracted data,
+   * stable IDs, and column mappings.
+   */
+  revalidateActiveSessionRows(session: ImportSession): void {
+    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    // 1. Recount intra-batch code occurrences across active remaining rows
+    const codeOccurrences = new Map<string, number[]>();
+    for (const r of session.validatedRows) {
+      const code = r.mappedData.employeeCode ? String(r.mappedData.employeeCode).trim() : '';
+      if (code) {
+        const lower = code.toLowerCase();
+        const list = codeOccurrences.get(lower) || [];
+        list.push(r.rowIndex);
+        codeOccurrences.set(lower, list);
+      }
+    }
+
+    // 2. Re-evaluate each remaining row's validation errors in-memory
+    for (const r of session.validatedRows) {
+      // Preserve existing non-duplicate field errors (missing hire date, invalid email format, etc.)
+      const nonDuplicateErrors = (r.errors || []).filter(
+        e => !e.message.includes('Duplicate Employee Code') && !e.message.includes('already exists in your workspace')
+      );
+      const errors: RowValidationError[] = [...nonDuplicateErrors];
+      const warnings: string[] = [];
+
+      const code = r.mappedData.employeeCode ? String(r.mappedData.employeeCode).trim() : '';
+      const lowerCode = code.toLowerCase();
+      const fullName = r.mappedData.fullName ? String(r.mappedData.fullName).trim() : '';
+      const firstName = r.mappedData.firstName ? String(r.mappedData.firstName).trim() : '';
+      const workEmail = r.mappedData.workEmail ? String(r.mappedData.workEmail).trim() : '';
+      const personalEmail = r.mappedData.personalEmail ? String(r.mappedData.personalEmail).trim() : '';
+
+      // Employee Code check
+      if (!code) {
+        if (!errors.some(e => e.field === 'employeeCode')) {
+          errors.push({
+            field: 'employeeCode',
+            message: 'Employee ID / Code is missing. HR must supply an employee identifier.',
+            critical: true,
+          });
+        }
+      } else {
+        const dupRows = codeOccurrences.get(lowerCode) || [];
+        if (r.isExistingEmployee && !r.approvedForImport) {
+          errors.push({
+            field: 'employeeCode',
+            message: `Employee Code "${code}" already exists in your workspace. Overwrites are not permitted unless approved.`,
+            critical: true,
+          });
+        } else if (dupRows.length > 1) {
+          const otherRows = dupRows.filter(num => num !== r.rowIndex).join(', ');
+          errors.push({
+            field: 'employeeCode',
+            message: `Duplicate Employee Code "${code}" within file (also appears in Row ${otherRows}).`,
+            critical: true,
+          });
+        }
+      }
+
+      // Name check
+      if (!firstName && !fullName) {
+        if (!errors.some(e => e.field === 'firstName')) {
+          errors.push({
+            field: 'firstName',
+            message: 'Employee name is required.',
+            critical: true,
+          });
+        }
+      }
+
+      // Email format checks
+      if (workEmail && !EMAIL_REGEX.test(workEmail)) {
+        if (!errors.some(e => e.field === 'workEmail')) {
+          errors.push({
+            field: 'workEmail',
+            message: `Invalid work email format: "${workEmail}".`,
+            critical: true,
+          });
+        }
+      }
+      if (personalEmail && !EMAIL_REGEX.test(personalEmail)) {
+        if (!errors.some(e => e.field === 'personalEmail')) {
+          errors.push({
+            field: 'personalEmail',
+            message: `Invalid personal email format: "${personalEmail}".`,
+            critical: true,
+          });
+        }
+      }
+
+      // Retain existing non-duplicate warnings (e.g. historical departure, needs approval, existing employee)
+      for (const w of r.warnings || []) {
+        if (!w.includes('Duplicate Employee Code') && !w.includes('already exists in your workspace')) {
+          warnings.push(w);
+        }
+      }
+      if (r.isExistingEmployee) {
+        warnings.push(`Matches existing employee "${code}". Proposed changes require HR approval.`);
+      }
+
+      // Determine validation status
+      let validationStatus: RowValidationStatus = 'VALID';
+      if (errors.length > 0) {
+        const hasDup = errors.some(e => e.message.includes('Duplicate') || e.message.includes('already exists'));
+        validationStatus = hasDup ? 'DUPLICATE' : 'NEEDS_ATTENTION';
+      } else if (r.needsAttention || (r.requiresHrApproval && !r.approvedForImport && r.reconciliationType === 'HISTORICAL_EXIT')) {
+        validationStatus = 'NEEDS_ATTENTION';
+      }
+
+      r.errors = errors;
+      r.warnings = warnings;
+      r.validationStatus = validationStatus;
+    }
+
+    // 3. Recalculate summary counters from active preview dataset
+    importSessionStore.recalculateSummary(session);
   }
 
   /**
@@ -1724,7 +1881,7 @@ export class SmartImportService {
                 deptId,
                 desigId,
                 m.employmentStatus,
-                m.hireDate,
+                m.hireDate || null,
                 m.exitDate || m.lastWorkingDay || null,
                 m.lastWorkingDay || null,
                 m.exitReason || null,

@@ -876,7 +876,7 @@ export function useUpdatePreviewRow() {
       data,
     }: {
       sessionId: string;
-      rowIndex: number;
+      rowIndex: number | string;
       data: Partial<ValidatedImportRow['mappedData']>;
     }) =>
       apiClient<{ success: boolean; row: ValidatedImportRow; summary: ImportSummary }>(
@@ -901,7 +901,7 @@ export function useRevertPreviewRow() {
       rowIndex,
     }: {
       sessionId: string;
-      rowIndex: number;
+      rowIndex: number | string;
     }) =>
       apiClient<{ success: boolean; row: ValidatedImportRow; summary: ImportSummary }>(
         `/employees/import/preview/${sessionId}/${rowIndex}/revert`,
@@ -925,7 +925,7 @@ export function useToggleRowApproval() {
       approved,
     }: {
       sessionId: string;
-      rowIndex: number;
+      rowIndex: number | string;
       approved?: boolean;
     }) =>
       apiClient<{ success: boolean; row: ValidatedImportRow; summary: ImportSummary }>(
@@ -976,7 +976,7 @@ export function useDeletePreviewRow() {
       rowIndex,
     }: {
       sessionId: string;
-      rowIndex: number;
+      rowIndex: number | string;
     }) =>
       apiClient<{ success: boolean; message: string; summary: ImportSummary }>(
         `/employees/import/preview/${sessionId}/${rowIndex}`,

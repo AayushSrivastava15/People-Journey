@@ -689,6 +689,7 @@ export interface ImportSummary {
 }
 
 export interface ValidatedImportRow {
+  rowId?: string;
   rowIndex: number;
   originalRowIndex?: number;
   sourceRowNumber?: number;

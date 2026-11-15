@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { useLocation } from 'wouter';
 import {
   UploadCloud,
@@ -176,6 +176,13 @@ export function SmartEmployeeImportWizard() {
   const previewRows: ValidatedImportRow[] = previewData?.rows || [];
   const totalPages = previewData?.totalPages || 1;
   const totalFiltered = previewData?.totalFiltered || 0;
+
+  // Ensure current page is kept within valid bounds after records are deleted or filtered
+  useEffect(() => {
+    if (previewPage > totalPages && totalPages >= 1) {
+      setPreviewPage(totalPages);
+    }
+  }, [previewPage, totalPages]);
 
   // =========================================================================
   // Stage 1: File Upload Handler & Sheet Initialization
@@ -368,7 +375,7 @@ export function SmartEmployeeImportWizard() {
     try {
       await updateRowMutation.mutateAsync({
         sessionId,
-        rowIndex: row.rowIndex,
+        rowIndex: row.rowId || row.rowIndex,
         data: {
           [fieldName]: newVal,
         },
@@ -376,7 +383,7 @@ export function SmartEmployeeImportWizard() {
 
       toast({
         title: 'Field Updated',
-        description: `Row ${row.rowIndex} updated and revalidated. Marked as Manually Edited.`,
+        description: `Row ${row.sourceRowNumber || row.rowIndex} updated and revalidated. Marked as Manually Edited.`,
       });
     } catch (err) {
       toast({
@@ -436,7 +443,7 @@ export function SmartEmployeeImportWizard() {
     try {
       await updateRowMutation.mutateAsync({
         sessionId,
-        rowIndex: editingRow.rowIndex,
+        rowIndex: editingRow.rowId || editingRow.rowIndex,
         data: {
           ...editFormData,
           vendor: editCategory === 'THIRD_PARTY' ? editVendor : undefined,
@@ -463,15 +470,15 @@ export function SmartEmployeeImportWizard() {
     try {
       await revertRowMutation.mutateAsync({
         sessionId,
-        rowIndex: row.rowIndex,
+        rowIndex: row.rowId || row.rowIndex,
       });
 
       toast({
         title: 'Record Reverted',
-        description: `Row ${row.rowIndex} restored to original Excel extracted data.`,
+        description: `Row ${row.sourceRowNumber || row.rowIndex} restored to original Excel extracted data.`,
       });
 
-      if (editingRow && editingRow.rowIndex === row.rowIndex) {
+      if (editingRow && (editingRow.rowId === row.rowId || editingRow.rowIndex === row.rowIndex)) {
         setEditingRow(null);
       }
     } catch (err) {
@@ -488,15 +495,15 @@ export function SmartEmployeeImportWizard() {
     try {
       await toggleApprovalMutation.mutateAsync({
         sessionId,
-        rowIndex: row.rowIndex,
+        rowIndex: row.rowId || row.rowIndex,
         approved: !row.approvedForImport,
       });
 
       toast({
         title: row.approvedForImport ? 'Record Excluded' : 'Record Approved',
         description: row.approvedForImport
-          ? `Row ${row.rowIndex} will be skipped during import.`
-          : `Row ${row.rowIndex} approved for database import.`,
+          ? `Row ${row.sourceRowNumber || row.rowIndex} will be skipped during import.`
+          : `Row ${row.sourceRowNumber || row.rowIndex} approved for database import.`,
       });
     } catch (err) {
       toast({
@@ -537,12 +544,12 @@ export function SmartEmployeeImportWizard() {
     try {
       await deleteRowMutation.mutateAsync({
         sessionId,
-        rowIndex: row.rowIndex,
+        rowIndex: row.rowId || row.rowIndex,
       });
 
       toast({
         title: 'Row Removed',
-        description: `Row ${row.rowIndex} (${row.mappedData.fullName || row.mappedData.employeeCode}) was removed from import.`,
+        description: `Row ${row.sourceRowNumber || row.rowIndex} (${row.mappedData.fullName || row.mappedData.employeeCode || 'Record'}) was removed from import.`,
       });
     } catch (err) {
       toast({
@@ -1355,7 +1362,7 @@ export function SmartEmployeeImportWizard() {
 
                       return (
                         <tr
-                          key={row.rowIndex}
+                          key={row.rowId || `${row.rowIndex}_${row.sourceRowNumber}`}
                           className={`hover:bg-stone-50/70 transition-colors ${
                             hasCriticalError
                               ? 'bg-amber-50/20'

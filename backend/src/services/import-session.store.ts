@@ -28,6 +28,7 @@ export type ReconciliationType =
   | 'EXISTING_UNCHANGED';
 
 export interface ValidatedImportRow {
+  rowId: string; // Stable unique identifier: sessionId + sheet + originalRowNumber
   rowIndex: number; // 1-indexed row number from original Excel
   originalRowIndex?: number;
   sourceRowNumber?: number;
@@ -154,6 +155,7 @@ export interface ImportSession {
   columnMapping: Record<string, string>;
   validatedRows: ValidatedImportRow[];
   summary: ImportSummary;
+  deletedRowIds?: Set<string>;
 }
 
 class ImportSessionStore {
@@ -438,14 +440,24 @@ class ImportSessionStore {
   updateRow(
     sessionId: string,
     ownerUserId: string,
-    rowIndex: number,
+    rowIdentifier: number | string,
     updatedMappedData: Partial<ValidatedImportRow['mappedData']>
   ): ValidatedImportRow | null {
     const session = this.getSession(sessionId, ownerUserId);
     if (!session) return null;
 
-    const row = session.validatedRows.find(r => r.rowIndex === rowIndex);
+    const numIndex = typeof rowIdentifier === 'number' ? rowIdentifier : parseInt(rowIdentifier, 10);
+    const strIdentifier = String(rowIdentifier);
+
+    const row = session.validatedRows.find(
+      r => (r.rowId && r.rowId === strIdentifier) || (!isNaN(numIndex) && r.rowIndex === numIndex)
+    );
     if (!row) return null;
+
+    // Snapshot original values before first manual edit if not already done
+    if (!row.originalExtractedData) {
+      row.originalExtractedData = { ...row.mappedData };
+    }
 
     // Track changed fields against original extracted data
     const editedFieldsSet = new Set(row.editedFields || []);
@@ -468,27 +480,20 @@ class ImportSessionStore {
     row.editedFields = Array.from(editedFieldsSet);
     row.isEdited = row.editedFields.length > 0;
 
-    // Keep rawRows in sync
-    const rawIdx = rowIndex - 2;
-    if (session.rawRows[rawIdx]) {
-      for (const [canonicalField, newVal] of Object.entries(updatedMappedData)) {
-        let header = Object.keys(session.columnMapping).find(h => session.columnMapping[h] === canonicalField);
-        if (!header) {
-          header = canonicalField;
-          session.columnMapping[header] = canonicalField;
-        }
-        session.rawRows[rawIdx][header] = newVal;
-      }
-    }
-
+    // IMMUTABILITY: The original workbook session.rawRows and session.sheets are NEVER modified!
     return row;
   }
 
-  revertRow(sessionId: string, ownerUserId: string, rowIndex: number): ValidatedImportRow | null {
+  revertRow(sessionId: string, ownerUserId: string, rowIdentifier: number | string): ValidatedImportRow | null {
     const session = this.getSession(sessionId, ownerUserId);
     if (!session) return null;
 
-    const row = session.validatedRows.find(r => r.rowIndex === rowIndex);
+    const numIndex = typeof rowIdentifier === 'number' ? rowIdentifier : parseInt(rowIdentifier, 10);
+    const strIdentifier = String(rowIdentifier);
+
+    const row = session.validatedRows.find(
+      r => (r.rowId && r.rowId === strIdentifier) || (!isNaN(numIndex) && r.rowIndex === numIndex)
+    );
     if (!row || !row.originalExtractedData) return null;
 
     // Revert mappedData to original extracted snapshot
@@ -498,31 +503,29 @@ class ImportSessionStore {
     row.isEdited = false;
     row.editedFields = [];
 
-    // Sync rawRows if applicable
-    const rawIdx = rowIndex - 2;
-    if (session.rawRows[rawIdx]) {
-      for (const [field, val] of Object.entries(row.mappedData)) {
-        const header = Object.keys(session.columnMapping).find(h => session.columnMapping[h] === field) || field;
-        session.rawRows[rawIdx][header] = val;
-      }
-    }
-
+    // IMMUTABILITY: The original workbook data is preserved without mutation
     return row;
   }
 
   toggleRowApproval(
     sessionId: string,
     ownerUserId: string,
-    rowIndex: number,
+    rowIdentifier: number | string,
     approved?: boolean
   ): ValidatedImportRow | null {
     const session = this.getSession(sessionId, ownerUserId);
     if (!session) return null;
 
-    const row = session.validatedRows.find(r => r.rowIndex === rowIndex);
+    const numIndex = typeof rowIdentifier === 'number' ? rowIdentifier : parseInt(rowIdentifier, 10);
+    const strIdentifier = String(rowIdentifier);
+
+    const row = session.validatedRows.find(
+      r => (r.rowId && r.rowId === strIdentifier) || (!isNaN(numIndex) && r.rowIndex === numIndex)
+    );
     if (!row) return null;
 
     row.approvedForImport = approved !== undefined ? approved : !row.approvedForImport;
+    this.recalculateSummary(session);
     return row;
   }
 
@@ -547,19 +550,31 @@ class ImportSessionStore {
       }
     }
 
+    this.recalculateSummary(session);
     return true;
   }
 
-  deleteRow(sessionId: string, ownerUserId: string, rowIndex: number): boolean {
+  deleteRow(sessionId: string, ownerUserId: string, rowIdentifier: number | string): ValidatedImportRow | null {
     const session = this.getSession(sessionId, ownerUserId);
-    if (!session) return false;
+    if (!session) return null;
 
-    const idx = session.validatedRows.findIndex(r => r.rowIndex === rowIndex);
-    if (idx === -1) return false;
+    const numIndex = typeof rowIdentifier === 'number' ? rowIdentifier : parseInt(rowIdentifier, 10);
+    const strIdentifier = String(rowIdentifier);
 
-    session.validatedRows.splice(idx, 1);
+    const idx = session.validatedRows.findIndex(
+      r => (r.rowId && r.rowId === strIdentifier) || (!isNaN(numIndex) && r.rowIndex === numIndex)
+    );
+    if (idx === -1) return null;
+
+    const [deletedRow] = session.validatedRows.splice(idx, 1);
+    if (deletedRow?.rowId) {
+      if (!session.deletedRowIds) {
+        session.deletedRowIds = new Set<string>();
+      }
+      session.deletedRowIds.add(deletedRow.rowId);
+    }
     this.recalculateSummary(session);
-    return true;
+    return deletedRow;
   }
 
   recalculateSummary(session: ImportSession): void {

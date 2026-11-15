@@ -326,13 +326,7 @@ export async function updatePreviewRow(req: Request, res: Response): Promise<voi
   }
 
   const sessionId = String(req.params.sessionId);
-  const rowIndex = String(req.params.rowIndex);
-  const numIndex = parseInt(rowIndex, 10);
-  if (isNaN(numIndex)) {
-    res.status(400).json({ success: false, error: { code: 'INVALID_ROW', message: 'Invalid row index parameter.' } });
-    return;
-  }
-
+  const rowParam = String(req.params.rowIndex);
   const updatedFields = req.body || {};
 
   const session = importSessionStore.getSession(sessionId, userId);
@@ -344,17 +338,20 @@ export async function updatePreviewRow(req: Request, res: Response): Promise<voi
     return;
   }
 
-  const updated = importSessionStore.updateRow(sessionId, userId, numIndex, updatedFields);
+  const updated = importSessionStore.updateRow(sessionId, userId, rowParam, updatedFields);
   if (!updated) {
-    res.status(404).json({ success: false, error: { code: 'ROW_NOT_FOUND', message: `Row ${numIndex} not found in preview.` } });
+    res.status(404).json({ success: false, error: { code: 'ROW_NOT_FOUND', message: `Row ${rowParam} not found in preview.` } });
     return;
   }
 
-  // Re-run validation across the session to update duplicate detection and rules
+  // Fast in-memory revalidation without re-extracting from raw sheets
   try {
-    await smartImportService.validateMultiSheetMapping(sessionId, userId, {}, false);
+    smartImportService.revalidateActiveSessionRows(session);
     const refreshed = importSessionStore.getSession(sessionId, userId)!;
-    const refreshedRow = refreshed.validatedRows.find(r => r.rowIndex === numIndex);
+    const numIndex = parseInt(rowParam, 10);
+    const refreshedRow = refreshed.validatedRows.find(
+      r => (r.rowId && r.rowId === rowParam) || (!isNaN(numIndex) && r.rowIndex === numIndex)
+    );
 
     res.status(200).json({
       success: true,
@@ -375,23 +372,30 @@ export async function revertPreviewRow(req: Request, res: Response): Promise<voi
   }
 
   const sessionId = String(req.params.sessionId);
-  const rowIndex = String(req.params.rowIndex);
-  const numIndex = parseInt(rowIndex, 10);
-  if (isNaN(numIndex)) {
-    res.status(400).json({ success: false, error: { code: 'INVALID_ROW', message: 'Invalid row index parameter.' } });
+  const rowParam = String(req.params.rowIndex);
+
+  const session = importSessionStore.getSession(sessionId, userId);
+  if (!session) {
+    res.status(410).json({
+      success: false,
+      error: { code: 'SESSION_EXPIRED', message: 'Your import session has expired. Please upload the Excel file again.' },
+    });
     return;
   }
 
-  const reverted = importSessionStore.revertRow(sessionId, userId, numIndex);
+  const reverted = importSessionStore.revertRow(sessionId, userId, rowParam);
   if (!reverted) {
-    res.status(404).json({ success: false, error: { code: 'ROW_NOT_FOUND', message: `Row ${numIndex} not found or cannot be reverted.` } });
+    res.status(404).json({ success: false, error: { code: 'ROW_NOT_FOUND', message: `Row ${rowParam} not found or cannot be reverted.` } });
     return;
   }
 
   try {
-    await smartImportService.validateMultiSheetMapping(sessionId, userId, {}, false);
+    smartImportService.revalidateActiveSessionRows(session);
     const refreshed = importSessionStore.getSession(sessionId, userId)!;
-    const refreshedRow = refreshed.validatedRows.find(r => r.rowIndex === numIndex);
+    const numIndex = parseInt(rowParam, 10);
+    const refreshedRow = refreshed.validatedRows.find(
+      r => (r.rowId && r.rowId === rowParam) || (!isNaN(numIndex) && r.rowIndex === numIndex)
+    );
 
     res.status(200).json({
       success: true,
@@ -412,22 +416,23 @@ export async function toggleRowApproval(req: Request, res: Response): Promise<vo
   }
 
   const sessionId = String(req.params.sessionId);
-  const rowIndex = String(req.params.rowIndex);
-  const numIndex = parseInt(rowIndex, 10);
-  if (isNaN(numIndex)) {
-    res.status(400).json({ success: false, error: { code: 'INVALID_ROW', message: 'Invalid row index parameter.' } });
-    return;
-  }
-
+  const rowParam = String(req.params.rowIndex);
   const approved = req.body?.approved;
-  const updated = importSessionStore.toggleRowApproval(sessionId, userId, numIndex, approved);
-  if (!updated) {
-    res.status(404).json({ success: false, error: { code: 'ROW_NOT_FOUND', message: `Row ${numIndex} not found.` } });
+
+  const session = importSessionStore.getSession(sessionId, userId);
+  if (!session) {
+    res.status(410).json({
+      success: false,
+      error: { code: 'SESSION_EXPIRED', message: 'Your import session has expired. Please upload the Excel file again.' },
+    });
     return;
   }
 
-  const session = importSessionStore.getSession(sessionId, userId)!;
-  session.summary.approvedCount = session.validatedRows.filter(r => r.approvedForImport).length;
+  const updated = importSessionStore.toggleRowApproval(sessionId, userId, rowParam, approved);
+  if (!updated) {
+    res.status(404).json({ success: false, error: { code: 'ROW_NOT_FOUND', message: `Row ${rowParam} not found.` } });
+    return;
+  }
 
   res.status(200).json({
     success: true,
@@ -453,8 +458,6 @@ export async function bulkSetApproval(req: Request, res: Response): Promise<void
   }
 
   const session = importSessionStore.getSession(sessionId, userId)!;
-  session.summary.approvedCount = session.validatedRows.filter(r => r.approvedForImport).length;
-
   res.status(200).json({
     success: true,
     summary: session.summary,
@@ -469,12 +472,7 @@ export async function deletePreviewRow(req: Request, res: Response): Promise<voi
   }
 
   const sessionId = String(req.params.sessionId);
-  const rowIndex = String(req.params.rowIndex);
-  const numIndex = parseInt(rowIndex, 10);
-  if (isNaN(numIndex)) {
-    res.status(400).json({ success: false, error: { code: 'INVALID_ROW', message: 'Invalid row index parameter.' } });
-    return;
-  }
+  const rowParam = String(req.params.rowIndex);
 
   const session = importSessionStore.getSession(sessionId, userId);
   if (!session) {
@@ -485,19 +483,26 @@ export async function deletePreviewRow(req: Request, res: Response): Promise<voi
     return;
   }
 
-  const deleted = importSessionStore.deleteRow(sessionId, userId, numIndex);
-  if (!deleted) {
-    res.status(404).json({ success: false, error: { code: 'ROW_NOT_FOUND', message: `Row ${numIndex} not found in preview.` } });
+  const deletedRow = importSessionStore.deleteRow(sessionId, userId, rowParam);
+  if (!deletedRow) {
+    res.status(404).json({ success: false, error: { code: 'ROW_NOT_FOUND', message: `Row ${rowParam} not found in preview.` } });
     return;
   }
 
-  // Re-run validation to clear duplicate warnings resolved by removal
-  await smartImportService.validateSessionRows(sessionId, userId, session.columnMapping, false);
+  // Re-run in-memory validation across remaining active rows
+  smartImportService.revalidateActiveSessionRows(session);
   const refreshed = importSessionStore.getSession(sessionId, userId)!;
 
   res.status(200).json({
     success: true,
-    message: `Row ${numIndex} removed from import.`,
+    message: `Row ${deletedRow.sourceRowNumber || deletedRow.rowIndex} (${deletedRow.mappedData?.fullName || deletedRow.mappedData?.employeeCode || 'Record'}) removed from import.`,
+    deletedRow: {
+      rowId: deletedRow.rowId,
+      rowIndex: deletedRow.rowIndex,
+      sourceRowNumber: deletedRow.sourceRowNumber || deletedRow.rowIndex,
+      employeeName: deletedRow.mappedData?.fullName || '',
+      employeeCode: deletedRow.mappedData?.employeeCode || '',
+    },
     summary: refreshed.summary,
   });
 }
