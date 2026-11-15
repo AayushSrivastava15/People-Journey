@@ -41,6 +41,7 @@ import { NotificationBellDropdown } from '@/components/notification-bell-dropdow
 import { AddEmployeeWizard } from '@/components/add-employee-wizard';
 import { DeleteEmployeeDialog } from '@/components/delete-employee-dialog';
 import { SmartEmployeeImportWizard } from '@/components/smart-employee-import-wizard';
+import { EmployeeProfileView } from '@/components/employee-profile-view';
 import { triggerCookiePreferencesModal } from '@/components/cookie-consent-banner';
 import { OverviewSkeleton, PersonalDashboardSkeleton } from '@/components/dashboard-skeletons';
 
@@ -570,13 +571,17 @@ function EmployeeTable({
               return (
                 <tr key={String(id)}>
                   <td>
-                    <span className="person-cell">
+                    <Link
+                      href={`/dashboard/employees/${person.uuid || person.employeeId}`}
+                      className="person-cell"
+                      style={{ textDecoration: 'none', color: 'inherit', display: 'flex', alignItems: 'center', gap: '10px' }}
+                    >
                       <span className="person-avatar">{initials}</span>
                       <span>
-                        <b>{name}</b>
+                        <b style={{ color: '#272023' }}>{name}</b>
                         <small>{email || code || 'Registered'}</small>
                       </span>
-                    </span>
+                    </Link>
                   </td>
                   <td>{dept || 'General'}</td>
                   <td>{role || 'Team Member'}</td>
@@ -1059,9 +1064,22 @@ function ListingPage({
   const [status, setStatus] = useState('All statuses');
   const [page, setPage] = useState(0);
   const pageSize = 5;
-  const title = titles[path] || 'Personal Workspace';
+  const title = path.startsWith('/dashboard/employees/')
+    ? 'Employee Profile'
+    : path.startsWith('/dashboard/exit-interviews/')
+    ? 'Exit Interview Record'
+    : path.startsWith('/dashboard/interview-responses/')
+    ? 'Interview Response Record'
+    : titles[path] || 'Personal Workspace';
 
   const { notifications } = useWorkspaceLifecycleData();
+
+  if (path.startsWith('/dashboard/employees/')) {
+    const targetIdOrUuid = path.replace('/dashboard/employees/', '').split('/')[0].trim();
+    if (targetIdOrUuid) {
+      return <EmployeeProfileView idOrUuid={targetIdOrUuid} />;
+    }
+  }
 
   if (path === '/dashboard/overview') return <Overview />;
   if (path === '/dashboard/add-employee') return <AddEmployee />;
@@ -1070,7 +1088,8 @@ function ListingPage({
   if (path === '/dashboard/templates') return <EmailTemplatesView />;
   if (path === '/dashboard/notifications') return <EmailNotificationsView />;
   if (path === '/dashboard/notification-history') return <EmailDraftHistoryView />;
-  if (path === '/dashboard/interview-responses') return <ExitManagementView mode="responses" />;
+  if (path === '/dashboard/interview-responses' || path.startsWith('/dashboard/interview-responses/')) return <ExitManagementView mode="responses" />;
+  if (path === '/dashboard/exit-interviews' || path.startsWith('/dashboard/exit-interviews/')) return <ExitManagementView mode="records" />;
 
   const desc: Record<string, string> = {
     '/dashboard/employees': 'A directory of all team members and personnel in your workspace.',
@@ -2273,7 +2292,13 @@ export function DashboardPage() {
   const [path, setPath] = useLocation();
   const { appUser } = useAuth();
   const [globalSearch, setGlobalSearch] = useState('');
-  const title = titles[path] || 'Personal Workspace';
+  const title = path.startsWith('/dashboard/employees/')
+    ? 'Employee Profile'
+    : path.startsWith('/dashboard/exit-interviews/')
+    ? 'Exit Interview Record'
+    : path.startsWith('/dashboard/interview-responses/')
+    ? 'Interview Response Record'
+    : titles[path] || 'Personal Workspace';
 
   // Apply default landing view redirection when user visits root /dashboard or legacy /dashboard/overview
   useEffect(() => {

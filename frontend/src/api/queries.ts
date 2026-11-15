@@ -53,6 +53,7 @@ export const QUERY_KEYS = {
   userProfile: ['users', 'me'] as const,
   users: ['auth', 'users'] as const,
   employees: (params?: Record<string, unknown>) => ['employees', params || {}] as const,
+  employee: (idOrUuid: string | number) => ['employees', String(idOrUuid)] as const,
   departments: ['departments'] as const,
   designations: ['designations'] as const,
   companyProfile: ['company-profile'] as const,
@@ -379,6 +380,15 @@ export function useEmployees(params: {
   });
 }
 
+export function useEmployee(idOrUuid: string | number | undefined | null) {
+  return useQuery({
+    queryKey: QUERY_KEYS.employee(idOrUuid || ''),
+    queryFn: () => apiClient<Employee>(`/employees/${idOrUuid}`),
+    enabled: Boolean(idOrUuid),
+    staleTime: 60000,
+  });
+}
+
 export function useDepartments() {
   return useQuery({
     queryKey: QUERY_KEYS.departments,
@@ -421,7 +431,7 @@ export function useUpdateEmployee() {
       employeeId,
       payload,
     }: {
-      employeeId: number;
+      employeeId: number | string;
       payload: UpdateEmployeePayload;
     }) =>
       apiClient<Employee>(`/employees/${employeeId}`, {

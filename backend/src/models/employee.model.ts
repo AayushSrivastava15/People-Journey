@@ -5,6 +5,7 @@ export type EmploymentStatus = z.infer<typeof EmploymentStatusEnum>;
 
 export const EmployeeSchema = z.object({
   employeeId: z.number(),
+  uuid: z.string().uuid().optional(),
   employeeCode: z.string(),
   firstName: z.string(),
   lastName: z.string().nullable().optional(),

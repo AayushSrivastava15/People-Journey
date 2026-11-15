@@ -14,6 +14,7 @@ import { dashboardCache } from '../utils/dashboard-cache.js';
 
 interface RawEmployeeRow {
   employee_id: number;
+  uuid?: string;
   employee_code: string;
   first_name: string;
   last_name: string | null;
@@ -64,6 +65,7 @@ function mapRowToEmployee(row: RawEmployeeRow): Employee {
 
   return {
     employeeId: Number(row.employee_id),
+    uuid: row.uuid || undefined,
     employeeCode: row.employee_code,
     firstName,
     lastName: row.last_name,
@@ -170,6 +172,7 @@ export const employeeService = {
     const dataSql = `
       SELECT 
         e.employee_id,
+        e.uuid,
         e.employee_code,
         e.first_name,
         e.last_name,
@@ -220,12 +223,17 @@ export const employeeService = {
   },
 
   /**
-   * Fetch single employee by ID, scoped to owner's workspace if ownerUserId provided.
+   * Fetch single employee by numeric ID or stable UUID, scoped to owner's workspace if ownerUserId provided.
    */
-  async getEmployeeById(employeeId: number, ownerUserId?: string): Promise<Employee | null> {
+  async getEmployeeById(idOrUuid: number | string, ownerUserId?: string): Promise<Employee | null> {
+    const isUuid = typeof idOrUuid === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrUuid.trim());
+    const idFilter = isUuid ? 'e.uuid = $1' : 'e.employee_id = $1';
+    const targetParam = isUuid ? String(idOrUuid).trim() : Number(idOrUuid);
+
     let sql = `
       SELECT 
         e.employee_id,
+        e.uuid,
         e.employee_code,
         e.first_name,
         e.last_name,
@@ -249,9 +257,9 @@ export const employeeService = {
       FROM hr_employees e
       LEFT JOIN hr_departments d ON e.department_id = d.department_id
       LEFT JOIN hr_designations des ON e.designation_id = des.designation_id
-      WHERE e.employee_id = $1 AND e.deleted_at IS NULL
+      WHERE ${idFilter} AND e.deleted_at IS NULL
     `;
-    const params: unknown[] = [employeeId];
+    const params: unknown[] = [targetParam];
 
     if (ownerUserId) {
       sql += ' AND e.owner_user_id = $2';
@@ -457,14 +465,15 @@ export const employeeService = {
   /**
    * Update permitted employee fields scoped to owner's workspace with lifecycle state validation.
    */
-  async updateEmployee(employeeId: number, data: UpdateEmployeeInput, ownerUserId: string): Promise<Employee> {
-    const existing = await this.getEmployeeById(employeeId, ownerUserId);
+  async updateEmployee(idOrUuid: number | string, data: UpdateEmployeeInput, ownerUserId: string): Promise<Employee> {
+    const existing = await this.getEmployeeById(idOrUuid, ownerUserId);
     if (!existing) {
-      throw new Error(`Employee with ID ${employeeId} not found in your workspace.`);
+      throw new Error(`Employee with identifier ${idOrUuid} not found in your workspace.`);
     }
+    const numericId = existing.employeeId;
 
     const updates: string[] = ['updated_at = CURRENT_TIMESTAMP'];
-    const params: unknown[] = [employeeId, ownerUserId];
+    const params: unknown[] = [numericId, ownerUserId];
     let paramIndex = 3;
 
     if (data.firstName !== undefined) {
@@ -584,7 +593,7 @@ export const employeeService = {
           ON CONFLICT DO NOTHING`,
           [
             ownerUserId,
-            employeeId,
+            numericId,
             lwd.slice(0, 10),
             data.exitReason || existing.exitReason || 'Scheduled departure',
             data.exitNotes || existing.exitNotes || null,
@@ -592,7 +601,7 @@ export const employeeService = {
           context
         );
       } catch (err) {
-        logger.warn({ err, employeeId }, 'Sync to hr_offboarding upon status update skipped');
+        logger.warn({ err, employeeId: numericId }, 'Sync to hr_offboarding upon status update skipped');
       }
     } else if (targetStatus === 'ACTIVE' && existing.employmentStatus === 'OFFBOARDING') {
       // Cancelled offboarding
@@ -601,21 +610,21 @@ export const employeeService = {
           `UPDATE hr_offboarding
            SET clearance_status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP
            WHERE employee_id = $1 AND owner_user_id = $2 AND clearance_status = 'PENDING'`,
-          [employeeId, ownerUserId],
+          [numericId, ownerUserId],
           context
         );
       } catch (err) {
-        logger.warn({ err, employeeId }, 'Failed to cancel offboarding record');
+        logger.warn({ err, employeeId: numericId }, 'Failed to cancel offboarding record');
       }
     }
 
-    const updated = (await this.getEmployeeById(employeeId, ownerUserId))!;
+    const updated = (await this.getEmployeeById(numericId, ownerUserId))!;
 
     await auditService.log({
       userId: ownerUserId,
       actionType: 'UPDATE_EMPLOYEE',
       entityType: 'HR_EMPLOYEES',
-      entityId: String(employeeId),
+      entityId: String(numericId),
       details: { updatedFields: Object.keys(data), previousStatus: existing.employmentStatus, newStatus: targetStatus },
     });
 
@@ -630,7 +639,7 @@ export const employeeService = {
    * 2. Sets hr_employees.employment_status = 'OFFBOARDING' and exit_date = plannedExitDate
    * 3. Logs action in hr_audit_logs
    */
-  async offboardEmployee(employeeId: number, data: OffboardEmployeeInput, ownerUserId: string): Promise<{
+  async offboardEmployee(idOrUuid: number | string, data: OffboardEmployeeInput, ownerUserId: string): Promise<{
     employee: Employee;
     offboardingId: number;
   }> {
@@ -641,29 +650,38 @@ export const employeeService = {
 
     const noticeDate = data.noticeDate ? data.noticeDate.slice(0, 10) : new Date().toISOString().slice(0, 10);
 
+    const isUuid = typeof idOrUuid === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrUuid.trim());
+    const idFilter = isUuid ? 'uuid = $1' : 'employee_id = $1';
+    const targetParam = isUuid ? String(idOrUuid).trim() : Number(idOrUuid);
+
+    let resolvedNumericId = 0;
+
     const offboardingId = await withTransaction(async (client) => {
       // 1. Verify employee exists in owner workspace and can be offboarded
       const empRes = await client.query<RawEmployeeRow>(
-        `SELECT employee_id, employee_code, employment_status, first_name, last_name
+        `SELECT employee_id, uuid, employee_code, employment_status, first_name, last_name
          FROM hr_employees
-         WHERE employee_id = $1 AND owner_user_id = $2`,
-        [employeeId, ownerUserId]
+         WHERE ${idFilter} AND owner_user_id = $2`,
+        [targetParam, ownerUserId]
       );
       const emp = empRes.rows?.[0];
       if (!emp) {
-        throw new Error(`Employee with ID ${employeeId} not found in your workspace.`);
+        throw new Error(`Employee with ID ${idOrUuid} not found in your workspace.`);
       }
 
       if (emp.employment_status === 'EXITED') {
         throw new Error('Cannot schedule offboarding for an employee who has already exited.');
       }
 
+      const numericId = emp.employee_id;
+      resolvedNumericId = numericId;
+
       // Check for existing pending offboarding in owner workspace
       const existingOffboardRes = await client.query<{ offboarding_id: number }>(
         `SELECT offboarding_id
          FROM hr_offboarding
          WHERE employee_id = $1 AND owner_user_id = $2 AND clearance_status != 'COMPLETED'`,
-        [employeeId, ownerUserId]
+        [numericId, ownerUserId]
       );
       if ((existingOffboardRes.rows || []).length > 0) {
         throw new Error('An active offboarding workflow already exists for this employee in your workspace.');
@@ -687,7 +705,7 @@ export const employeeService = {
 
       const offboardResult = await client.query<{ offboarding_id: number }>(offboardSql, [
         ownerUserId,
-        employeeId,
+        numericId,
         noticeDate,
         plannedExitDate.slice(0, 10),
         data.exitReason || 'Scheduled transition',
@@ -705,7 +723,7 @@ export const employeeService = {
            exit_date = $1,
            updated_at = CURRENT_TIMESTAMP
          WHERE employee_id = $2 AND owner_user_id = $3`,
-        [plannedExitDate.slice(0, 10), employeeId, ownerUserId]
+        [plannedExitDate.slice(0, 10), numericId, ownerUserId]
       );
 
       // 4. Record audit log
@@ -716,7 +734,7 @@ export const employeeService = {
           entityType: 'HR_OFFBOARDING',
           entityId: String(generatedId),
           details: {
-            employeeId,
+            employeeId: numericId,
             plannedExitDate,
             reason: data.exitReason,
           },
@@ -724,12 +742,12 @@ export const employeeService = {
         client
       );
 
-      logger.info({ employeeId, offboardingId: generatedId, plannedExitDate, ownerUserId }, 'Offboarding initiated in personal workspace');
+      logger.info({ employeeId: numericId, offboardingId: generatedId, plannedExitDate, ownerUserId }, 'Offboarding initiated in personal workspace');
       return generatedId;
     }, { userId: ownerUserId, role: 'user' });
 
     // 5. Fetch updated employee record after transaction has successfully committed
-    const updated = (await this.getEmployeeById(employeeId, ownerUserId))!;
+    const updated = (await this.getEmployeeById(resolvedNumericId, ownerUserId))!;
     await dashboardCache.invalidate(ownerUserId);
     return { employee: updated, offboardingId };
   },
@@ -741,15 +759,17 @@ export const employeeService = {
    * - Records immutable action in hr_audit_logs.
    * - Invalidates dashboard caches.
    */
-  async deleteEmployee(employeeId: number, ownerUserId: string): Promise<boolean> {
+  async deleteEmployee(idOrUuid: number | string, ownerUserId: string): Promise<boolean> {
     if (!ownerUserId) {
       throw new Error('Owner user ID is required to delete an employee.');
     }
 
-    const existing = await this.getEmployeeById(employeeId, ownerUserId);
+    const existing = await this.getEmployeeById(idOrUuid, ownerUserId);
     if (!existing) {
       return false;
     }
+
+    const numericId = existing.employeeId;
 
     const sql = `
       UPDATE hr_employees
@@ -758,7 +778,7 @@ export const employeeService = {
       RETURNING employee_id;
     `;
     const context = { userId: ownerUserId, role: 'user' };
-    const result = await executeSql<{ employee_id: number }>(sql, [employeeId, ownerUserId], context);
+    const result = await executeSql<{ employee_id: number }>(sql, [numericId, ownerUserId], context);
 
     if ((result.rows || []).length === 0) {
       return false;
@@ -768,8 +788,9 @@ export const employeeService = {
       userId: ownerUserId,
       actionType: 'DELETE_EMPLOYEE',
       entityType: 'HR_EMPLOYEES',
-      entityId: String(employeeId),
+      entityId: String(numericId),
       details: {
+        uuid: existing.uuid,
         employeeCode: existing.employeeCode,
         name: existing.name,
         employmentStatus: existing.employmentStatus,
@@ -777,7 +798,7 @@ export const employeeService = {
     });
 
     await dashboardCache.invalidate(ownerUserId);
-    logger.info({ employeeId, employeeCode: existing.employeeCode, ownerUserId }, 'Employee soft-deleted from workspace');
+    logger.info({ employeeId: numericId, employeeCode: existing.employeeCode, ownerUserId }, 'Employee soft-deleted from workspace');
     return true;
   },
 };

@@ -22,6 +22,7 @@ export interface AppUser {
 
 export interface Employee {
   employeeId: number;
+  uuid?: string;
   employeeCode: string;
   firstName: string;
   lastName: string | null;

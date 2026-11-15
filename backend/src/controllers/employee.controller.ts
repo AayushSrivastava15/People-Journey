@@ -8,6 +8,21 @@ import {
 } from '../models/employee.model.js';
 import { logger } from '../utils/logger.js';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function parseEmployeeIdentifier(raw: unknown): number | string | null {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const trimmed = typeof value === 'string' ? value.trim() : String(value || '').trim();
+  if (UUID_REGEX.test(trimmed)) {
+    return trimmed;
+  }
+  const numeric = Number(trimmed);
+  if (!isNaN(numeric) && Number.isInteger(numeric) && numeric > 0) {
+    return numeric;
+  }
+  return null;
+}
+
 export async function getEmployees(req: Request, res: Response): Promise<void> {
   const userId = req.user?.id;
   if (!userId) {
@@ -63,26 +78,26 @@ export async function getEmployeeById(req: Request, res: Response): Promise<void
     return;
   }
 
-  const employeeId = Number(req.params.id);
-  if (isNaN(employeeId)) {
+  const employeeIdentifier = parseEmployeeIdentifier(req.params.id);
+  if (employeeIdentifier === null) {
     res.status(400).json({
       success: false,
       error: {
         code: 'VALIDATION_ERROR',
-        message: 'Invalid employee ID parameter.',
+        message: 'Invalid employee ID or UUID parameter.',
       },
     });
     return;
   }
 
   try {
-    const employee = await employeeService.getEmployeeById(employeeId, userId);
+    const employee = await employeeService.getEmployeeById(employeeIdentifier, userId);
     if (!employee) {
       res.status(404).json({
         success: false,
         error: {
           code: 'NOT_FOUND',
-          message: `Employee with ID ${employeeId} not found in your workspace.`,
+          message: `Employee with identifier ${req.params.id} not found in your workspace.`,
         },
       });
       return;
@@ -166,13 +181,13 @@ export async function updateEmployee(req: Request, res: Response): Promise<void>
     return;
   }
 
-  const employeeId = Number(req.params.id);
-  if (isNaN(employeeId)) {
+  const employeeIdentifier = parseEmployeeIdentifier(req.params.id);
+  if (employeeIdentifier === null) {
     res.status(400).json({
       success: false,
       error: {
         code: 'VALIDATION_ERROR',
-        message: 'Invalid employee ID parameter.',
+        message: 'Invalid employee ID or UUID parameter.',
       },
     });
     return;
@@ -192,7 +207,7 @@ export async function updateEmployee(req: Request, res: Response): Promise<void>
   }
 
   try {
-    const updated = await employeeService.updateEmployee(employeeId, parseResult.data, userId);
+    const updated = await employeeService.updateEmployee(employeeIdentifier, parseResult.data, userId);
     res.status(200).json(updated);
   } catch (err) {
     const error = err as Error;
@@ -230,13 +245,13 @@ export async function offboardEmployee(req: Request, res: Response): Promise<voi
     return;
   }
 
-  const employeeId = Number(req.params.id);
-  if (isNaN(employeeId)) {
+  const employeeIdentifier = parseEmployeeIdentifier(req.params.id);
+  if (employeeIdentifier === null) {
     res.status(400).json({
       success: false,
       error: {
         code: 'VALIDATION_ERROR',
-        message: 'Invalid employee ID parameter.',
+        message: 'Invalid employee ID or UUID parameter.',
       },
     });
     return;
@@ -256,7 +271,7 @@ export async function offboardEmployee(req: Request, res: Response): Promise<voi
   }
 
   try {
-    const result = await employeeService.offboardEmployee(employeeId, parseResult.data, userId);
+    const result = await employeeService.offboardEmployee(employeeIdentifier, parseResult.data, userId);
     res.status(200).json(result);
   } catch (err) {
     const error = err as Error;
@@ -304,26 +319,26 @@ export async function deleteEmployee(req: Request, res: Response): Promise<void>
     return;
   }
 
-  const employeeId = Number(req.params.id);
-  if (isNaN(employeeId)) {
+  const employeeIdentifier = parseEmployeeIdentifier(req.params.id);
+  if (employeeIdentifier === null) {
     res.status(400).json({
       success: false,
       error: {
         code: 'VALIDATION_ERROR',
-        message: 'Invalid employee ID parameter.',
+        message: 'Invalid employee ID or UUID parameter.',
       },
     });
     return;
   }
 
   try {
-    const success = await employeeService.deleteEmployee(employeeId, userId);
+    const success = await employeeService.deleteEmployee(employeeIdentifier, userId);
     if (!success) {
       res.status(404).json({
         success: false,
         error: {
           code: 'NOT_FOUND',
-          message: `Employee with ID ${employeeId} not found in your workspace.`,
+          message: `Employee with identifier ${req.params.id} not found in your workspace.`,
         },
       });
       return;
@@ -332,11 +347,11 @@ export async function deleteEmployee(req: Request, res: Response): Promise<void>
     res.status(200).json({
       success: true,
       message: 'Employee successfully removed from active workspace.',
-      employeeId,
+      employeeIdentifier,
     });
   } catch (err) {
     const error = err as Error;
-    logger.error({ message: error.message, employeeId }, 'Failed to delete employee');
+    logger.error({ message: error.message, employeeIdentifier }, 'Failed to delete employee');
     res.status(500).json({
       success: false,
       error: {

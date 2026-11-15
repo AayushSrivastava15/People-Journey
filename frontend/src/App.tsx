@@ -123,6 +123,7 @@ function Router() {
         <Route path="/dashboard/overview" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/settings" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/employees" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/employees/:id" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/add-employee" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/schedule-offboarding" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/onboarding" component={ProtectedWorkspaceRoute} />
@@ -132,7 +133,11 @@ function Router() {
         <Route path="/dashboard/templates" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/notification-history" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/exit-interviews" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/exit-interviews/:id" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/interview-responses" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/interview-responses/:id" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/imports" component={ProtectedWorkspaceRoute} />
+        <Route path="/dashboard/imports/:id" component={ProtectedWorkspaceRoute} />
         <Route path="/e/:code" component={ShortLinkRoute} />
         <Route path="/e/:code/" component={ShortLinkRoute} />
         <Route component={NotFound} />
