@@ -281,7 +281,7 @@ function Shell({
 
   const handleSignOut = async () => {
     await signOut();
-    onNavigate('/login');
+    onNavigate('/');
   };
 
   const displayName = appUser?.displayName || user?.displayName || user?.email?.split('@')[0] || 'Workspace User';
@@ -1533,6 +1533,7 @@ function ResponsesPage() {
 }
 
 function SettingsPage() {
+  const [, setLocation] = useLocation();
   const { appUser, user, signOut, updateLocalPreferences } = useAuth();
   const updateProfileMutation = useUpdateUserProfile();
   const { toast } = useToast();
@@ -1864,7 +1865,10 @@ function SettingsPage() {
             <button
               type="button"
               className="secondary-action"
-              onClick={signOut}
+              onClick={async () => {
+                await signOut();
+                setLocation('/');
+              }}
               style={{ width: '100%', justifyContent: 'center' }}
             >
               <LogOut size={14} /> Sign out

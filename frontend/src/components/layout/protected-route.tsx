@@ -175,10 +175,10 @@ export function ProtectedRoute({
   const { user, loading, authorizationChecking, isAuthorized, authError, signOut } = useAuth();
   const [, setLocation] = useLocation();
 
-  // Redirect unauthenticated visitors to login
+  // Redirect unauthenticated visitors and logged-out users to landing page
   useEffect(() => {
     if (!loading && !user) {
-      setLocation("/login");
+      setLocation("/");
     }
   }, [loading, user, setLocation]);
 

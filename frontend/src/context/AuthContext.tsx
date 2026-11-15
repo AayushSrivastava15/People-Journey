@@ -20,6 +20,7 @@ import {
   syncUserWithBackend,
 } from "../services/authService";
 import { broadcastLogout, subscribeToAuthEvents } from "../services/auth-sync";
+import { navigate } from "wouter/use-browser-location";
 import { buildApiUrl } from "../api/client";
 import type { AppUser, AppRole } from "../types/api";
 
@@ -125,6 +126,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setAuthRole(null);
       setAuthError(null);
       setAuthorizationChecking(false);
+      if (typeof window !== "undefined") {
+        navigate("/", { replace: true });
+      }
     }
   }, []);
 
@@ -215,6 +219,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setAuthError(null);
       setAuthorizationChecking(false);
       logout().catch(() => {});
+      if (typeof window !== "undefined") {
+        navigate("/", { replace: true });
+      }
     });
     return unsubscribeSync;
   }, []);

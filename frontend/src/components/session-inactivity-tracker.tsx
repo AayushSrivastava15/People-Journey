@@ -130,7 +130,7 @@ export function SessionInactivityTracker() {
     } catch {
       // Fallback
     }
-    setLocation('/login');
+    setLocation('/');
   };
 
   if (!user || !showWarning) {
