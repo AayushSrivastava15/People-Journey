@@ -37,6 +37,8 @@ export interface ValidatedImportRow {
   isHistorical?: boolean;
   isThirdParty?: boolean;
   vendor?: string;
+  needsAttention?: boolean;
+  attentionReason?: string;
 
   // Raw Excel status and human-readable lifecycle tracking
   rawExcelStatus?: string;

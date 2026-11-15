@@ -1469,6 +1469,8 @@ export class SmartImportService {
         isHistorical: row.isHistorical,
         isThirdParty,
         vendor: row.vendor,
+        needsAttention: row.needsAttention,
+        attentionReason: row.attentionReason,
         rawExcelStatus: row.rawExcelStatus || '(Not specified)',
         lifecycleReason: row.lifecycleReason || 'Classified from source records.',
         supportingDates: row.supportingDates,

@@ -698,6 +698,8 @@ export interface ValidatedImportRow {
   isHistorical?: boolean;
   isThirdParty?: boolean;
   vendor?: string;
+  needsAttention?: boolean;
+  attentionReason?: string;
   rawExcelStatus?: string;
   lifecycleReason?: string;
   supportingDates?: {
