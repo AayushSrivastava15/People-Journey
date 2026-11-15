@@ -7,6 +7,7 @@ import type { TenantContext } from '../config/database.js';
 import { logger } from '../utils/logger.js';
 import { authCache } from '../utils/auth-cache.js';
 import { env } from '../config/env.js';
+import { getClearSessionCookieOptions } from '../utils/cookie.js';
 
 export const invalidateUserAuthCache = (identifier?: string) => authCache.invalidate(identifier);
 
@@ -52,12 +53,7 @@ export async function authenticateToken(
     } catch (err) {
       const error = err as Error;
       logger.warn({ message: error.message }, 'Firebase session cookie verification failed');
-      res.clearCookie('pj_session', {
-        httpOnly: true,
-        secure: env.NODE_ENV === 'production',
-        sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
-        path: '/',
-      });
+      res.clearCookie('pj_session', getClearSessionCookieOptions());
       res.status(401).json({
         success: false,
         authorized: false,

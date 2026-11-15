@@ -113,9 +113,10 @@ export async function resetPassword(email: string): Promise<void> {
 
 /**
  * Synchronize verified Firebase user with Express backend and PostgreSQL app_users table.
- * Establishes a secure HttpOnly 7-day session cookie and returns authoritative PostgreSQL profile.
+ * Establishes a secure HttpOnly session cookie (7-day persistent when remember is true,
+ * or browser session when false) and returns authoritative PostgreSQL profile.
  */
-export async function syncUserWithBackend(token: string): Promise<AppUser> {
+export async function syncUserWithBackend(token: string, remember = true): Promise<AppUser> {
   const url = buildApiUrl('/auth/google');
   const response = await fetch(url, {
     method: 'POST',
@@ -124,7 +125,7 @@ export async function syncUserWithBackend(token: string): Promise<AppUser> {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ idToken: token }),
+    body: JSON.stringify({ idToken: token, remember }),
   });
 
   if (!response.ok) {

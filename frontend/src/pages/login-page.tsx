@@ -84,10 +84,10 @@ export function LoginPage() {
 
   // If already authenticated, automatically navigate to default landing destination
   useEffect(() => {
-    if (!loading && user) {
+    if (!loading && (user || appUser)) {
       setLocation(getDestination());
     }
-  }, [user, loading, setLocation, appUser]);
+  }, [user, appUser, loading, setLocation]);
 
   // While restoring session or checking auth, show the calm loading screen
   if (loading) {
@@ -102,7 +102,7 @@ export function LoginPage() {
 
     try {
       await applyAuthPersistence(rememberDevice);
-      await contextSignInWithGoogle();
+      await contextSignInWithGoogle(rememberDevice);
       setLocation(getDestination());
     } catch (err: unknown) {
       setErrorMessage(mapAuthError(err));
@@ -126,7 +126,7 @@ export function LoginPage() {
     try {
       await applyAuthPersistence(rememberDevice);
       const signedInUser = await signInWithEmail(email, password);
-      await verifyAuthorization(signedInUser);
+      await verifyAuthorization(signedInUser, rememberDevice);
       setLocation(getDestination());
     } catch (err: unknown) {
       setErrorMessage(mapAuthError(err));
@@ -284,6 +284,51 @@ export function LoginPage() {
         {/* SIGN IN VIEW */}
         {mode === "signin" && (
           <div className="login-form-container">
+            {/* Remember Me Option */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: "12px",
+                padding: "0 2px",
+              }}
+            >
+              <label
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  cursor: "pointer",
+                  fontSize: "0.83rem",
+                  color: "#49373f",
+                  userSelect: "none",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={rememberDevice}
+                  onChange={(e) => setRememberDevice(e.target.checked)}
+                  style={{
+                    width: "16px",
+                    height: "16px",
+                    accentColor: "#944b63",
+                    cursor: "pointer",
+                  }}
+                />
+                <span>Remember this device</span>
+              </label>
+              <span
+                style={{
+                  fontSize: "0.72rem",
+                  color: "#8c7781",
+                }}
+                title="Your session automatically expires after 20 minutes of continuous inactivity"
+              >
+                20m inactivity lock
+              </span>
+            </div>
+
             {/* Google Sign In Button */}
             <button
               type="button"
@@ -366,54 +411,11 @@ export function LoginPage() {
               </div>
 
               {/* Remember device checkbox */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  margin: "10px 0 16px 0",
-                }}
-              >
-                <label
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    cursor: "pointer",
-                    fontSize: "0.83rem",
-                    color: "#49373f",
-                    userSelect: "none",
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={rememberDevice}
-                    onChange={(e) => setRememberDevice(e.target.checked)}
-                    style={{
-                      width: "16px",
-                      height: "16px",
-                      accentColor: "#944b63",
-                      cursor: "pointer",
-                    }}
-                  />
-                  <span>Remember this device</span>
-                </label>
-                <span
-                  style={{
-                    fontSize: "0.72rem",
-                    color: "#8c7781",
-                  }}
-                  title="Your session automatically expires after 20 minutes of continuous inactivity"
-                >
-                  20m inactivity lock
-                </span>
-              </div>
-
               <button
                 type="submit"
                 disabled={isSubmitting || isGoogleSubmitting}
                 className="primary-action login-submit-btn"
-                style={{ marginTop: "6px" }}
+                style={{ marginTop: "14px" }}
               >
                 {isSubmitting ? (
                   <>

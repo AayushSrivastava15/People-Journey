@@ -1,10 +1,14 @@
 /**
  * Cross-tab authentication synchronization using BroadcastChannel and storage events.
- * Guarantees that when a user logs out in one browser tab, all other tabs immediately terminate
- * their session and redirect to the login screen.
+ * Guarantees that:
+ * 1. When a user logs in in one tab, other open tabs immediately recognize the authenticated
+ *    session and transition without requiring a manual page refresh.
+ * 2. When a user logs out in one tab, all other tabs immediately terminate their session,
+ *    clear cached state, and redirect to the landing page.
  */
 const CHANNEL_NAME = 'pj_auth_sync';
 const LOGOUT_STORAGE_KEY = 'pj_logout_timestamp';
+const LOGIN_STORAGE_KEY = 'pj_login_timestamp';
 
 let channel: BroadcastChannel | null = null;
 if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
@@ -32,18 +36,49 @@ export function broadcastLogout(): void {
   }
 }
 
-export function subscribeToAuthEvents(onLogout: () => void): () => void {
+export function broadcastLogin(): void {
+  if (channel) {
+    try {
+      channel.postMessage({ type: 'LOGIN', timestamp: Date.now() });
+    } catch {
+      // ignore
+    }
+  }
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(LOGIN_STORAGE_KEY, String(Date.now()));
+    } catch {
+      // ignore
+    }
+  }
+}
+
+export interface AuthEventHandlers {
+  onLogout: () => void;
+  onLogin?: () => void;
+}
+
+export function subscribeToAuthEvents(
+  handler: (() => void) | AuthEventHandlers
+): () => void {
   if (typeof window === 'undefined') return () => {};
+
+  const onLogout = typeof handler === 'function' ? handler : handler.onLogout;
+  const onLogin = typeof handler === 'object' ? handler.onLogin : undefined;
 
   const handleMessage = (event: MessageEvent) => {
     if (event.data?.type === 'LOGOUT') {
       onLogout();
+    } else if (event.data?.type === 'LOGIN' && onLogin) {
+      onLogin();
     }
   };
 
   const handleStorage = (event: StorageEvent) => {
     if (event.key === LOGOUT_STORAGE_KEY && event.newValue) {
       onLogout();
+    } else if (event.key === LOGIN_STORAGE_KEY && event.newValue && onLogin) {
+      onLogin();
     }
   };
 

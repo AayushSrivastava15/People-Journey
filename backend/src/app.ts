@@ -2,6 +2,7 @@ import express, { type Express } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import { csrfProtection } from './middleware/csrf.middleware.js';
 import { requestLogger } from './middleware/request-logger.js';
 import { errorHandler } from './middleware/error-handler.js';
 import {
@@ -66,6 +67,7 @@ app.use(
 );
 
 app.use(cookieParser());
+app.use(csrfProtection);
 
 // 4. Root Health Probe Aliases (Render, Kubernetes, cloud monitors)
 // Mounted BEFORE rate limiting so automated probes are NEVER throttled or locked out

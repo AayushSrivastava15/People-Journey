@@ -5,6 +5,11 @@ import { getFirebaseAuth } from '../config/firebase.js';
 import { logger } from '../utils/logger.js';
 import { env } from '../config/env.js';
 import { invalidateUserAuthCache } from '../middleware/auth.middleware.js';
+import {
+  getSessionCookieOptions,
+  getClearSessionCookieOptions,
+  SEVEN_DAYS_MS,
+} from '../utils/cookie.js';
 
 /**
  * Retrieve current authenticated session and PostgreSQL user profile.
@@ -97,17 +102,11 @@ export async function googleLogin(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Generate 7-day Firebase session cookie
-    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    // Generate Firebase session cookie (7-day persistent or browser-session based on remember preference)
+    const remember = req.body?.remember !== false;
     try {
       const sessionCookie = await auth.createSessionCookie(token, { expiresIn: SEVEN_DAYS_MS });
-      res.cookie('pj_session', sessionCookie, {
-        maxAge: SEVEN_DAYS_MS,
-        httpOnly: true,
-        secure: env.NODE_ENV === 'production',
-        sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
-        path: '/',
-      });
+      res.cookie('pj_session', sessionCookie, getSessionCookieOptions(remember));
     } catch (cookieErr) {
       logger.warn({ message: (cookieErr as Error).message }, 'Failed to create Firebase session cookie; continuing with token');
     }
@@ -226,12 +225,7 @@ export async function logout(req: Request, res: Response): Promise<void> {
     }
   }
 
-  res.clearCookie('pj_session', {
-    httpOnly: true,
-    secure: env.NODE_ENV === 'production',
-    sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
-    path: '/',
-  });
+  res.clearCookie('pj_session', getClearSessionCookieOptions());
 
   res.status(200).json({
     success: true,

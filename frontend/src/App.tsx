@@ -1,5 +1,6 @@
 import { useEffect, lazy, Suspense, type ReactNode } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from '@/api/query-client';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -10,17 +11,8 @@ import { CookieConsentBanner } from '@/components/cookie-consent-banner';
 import { SessionInactivityTracker } from '@/components/session-inactivity-tracker';
 import { useAuth } from '@/context';
 import { DashboardShellSkeleton } from '@/components/dashboard-skeletons';
+import { getStoredPreferences, getDefaultLandingPath } from '@/utils/workspace-preferences';
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 60 * 1000, // 60 seconds
-      gcTime: 5 * 60 * 1000, // 5 minutes
-      refetchOnWindowFocus: false, // Prevent redundant background fetches
-      retry: 1,
-    },
-  },
-});
 
 const LandingPage = lazy(async () => {
   const module = await import('@/pages/landing-page');
@@ -51,6 +43,18 @@ function RouteFallback({ label = 'Loading…' }: { label?: string }) {
 }
 
 function LandingRoute() {
+  const [, setLocation] = useLocation();
+  const { user, appUser, loading } = useAuth();
+
+  useEffect(() => {
+    if (!loading && (user || appUser)) {
+      const stored = getStoredPreferences();
+      const defaultView = (appUser?.preferences?.defaultView as string) || stored.defaultView;
+      const target = getDefaultLandingPath(defaultView);
+      setLocation(target, { replace: true });
+    }
+  }, [user, appUser, loading, setLocation]);
+
   return (
     <Suspense fallback={<RouteFallback label="Loading People Journey…" />}>
       <LandingPage />
@@ -85,17 +89,17 @@ function ShortLinkRoute() {
 
 function IndexHtmlRedirect() {
   const [, setLocation] = useLocation();
-  const { user, loading } = useAuth();
+  const { user, appUser, loading } = useAuth();
 
   useEffect(() => {
     if (!loading) {
-      if (user) {
+      if (user || appUser) {
         setLocation('/dashboard', { replace: true });
       } else {
         setLocation('/', { replace: true });
       }
     }
-  }, [user, loading, setLocation]);
+  }, [user, appUser, loading, setLocation]);
 
   return <RouteFallback label="Opening workspace…" />;
 }

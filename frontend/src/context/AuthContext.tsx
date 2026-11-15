@@ -19,7 +19,8 @@ import {
   handleRedirectResult,
   syncUserWithBackend,
 } from "../services/authService";
-import { broadcastLogout, subscribeToAuthEvents } from "../services/auth-sync";
+import { broadcastLogout, broadcastLogin, subscribeToAuthEvents } from "../services/auth-sync";
+import { queryClient } from "../api/query-client";
 import { navigate } from "wouter/use-browser-location";
 import { buildApiUrl } from "../api/client";
 import type { AppUser, AppRole } from "../types/api";
@@ -34,9 +35,9 @@ export interface AuthContextValue {
   authError: string | null;
   isHr: boolean;
   isAdmin: boolean;
-  signInWithGoogle: () => Promise<User>;
+  signInWithGoogle: (remember?: boolean) => Promise<User>;
   getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
-  verifyAuthorization: (targetUser?: User | null) => Promise<boolean>;
+  verifyAuthorization: (targetUser?: User | null, remember?: boolean) => Promise<boolean>;
   refreshSession: () => Promise<boolean>;
   updateLocalPreferences: (prefs: Record<string, unknown>) => void;
   signOut: () => Promise<void>;
@@ -57,7 +58,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [authRole, setAuthRole] = useState<AppRole | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  const verifyAuthorization = useCallback(async (targetUser?: User | null): Promise<boolean> => {
+  const verifyAuthorization = useCallback(async (targetUser?: User | null, remember = true): Promise<boolean> => {
     const currentUser = targetUser !== undefined ? targetUser : auth.currentUser;
 
     if (!currentUser) {
@@ -91,7 +92,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     try {
       const token = await currentUser.getIdToken();
       // Synchronize with PostgreSQL via Express backend & establish session cookie
-      const profile = await syncUserWithBackend(token);
+      const profile = await syncUserWithBackend(token, remember);
 
       setAppUser(profile);
       setIsAuthorized(true);
@@ -120,6 +121,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       await logout();
       broadcastLogout();
     } finally {
+      queryClient.clear();
       setUser(null);
       setAppUser(null);
       setIsAuthorized(null);
@@ -133,13 +135,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
 
-  const handleSignInWithGoogle = useCallback(async () => {
+  const handleSignInWithGoogle = useCallback(async (remember = true) => {
     setAuthorizationChecking(true);
     setAuthError(null);
     try {
       const signedInUser = await authSignInWithGoogle();
       setUser(signedInUser);
-      await verifyAuthorization(signedInUser);
+      await verifyAuthorization(signedInUser, remember);
+      broadcastLogin();
       return signedInUser;
     } catch (error) {
       setAuthorizationChecking(false);
@@ -184,10 +187,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
           if (currentUser) {
             await verifyAuthorization(currentUser);
           } else {
-            setAppUser(null);
-            setIsAuthorized(null);
-            setAuthRole(null);
-            setAuthorizationChecking(false);
+            // Check if active backend HttpOnly session cookie exists (e.g. after computer restart)
+            const hasSession = await verifyAuthorization(null);
+            if (!hasSession) {
+              setAppUser(null);
+              setIsAuthorized(null);
+              setAuthRole(null);
+              setAuthorizationChecking(false);
+            }
           }
           setLoading(false);
         });
@@ -209,22 +216,29 @@ export function AuthProvider({ children }: AuthProviderProps) {
     };
   }, [verifyAuthorization]);
 
-  // Cross-tab logout listener: synchronously cleans up state if user logs out from another tab
+  // Cross-tab sync listener: coordinates login & logout events across tabs in same browser profile
   useEffect(() => {
-    const unsubscribeSync = subscribeToAuthEvents(() => {
-      setUser(null);
-      setAppUser(null);
-      setIsAuthorized(null);
-      setAuthRole(null);
-      setAuthError(null);
-      setAuthorizationChecking(false);
-      logout().catch(() => {});
-      if (typeof window !== "undefined") {
-        navigate("/", { replace: true });
-      }
+    const unsubscribeSync = subscribeToAuthEvents({
+      onLogout: () => {
+        queryClient.clear();
+        setUser(null);
+        setAppUser(null);
+        setIsAuthorized(null);
+        setAuthRole(null);
+        setAuthError(null);
+        setAuthorizationChecking(false);
+        logout().catch(() => {});
+        if (typeof window !== "undefined") {
+          navigate("/", { replace: true });
+        }
+      },
+      onLogin: () => {
+        // Another tab logged in: re-evaluate session and restore state
+        verifyAuthorization(auth.currentUser);
+      },
     });
     return unsubscribeSync;
-  }, []);
+  }, [verifyAuthorization]);
 
 
   const isHr = false;

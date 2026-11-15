@@ -172,23 +172,25 @@ export function ProtectedRoute({
   component: Component,
   children,
 }: ProtectedRouteProps) {
-  const { user, loading, authorizationChecking, isAuthorized, authError, signOut } = useAuth();
+  const { user, appUser, loading, authorizationChecking, isAuthorized, authError, signOut } = useAuth();
   const [, setLocation] = useLocation();
+
+  const isAuthenticated = Boolean(user || appUser);
 
   // Redirect unauthenticated visitors and logged-out users to landing page
   useEffect(() => {
-    if (!loading && !user) {
+    if (!loading && !isAuthenticated) {
       setLocation("/");
     }
-  }, [loading, user, setLocation]);
+  }, [loading, isAuthenticated, setLocation]);
 
   // Initial Firebase session restoration or token verification
-  if (loading || (user && authorizationChecking && isAuthorized === null)) {
+  if (loading || (isAuthenticated && authorizationChecking && isAuthorized === null)) {
     return <AuthLoadingScreen message="Restoring your secure session…" />;
   }
 
   // Not signed in
-  if (!user) {
+  if (!isAuthenticated) {
     return null;
   }
 
@@ -196,7 +198,7 @@ export function ProtectedRoute({
   if (isAuthorized === false) {
     return (
       <AccessDeniedScreen
-        email={user.email}
+        email={user?.email || appUser?.email || null}
         reason={authError || "Your account has not been authorized or has been deactivated."}
         onSignOut={signOut}
       />

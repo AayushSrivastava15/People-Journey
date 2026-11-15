@@ -5,6 +5,7 @@
  */
 
 import { auth } from '../lib/firebase';
+import { broadcastLogout } from '../services/auth-sync';
 
 /**
  * Normalizes the API base URL to ensure:
@@ -99,6 +100,10 @@ export async function apiClient<T>(endpoint: string, options: RequestInit = {}):
         } catch {
           // Fallback to status text
         }
+      }
+
+      if (response.status === 401 && !url.endsWith('/auth/session')) {
+        broadcastLogout();
       }
 
       throw new ApiError(errorMessage || `Request failed with status ${response.status}`, response.status, errorData);
