@@ -24,6 +24,19 @@ app.set('trust proxy', Number(env.TRUST_PROXY) || (env.TRUST_PROXY === 'true' ? 
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+    hsts: {
+      maxAge: 31536000,
+      includeSubDomains: true,
+      preload: true,
+    },
+    frameguard: {
+      action: 'sameorigin',
+    },
+    noSniff: true,
+    referrerPolicy: {
+      policy: 'strict-origin-when-cross-origin',
+    },
   })
 );
 
@@ -68,7 +81,7 @@ app.get('/e/:code', publicExitLimiter, (req, res, next) => {
   if (req.accepts(['html', 'json']) === 'html' || !req.headers.accept?.includes('application/json')) {
     const frontendBase = (
       env.FRONTEND_URL ||
-      (env.NODE_ENV === 'production' ? 'https://people-journey-frontend.onrender.com' : 'http://localhost:3000')
+      (env.NODE_ENV === 'production' ? 'https://people-journey-hr.onrender.com' : 'http://localhost:3000')
     ).split(',')[0].trim().replace(/\/$/, '');
     return res.redirect(302, `${frontendBase}/e/${code}`);
   }

@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import { strictEqual, ok } from 'node:assert';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -7,6 +7,7 @@ import type { Request, Response } from 'express';
 import type { AppUser } from '../../src/models/user.model.js';
 import { AppRole, UpdateUserProfileSchema } from '../../src/models/user.model.js';
 import app from '../../src/app.js';
+import { closePool } from '../../src/config/database.js';
 
 interface MockResponse extends Partial<Response> {
   statusCode?: number;
@@ -174,7 +175,52 @@ describe('Authentication Express Route Registration & Prefix Contract', () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it('should verify production security headers are set by Helmet and middleware', async () => {
+    const server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/healthz`);
+      strictEqual(response.status, 200);
+      strictEqual(response.headers.get('x-content-type-options'), 'nosniff');
+      strictEqual(response.headers.get('x-frame-options'), 'SAMEORIGIN');
+      strictEqual(response.headers.get('cross-origin-opener-policy'), 'same-origin-allow-popups');
+      strictEqual(response.headers.get('referrer-policy'), 'strict-origin-when-cross-origin');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('should return 401 SESSION_EXPIRED and clear cookie when invalid session cookie is provided', async () => {
+    const server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/auth/session`, {
+        headers: {
+          Cookie: 'pj_session=invalid-malformed-cookie-token',
+        },
+      });
+      strictEqual(response.status, 401);
+      const data = await response.json() as { error: { code: string } };
+      strictEqual(data.error.code, 'SESSION_EXPIRED');
+      // Verify Set-Cookie clears pj_session
+      const setCookie = response.headers.get('set-cookie');
+      ok(setCookie && setCookie.includes('pj_session=;'));
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  after(async () => {
+    await closePool();
+  });
 });
+
+
 
 
 

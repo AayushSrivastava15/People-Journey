@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useLocation } from 'wouter';
 import { CheckCircle2, ChevronRight, Sparkles, Building2, Palette, UserCheck, FileText, ArrowRight, Eye, Edit3, X } from 'lucide-react';
 import { useCompanyOnboardingStatus } from '@/api/queries';
 
 const ONBOARDING_BANNER_DISMISSED_KEY = 'pj_onboarding_banner_dismissed';
+const ONBOARDING_SETUP_COMPLETED_KEY = 'pj_onboarding_setup_completed';
 
 export function getIsOnboardingBannerDismissed(): boolean {
   if (typeof window === 'undefined') return false;
@@ -23,6 +24,24 @@ export function setOnboardingBannerDismissed(dismissed: boolean) {
   }
 }
 
+export function getIsOnboardingCompleted(): boolean {
+  if (typeof window === 'undefined') return false;
+  return localStorage.getItem(ONBOARDING_SETUP_COMPLETED_KEY) === 'true';
+}
+
+export function setOnboardingCompleted(completed: boolean) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (completed) {
+      localStorage.setItem(ONBOARDING_SETUP_COMPLETED_KEY, 'true');
+    } else {
+      localStorage.removeItem(ONBOARDING_SETUP_COMPLETED_KEY);
+    }
+  } catch {
+    // ignore quota/storage errors
+  }
+}
+
 interface CompanyOnboardingBannerProps {
   onOpenTemplateEditor?: () => void;
   onPreviewTemplate?: () => void;
@@ -35,15 +54,54 @@ export function CompanyOnboardingBanner({
   const [, setLocation] = useLocation();
   const { data: status, isLoading } = useCompanyOnboardingStatus();
   const [dismissed, setDismissed] = useState<boolean>(getIsOnboardingBannerDismissed);
+  const [setupCompletedLocal, setSetupCompletedLocal] = useState<boolean>(getIsOnboardingCompleted);
+
+  useEffect(() => {
+    if (status?.setupCompleted) {
+      setSetupCompletedLocal(true);
+      setOnboardingCompleted(true);
+    }
+  }, [status?.setupCompleted]);
 
   const handleDismiss = () => {
     setDismissed(true);
     setOnboardingBannerDismissed(true);
   };
 
-  if (isLoading || !status || status.setupCompleted || dismissed) {
+  if (dismissed || setupCompletedLocal || status?.setupCompleted) {
     return null;
   }
+
+  if (isLoading || !status) {
+    return (
+      <div
+        className="mb-6 rounded-3xl border border-[#ebdce1] bg-gradient-to-br from-[#fffbfa] via-[#fff5f7] to-[#fbf2f4] p-6 md:p-8 shadow-sm animate-pulse"
+        aria-hidden="true"
+        style={{ minHeight: '260px' }}
+      >
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-6 border-b border-[#f3e1e6]">
+          <div>
+            <div className="h-4 w-32 rounded-full mb-3 bg-[#ebd5db]" />
+            <div className="h-7 w-64 md:w-80 mb-2 rounded-lg bg-[#dfabb9]/40" />
+            <div className="h-4 w-96 max-w-full rounded bg-[#ebd5db]" />
+          </div>
+          <div className="flex gap-2">
+            <div className="h-10 w-36 rounded-xl bg-[#dfabb9]/40" />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
+          {[1, 2, 3, 4].map(idx => (
+            <div key={idx} className="p-4 rounded-2xl border border-[#ebdce1] bg-white/70">
+              <div className="w-8 h-8 rounded-xl mb-3 bg-[#ebd5db]" />
+              <div className="h-4 w-28 mb-1 rounded bg-[#ebd5db]" />
+              <div className="h-3 w-36 rounded bg-[#f0e2e5]" />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
 
   const steps = [
     {

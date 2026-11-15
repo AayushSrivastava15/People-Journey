@@ -113,16 +113,18 @@ export async function resetPassword(email: string): Promise<void> {
 
 /**
  * Synchronize verified Firebase user with Express backend and PostgreSQL app_users table.
- * Returns authoritative PostgreSQL profile and role.
+ * Establishes a secure HttpOnly 7-day session cookie and returns authoritative PostgreSQL profile.
  */
 export async function syncUserWithBackend(token: string): Promise<AppUser> {
-  const url = buildApiUrl('/auth/session');
+  const url = buildApiUrl('/auth/google');
   const response = await fetch(url, {
-    method: 'GET',
+    method: 'POST',
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
+    body: JSON.stringify({ idToken: token }),
   });
 
   if (!response.ok) {
@@ -152,10 +154,26 @@ export async function getCurrentUserToken(forceRefresh = false): Promise<string 
 
 /**
  * Sign out the current user.
+ * Notifies the backend to revoke refresh tokens and clears the HttpOnly session cookie,
+ * then terminates the Firebase client authentication state.
  */
 export async function logout(): Promise<void> {
-  await signOut(auth);
+  try {
+    const url = buildApiUrl('/auth/logout');
+    await fetch(url, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+  } catch (err) {
+    console.warn('Backend logout notification failed:', err);
+  } finally {
+    await signOut(auth);
+  }
 }
+
 
 /**
  * Map Firebase error codes to friendly, human-centric messages.

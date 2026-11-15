@@ -617,14 +617,48 @@ function CreateInterviewDialog({
         <DialogContent
           className="max-w-xl border-[#ebdada] bg-[#fffdfb] p-0"
           onPointerDownOutside={e => {
-            const target = e.target as HTMLElement;
-            if (target?.closest?.('.animated-select-container') || target?.closest?.('[role="listbox"]')) {
+            const original = (e.detail?.originalEvent?.target || e.target) as HTMLElement | null;
+            if (
+              emailOpen ||
+              original?.closest?.('.animated-select-container') ||
+              original?.closest?.('.animated-select-dropdown') ||
+              original?.closest?.('[role="listbox"]') ||
+              original?.closest?.('[role="option"]') ||
+              original?.closest?.('[data-animated-select-dropdown]') ||
+              original?.closest?.('[data-animated-select-option]') ||
+              original?.closest?.('[data-email-preparation-dialog]') ||
+              original?.closest?.('.email-preparation-dialog')
+            ) {
               e.preventDefault();
             }
           }}
           onInteractOutside={e => {
-            const target = e.target as HTMLElement;
-            if (target?.closest?.('.animated-select-container') || target?.closest?.('[role="listbox"]')) {
+            const original = (e.detail?.originalEvent?.target || e.target) as HTMLElement | null;
+            if (
+              emailOpen ||
+              original?.closest?.('.animated-select-container') ||
+              original?.closest?.('.animated-select-dropdown') ||
+              original?.closest?.('[role="listbox"]') ||
+              original?.closest?.('[role="option"]') ||
+              original?.closest?.('[data-animated-select-dropdown]') ||
+              original?.closest?.('[data-animated-select-option]') ||
+              original?.closest?.('[data-email-preparation-dialog]') ||
+              original?.closest?.('.email-preparation-dialog')
+            ) {
+              e.preventDefault();
+            }
+          }}
+          onFocusOutside={e => {
+            const original = (e.detail?.originalEvent?.target || e.target) as HTMLElement | null;
+            if (
+              emailOpen ||
+              original?.closest?.('.animated-select-container') ||
+              original?.closest?.('.animated-select-dropdown') ||
+              original?.closest?.('[role="listbox"]') ||
+              original?.closest?.('[role="option"]') ||
+              original?.closest?.('[data-animated-select-dropdown]') ||
+              original?.closest?.('[data-email-preparation-dialog]')
+            ) {
               e.preventDefault();
             }
           }}
@@ -999,14 +1033,48 @@ function InterviewDetailDialog({
         <DialogContent
           className="max-w-3xl border-[#ebdada] bg-[#fffdfb] p-0"
           onPointerDownOutside={e => {
-            const target = e.target as HTMLElement;
-            if (target?.closest?.('.animated-select-container') || target?.closest?.('[role="listbox"]')) {
+            const original = (e.detail?.originalEvent?.target || e.target) as HTMLElement | null;
+            if (
+              emailOpen ||
+              original?.closest?.('.animated-select-container') ||
+              original?.closest?.('.animated-select-dropdown') ||
+              original?.closest?.('[role="listbox"]') ||
+              original?.closest?.('[role="option"]') ||
+              original?.closest?.('[data-animated-select-dropdown]') ||
+              original?.closest?.('[data-animated-select-option]') ||
+              original?.closest?.('[data-email-preparation-dialog]') ||
+              original?.closest?.('.email-preparation-dialog')
+            ) {
               e.preventDefault();
             }
           }}
           onInteractOutside={e => {
-            const target = e.target as HTMLElement;
-            if (target?.closest?.('.animated-select-container') || target?.closest?.('[role="listbox"]')) {
+            const original = (e.detail?.originalEvent?.target || e.target) as HTMLElement | null;
+            if (
+              emailOpen ||
+              original?.closest?.('.animated-select-container') ||
+              original?.closest?.('.animated-select-dropdown') ||
+              original?.closest?.('[role="listbox"]') ||
+              original?.closest?.('[role="option"]') ||
+              original?.closest?.('[data-animated-select-dropdown]') ||
+              original?.closest?.('[data-animated-select-option]') ||
+              original?.closest?.('[data-email-preparation-dialog]') ||
+              original?.closest?.('.email-preparation-dialog')
+            ) {
+              e.preventDefault();
+            }
+          }}
+          onFocusOutside={e => {
+            const original = (e.detail?.originalEvent?.target || e.target) as HTMLElement | null;
+            if (
+              emailOpen ||
+              original?.closest?.('.animated-select-container') ||
+              original?.closest?.('.animated-select-dropdown') ||
+              original?.closest?.('[role="listbox"]') ||
+              original?.closest?.('[role="option"]') ||
+              original?.closest?.('[data-animated-select-dropdown]') ||
+              original?.closest?.('[data-email-preparation-dialog]')
+            ) {
               e.preventDefault();
             }
           }}

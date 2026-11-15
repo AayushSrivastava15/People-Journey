@@ -42,6 +42,7 @@ import { AddEmployeeWizard } from '@/components/add-employee-wizard';
 import { DeleteEmployeeDialog } from '@/components/delete-employee-dialog';
 import { SmartEmployeeImportWizard } from '@/components/smart-employee-import-wizard';
 import { triggerCookiePreferencesModal } from '@/components/cookie-consent-banner';
+import { OverviewSkeleton, PersonalDashboardSkeleton } from '@/components/dashboard-skeletons';
 
 
 const navGroups = [
@@ -766,13 +767,38 @@ function Overview() {
   const [page, setPage] = useState(0);
   const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
   const [templateEditorMode, setTemplateEditorMode] = useState<'editor' | 'preview'>('editor');
+  const [chartsReady, setChartsReady] = useState(false);
   const today = dateFromToday(0);
 
   // Fetch live workspace stats & derived lifecycle data
-  const { data: liveStats } = useDashboardStats();
+  const { data: liveStats, isLoading: isStatsLoading } = useDashboardStats();
   const { notifications } = useWorkspaceLifecycleData();
   const { data: notifData } = useNotifications();
   const { data: exitInterviewsData } = useExitInterviews({ limit: 100 });
+
+  // Defer heavy SVG chart mounting to frame 2 to unblock main-thread performSyncWorkOnRoot
+  useEffect(() => {
+    const handle = requestAnimationFrame(() => setChartsReady(true));
+    return () => cancelAnimationFrame(handle);
+  }, []);
+
+  if (isStatsLoading && !liveStats) {
+    return (
+      <>
+        <CompanyOnboardingBanner
+          onOpenTemplateEditor={() => {
+            setTemplateEditorMode('editor');
+            setTemplateEditorOpen(true);
+          }}
+          onPreviewTemplate={() => {
+            setTemplateEditorMode('preview');
+            setTemplateEditorOpen(true);
+          }}
+        />
+        <OverviewSkeleton />
+      </>
+    );
+  }
 
   const totalEmployees = liveStats ? liveStats.totalEmployees : 0;
   const joiningMonth = liveStats ? liveStats.joiningThisMonth : 0;
@@ -859,16 +885,27 @@ function Overview() {
             <span className="chart-key"><i /> Joining <i className="key-exit" /> Exits</span>
           </div>
           <div className="chart-box">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={activity} margin={{ top: 6, right: 8, bottom: 0, left: -20 }}>
-                <CartesianGrid stroke="#f2e8e7" vertical={false} />
-                <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: '#95858e', fontSize: 11 }} />
-                <YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fill: '#a99ba2', fontSize: 10 }} />
-                <Tooltip contentStyle={{ border: '1px solid #f0e5e5', borderRadius: 12, fontSize: 12, background: '#fffdfa' }} />
-                <Bar dataKey="joining" name="Joining" fill="#dfabb9" radius={[5, 5, 0, 0]} />
-                <Bar dataKey="exits" name="Exits" fill="#c5b9dc" radius={[5, 5, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            {chartsReady ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={activity} margin={{ top: 6, right: 8, bottom: 0, left: -20 }}>
+                  <CartesianGrid stroke="#f2e8e7" vertical={false} />
+                  <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: '#95858e', fontSize: 11 }} />
+                  <YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fill: '#a99ba2', fontSize: 10 }} />
+                  <Tooltip contentStyle={{ border: '1px solid #f0e5e5', borderRadius: 12, fontSize: 12, background: '#fffdfa' }} />
+                  <Bar dataKey="joining" name="Joining" fill="#dfabb9" radius={[5, 5, 0, 0]} />
+                  <Bar dataKey="exits" name="Exits" fill="#c5b9dc" radius={[5, 5, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-end gap-3 pt-6 px-4 h-full" aria-hidden="true">
+                {[40, 65, 30, 80, 55, 70].map((h, idx) => (
+                  <div key={idx} className="flex-1 flex flex-col justify-end items-center gap-2 h-full">
+                    <div className="w-full rounded-t-md bg-[#ebd5db] animate-pulse" style={{ height: `${h}%` }} />
+                    <div className="h-2.5 w-8 rounded bg-[#f2e2e6] animate-pulse" />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </section>
         <section className="panel distribution-panel">
@@ -880,18 +917,26 @@ function Overview() {
             </div>
           </div>
           <div className="donut-wrap">
-            <ResponsiveContainer width="100%" height={190}>
-              <PieChart>
-                <Pie data={statusData} dataKey="value" nameKey="name" innerRadius={57} outerRadius={78} paddingAngle={3} stroke="none">
-                  {statusData.map((entry, index) => <Cell key={entry.name} fill={colors[index % colors.length]} />)}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-            <div className="donut-total">
-              <b>{statusData.reduce((acc, curr) => acc + curr.value, 0)}</b>
-              <span>people</span>
-            </div>
+            {chartsReady ? (
+              <>
+                <ResponsiveContainer width="100%" height={190}>
+                  <PieChart>
+                    <Pie data={statusData} dataKey="value" nameKey="name" innerRadius={57} outerRadius={78} paddingAngle={3} stroke="none">
+                      {statusData.map((entry, index) => <Cell key={entry.name} fill={colors[index % colors.length]} />)}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="donut-total">
+                  <b>{statusData.reduce((acc, curr) => acc + curr.value, 0)}</b>
+                  <span>people</span>
+                </div>
+              </>
+            ) : (
+              <div className="w-full h-full flex items-center justify-center" aria-hidden="true">
+                <div className="w-36 h-36 rounded-full border-8 border-[#ebd5db] border-t-[#dfabb9] animate-pulse" />
+              </div>
+            )}
           </div>
           <div className="distribution-legend">
             {statusData.map((entry, index) => (
@@ -1993,14 +2038,9 @@ function PersonalDashboard() {
   const { user } = useAuth();
 
   if (isLoading) {
-    return (
-      <div className="panel" style={{ padding: '60px 20px', textAlign: 'center', color: '#887582' }}>
-        <Loader2 size={28} className="animate-spin" style={{ margin: '0 auto 12px auto', color: '#bd7b92' }} />
-        <h3>Loading your personal workspace...</h3>
-        <p>Preparing your personal team touchpoints</p>
-      </div>
-    );
+    return <PersonalDashboardSkeleton />;
   }
+
 
   if (error || !dashboard) {
     return (

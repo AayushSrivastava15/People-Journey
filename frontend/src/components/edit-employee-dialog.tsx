@@ -291,14 +291,40 @@ export function EditEmployeeDialog({
       <Dialog open={open && !pendingTransition} onOpenChange={(o) => { if (!o) handleCancelDialog(); }}>
         <DialogContent
           onPointerDownOutside={e => {
-            const target = e.target as HTMLElement;
-            if (target?.closest?.('.animated-select-container') || target?.closest?.('[role="listbox"]')) {
+            const original = (e.detail?.originalEvent?.target || e.target) as HTMLElement | null;
+            if (
+              original?.closest?.('.animated-select-container') ||
+              original?.closest?.('.animated-select-dropdown') ||
+              original?.closest?.('[role="listbox"]') ||
+              original?.closest?.('[role="option"]') ||
+              original?.closest?.('[data-animated-select-dropdown]') ||
+              original?.closest?.('[data-animated-select-option]')
+            ) {
               e.preventDefault();
             }
           }}
           onInteractOutside={e => {
-            const target = e.target as HTMLElement;
-            if (target?.closest?.('.animated-select-container') || target?.closest?.('[role="listbox"]')) {
+            const original = (e.detail?.originalEvent?.target || e.target) as HTMLElement | null;
+            if (
+              original?.closest?.('.animated-select-container') ||
+              original?.closest?.('.animated-select-dropdown') ||
+              original?.closest?.('[role="listbox"]') ||
+              original?.closest?.('[role="option"]') ||
+              original?.closest?.('[data-animated-select-dropdown]') ||
+              original?.closest?.('[data-animated-select-option]')
+            ) {
+              e.preventDefault();
+            }
+          }}
+          onFocusOutside={e => {
+            const original = (e.detail?.originalEvent?.target || e.target) as HTMLElement | null;
+            if (
+              original?.closest?.('.animated-select-container') ||
+              original?.closest?.('.animated-select-dropdown') ||
+              original?.closest?.('[role="listbox"]') ||
+              original?.closest?.('[role="option"]') ||
+              original?.closest?.('[data-animated-select-dropdown]')
+            ) {
               e.preventDefault();
             }
           }}

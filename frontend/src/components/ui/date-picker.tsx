@@ -151,7 +151,7 @@ export function DatePicker({
         </button>
       </PopoverTrigger>
       <PopoverContent
-        className="w-[284px] p-2.5 border border-[#eee3e2] bg-[#fffdfa] rounded-2xl shadow-xl overflow-hidden z-50"
+        className="w-[284px] p-2.5 border border-[#eee3e2] bg-[#fffdfa] rounded-2xl shadow-xl overflow-hidden z-[100]"
         align="start"
         sideOffset={6}
       >

@@ -461,16 +461,14 @@ export function AnimatedSelect({
                       <div
                         key={opt.value || `opt-${index}`}
                         role="option"
+                        data-animated-select-option="true"
                         aria-selected={isSelected}
                         onPointerDown={e => {
-                          e.preventDefault();
                           e.stopPropagation();
-                          handleSelectOption(opt);
                         }}
                         onMouseDown={e => {
                           e.preventDefault();
                           e.stopPropagation();
-                          handleSelectOption(opt);
                         }}
                         onClick={e => {
                           e.preventDefault();
@@ -561,7 +559,8 @@ export function AnimatedSelect({
                   );
                 })
               )}
-              </motion.div>
+                </motion.div>
+              </DismissableLayerBranch>
             )}
           </AnimatePresence>,
           document.body

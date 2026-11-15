@@ -2,7 +2,7 @@
 
 A human-centric employee lifecycle management workspace for onboarding, offboarding, milestone communications, and exit interviews.
 
-**Live application:** https://people-journey-frontend.onrender.com/
+**Live application:** https://people-journey-hr.onrender.com/
 
 Built with a clean separation of concerns:
 - **`frontend/`**: Standalone React 19 + TypeScript web application powered by Vite, Tailwind CSS, shadcn/ui, Motion, Firebase Authentication (Google Sign-In), and TanStack Query.

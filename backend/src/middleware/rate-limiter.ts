@@ -130,6 +130,92 @@ export interface LimiterConfig {
   skipFailedRequests?: boolean;
 }
 
+class HybridRateLimitStore {
+  private category: string;
+  private windowMs: number;
+  private redisStore: any = null;
+  private memoryHits: Map<string, { totalHits: number; resetTime: Date }> = new Map();
+
+  constructor(category: string, windowMs: number) {
+    this.category = category;
+    this.windowMs = windowMs;
+    const client = getRedisClient();
+    if (client) {
+      try {
+        this.redisStore = new RedisStore({
+          sendCommand: (...args: string[]) => {
+            if (!redisClient || !isRedisAvailable) {
+              throw new Error('Redis is not currently available');
+            }
+            return redisClient.call(args[0], ...args.slice(1)) as any;
+          },
+          prefix: `pj:rl:${category}:`,
+        });
+      } catch (err) {
+        logger.warn(
+          { message: (err as Error).message, category },
+          'Failed to bind RedisStore for rate limiter; using in-memory store.'
+        );
+      }
+    }
+  }
+
+  async increment(key: string) {
+    if (isRedisAvailable && this.redisStore) {
+      try {
+        return await this.redisStore.increment(key);
+      } catch (err) {
+        logger.warn(
+          { message: (err as Error).message, category: this.category },
+          'Redis rate limit increment failed; gracefully utilizing in-memory fallback.'
+        );
+      }
+    }
+
+    const now = Date.now();
+    let record = this.memoryHits.get(key);
+    if (!record || record.resetTime.getTime() <= now) {
+      record = {
+        totalHits: 1,
+        resetTime: new Date(now + this.windowMs),
+      };
+      this.memoryHits.set(key, record);
+    } else {
+      record.totalHits += 1;
+    }
+
+    return {
+      totalHits: record.totalHits,
+      resetTime: record.resetTime,
+    };
+  }
+
+  async decrement(key: string) {
+    if (isRedisAvailable && this.redisStore) {
+      try {
+        return await this.redisStore.decrement(key);
+      } catch {
+        // fallback
+      }
+    }
+    const record = this.memoryHits.get(key);
+    if (record && record.totalHits > 0) {
+      record.totalHits -= 1;
+    }
+  }
+
+  async resetKey(key: string) {
+    if (isRedisAvailable && this.redisStore) {
+      try {
+        return await this.redisStore.resetKey(key);
+      } catch {
+        // fallback
+      }
+    }
+    this.memoryHits.delete(key);
+  }
+}
+
 /**
  * Factory for creating production-ready Express rate limiters with:
  * - Redis-backed distributed storage when available
@@ -140,23 +226,7 @@ export interface LimiterConfig {
  */
 export function createRateLimiter(config: LimiterConfig): RateLimitRequestHandler {
   const { category, windowMs, max, type = 'auto', message, skipFailedRequests = false } = config;
-  const client = getRedisClient();
-
-  // Create RedisStore if Redis is connected and responsive
-  let store: any = undefined;
-  if (client && isRedisAvailable) {
-    try {
-      store = new RedisStore({
-        sendCommand: (...args: string[]) => client.call(args[0], ...args.slice(1)) as any,
-        prefix: `pj:rl:${category}:`,
-      });
-    } catch (err) {
-      logger.warn(
-        { message: (err as Error).message, category },
-        'Failed to bind RedisStore for rate limiter; using in-memory store.'
-      );
-    }
-  }
+  const store = env.REDIS_URL ? new HybridRateLimitStore(category, windowMs) : undefined;
 
   return rateLimit({
     windowMs,
@@ -213,52 +283,76 @@ export function createRateLimiter(config: LimiterConfig): RateLimitRequestHandle
 
 /**
  * Optional authentication pre-resolver for the general API rate limiter.
- * If a valid Bearer token is present, resolves the verified user into req.user
+ * If a valid HttpOnly session cookie or Bearer token is present, resolves the verified user into req.user
  * without rejecting unauthenticated requests.
  */
 export async function resolveOptionalAuth(req: Request, _res: Response, next: NextFunction): Promise<void> {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return next();
+  let uid: string | undefined;
+
+  // 1. Check for HttpOnly session cookie
+  const sessionCookie = req.cookies?.pj_session;
+  if (sessionCookie && typeof sessionCookie === 'string' && sessionCookie.trim()) {
+    try {
+      const auth = getFirebaseAuth();
+      const decoded = await auth.verifySessionCookie(sessionCookie.trim(), false);
+      uid = decoded.uid;
+      req.firebaseUser = {
+        uid: decoded.uid,
+        email: decoded.email,
+        name: decoded.name,
+        picture: decoded.picture,
+      };
+    } catch {
+      // invalid cookie, try bearer token
+    }
   }
 
-  const token = authHeader.slice(7).trim();
-  if (!token) {
-    return next();
+  // 2. Fall back to Authorization: Bearer token
+  if (!uid) {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.slice(7).trim();
+      if (token) {
+        try {
+          const auth = getFirebaseAuth();
+          const decoded = await auth.verifyIdToken(token);
+          uid = decoded.uid;
+          req.firebaseUser = {
+            uid: decoded.uid,
+            email: decoded.email,
+            name: decoded.name,
+            picture: decoded.picture,
+          };
+        } catch {
+          // silently continue as unauthenticated
+        }
+      }
+    }
   }
 
-  try {
-    const auth = getFirebaseAuth();
-    const decodedToken = await auth.verifyIdToken(token);
-    req.firebaseUser = {
-      uid: decodedToken.uid,
-      email: decodedToken.email,
-      name: decodedToken.name,
-      picture: decodedToken.picture,
-    };
-
-    // Check fast in-memory auth cache first
-    const cachedUser = authCache.get(decodedToken.uid);
+  if (uid) {
+    const cachedUser = authCache.get(uid);
     if (cachedUser) {
       req.user = cachedUser;
       req.appUser = cachedUser;
       return next();
     }
 
-    // Resolve from database
-    const user = await userService.findByFirebaseUid(decodedToken.uid);
-    if (user && user.accountStatus === 'active') {
-      authCache.set(decodedToken.uid, user);
-      req.user = user;
-      req.appUser = user;
+    try {
+      const user = await userService.findByFirebaseUid(uid);
+      if (user && user.accountStatus === 'active') {
+        authCache.set(uid, user);
+        req.user = user;
+        req.appUser = user;
+      }
+    } catch {
+      // silently continue
     }
-  } catch {
-    // Silently continue as unauthenticated for the rate limiter.
-    // The downstream authenticateToken middleware will handle rejection if required.
   }
 
   next();
 }
+
 
 // ----------------------------------------------------------------------
 // Preconfigured Limiters (per user requirements)

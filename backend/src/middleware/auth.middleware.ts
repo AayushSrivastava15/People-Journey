@@ -6,6 +6,7 @@ import type { AppUser, AppRole } from '../models/user.model.js';
 import type { TenantContext } from '../config/database.js';
 import { logger } from '../utils/logger.js';
 import { authCache } from '../utils/auth-cache.js';
+import { env } from '../config/env.js';
 
 export const invalidateUserAuthCache = (identifier?: string) => authCache.invalidate(identifier);
 
@@ -39,49 +40,80 @@ export async function authenticateToken(
   res: Response,
   next: NextFunction
 ): Promise<void> {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({
-      success: false,
-      authorized: false,
-      error: {
-        code: 'UNAUTHORIZED',
-        message: 'Missing or malformed Authorization header with Bearer token.',
-      },
-    });
-    return;
+  let decodedToken: { uid: string; email?: string; name?: string; picture?: string; [key: string]: unknown };
+
+  // 1. Primary: Check for secure HttpOnly Firebase session cookie
+  const sessionCookie = req.cookies?.pj_session;
+  if (sessionCookie && typeof sessionCookie === 'string' && sessionCookie.trim()) {
+    try {
+      const auth = getFirebaseAuth();
+      // checkRevoked: true enforces server-side session revocation
+      decodedToken = await auth.verifySessionCookie(sessionCookie.trim(), true);
+    } catch (err) {
+      const error = err as Error;
+      logger.warn({ message: error.message }, 'Firebase session cookie verification failed');
+      res.clearCookie('pj_session', {
+        httpOnly: true,
+        secure: env.NODE_ENV === 'production',
+        sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
+        path: '/',
+      });
+      res.status(401).json({
+        success: false,
+        authorized: false,
+        error: {
+          code: 'SESSION_EXPIRED',
+          message: 'Your session has expired or was revoked. Please sign in again.',
+        },
+      });
+      return;
+    }
+  } else {
+    // 2. Backward-Compatible Fallback: Authorization: Bearer <token>
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      res.status(401).json({
+        success: false,
+        authorized: false,
+        error: {
+          code: 'UNAUTHORIZED',
+          message: 'Authentication required. Please sign in.',
+        },
+      });
+      return;
+    }
+
+    const token = authHeader.slice(7).trim();
+    if (!token) {
+      res.status(401).json({
+        success: false,
+        authorized: false,
+        error: {
+          code: 'UNAUTHORIZED',
+          message: 'Bearer token is empty.',
+        },
+      });
+      return;
+    }
+
+    try {
+      const auth = getFirebaseAuth();
+      decodedToken = await auth.verifyIdToken(token, true);
+    } catch (err) {
+      const error = err as Error;
+      logger.warn({ message: error.message }, 'Firebase ID token verification failed');
+      res.status(401).json({
+        success: false,
+        authorized: false,
+        error: {
+          code: 'INVALID_TOKEN',
+          message: 'Invalid, expired, or revoked Firebase token. Please sign in again.',
+        },
+      });
+      return;
+    }
   }
 
-  const token = authHeader.slice(7).trim();
-  if (!token) {
-    res.status(401).json({
-      success: false,
-      authorized: false,
-      error: {
-        code: 'UNAUTHORIZED',
-        message: 'Bearer token is empty.',
-      },
-    });
-    return;
-  }
-
-  let decodedToken;
-  try {
-    const auth = getFirebaseAuth();
-    decodedToken = await auth.verifyIdToken(token);
-  } catch (err) {
-    const error = err as Error;
-    logger.warn({ message: error.message }, 'Firebase token verification failed');
-    res.status(401).json({
-      success: false,
-      authorized: false,
-      error: {
-        code: 'INVALID_TOKEN',
-        message: 'Invalid, expired, or revoked Firebase ID token. Please sign in again.',
-      },
-    });
-    return;
-  }
 
   req.firebaseUser = {
     uid: decodedToken.uid,

@@ -3,6 +3,8 @@ import { userService } from '../services/user.service.js';
 import { UpdateUserProfileSchema } from '../models/user.model.js';
 import { getFirebaseAuth } from '../config/firebase.js';
 import { logger } from '../utils/logger.js';
+import { env } from '../config/env.js';
+import { invalidateUserAuthCache } from '../middleware/auth.middleware.js';
 
 /**
  * Retrieve current authenticated session and PostgreSQL user profile.
@@ -95,6 +97,21 @@ export async function googleLogin(req: Request, res: Response): Promise<void> {
       return;
     }
 
+    // Generate 7-day Firebase session cookie
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    try {
+      const sessionCookie = await auth.createSessionCookie(token, { expiresIn: SEVEN_DAYS_MS });
+      res.cookie('pj_session', sessionCookie, {
+        maxAge: SEVEN_DAYS_MS,
+        httpOnly: true,
+        secure: env.NODE_ENV === 'production',
+        sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
+        path: '/',
+      });
+    } catch (cookieErr) {
+      logger.warn({ message: (cookieErr as Error).message }, 'Failed to create Firebase session cookie; continuing with token');
+    }
+
     res.status(200).json({
       success: true,
       authorized: true,
@@ -111,6 +128,7 @@ export async function googleLogin(req: Request, res: Response): Promise<void> {
         preferences: user.preferences,
       },
     });
+
   } catch (err) {
     const error = err as Error;
     logger.warn({ message: error.message }, 'Failed Google authentication exchange');
@@ -194,13 +212,33 @@ export async function updateCurrentUserProfile(req: Request, res: Response): Pro
 
 /**
  * Handle application logout.
+ * Revokes Firebase refresh tokens on the server, clears session cache, and removes session cookie.
  */
-export async function logout(_req: Request, res: Response): Promise<void> {
+export async function logout(req: Request, res: Response): Promise<void> {
+  const uid = req.user?.firebaseUid || req.firebaseUser?.uid;
+  if (uid) {
+    try {
+      const auth = getFirebaseAuth();
+      await auth.revokeRefreshTokens(uid);
+      invalidateUserAuthCache(uid);
+    } catch (err) {
+      logger.warn({ message: (err as Error).message }, 'Failed to revoke Firebase session on logout');
+    }
+  }
+
+  res.clearCookie('pj_session', {
+    httpOnly: true,
+    secure: env.NODE_ENV === 'production',
+    sameSite: env.NODE_ENV === 'production' ? 'none' : 'lax',
+    path: '/',
+  });
+
   res.status(200).json({
     success: true,
-    message: 'Signed out successfully.',
+    message: 'Signed out successfully and revoked server sessions.',
   });
 }
+
 
 // Compatibility alias for verifyAuth
 export const verifyAuth = getSession;

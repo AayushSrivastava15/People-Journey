@@ -28,7 +28,7 @@ export const env = {
   FRONTEND_URL: (
     process.env.FRONTEND_URL ||
     (process.env.CORS_ORIGIN || '').split(',')[0].trim() ||
-    (process.env.NODE_ENV === 'production' ? 'https://people-journey-frontend.onrender.com' : 'http://localhost:3000')
+    (process.env.NODE_ENV === 'production' ? 'https://people-journey-hr.onrender.com' : 'http://localhost:3000')
   ).replace(/\/$/, ''),
   PUBLIC_APP_URL: process.env.PUBLIC_APP_URL || (process.env.NODE_ENV === 'development' ? 'http://localhost:5000' : ''),
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',

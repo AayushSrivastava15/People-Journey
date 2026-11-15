@@ -73,6 +73,7 @@ export async function apiClient<T>(endpoint: string, options: RequestInit = {}):
 
   try {
     const response = await fetch(url, {
+      credentials: 'include',
       ...options,
       headers,
       signal,

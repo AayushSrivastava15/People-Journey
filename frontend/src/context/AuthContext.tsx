@@ -19,6 +19,8 @@ import {
   handleRedirectResult,
   syncUserWithBackend,
 } from "../services/authService";
+import { broadcastLogout, subscribeToAuthEvents } from "../services/auth-sync";
+import { buildApiUrl } from "../api/client";
 import type { AppUser, AppRole } from "../types/api";
 
 export interface AuthContextValue {
@@ -58,6 +60,23 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const currentUser = targetUser !== undefined ? targetUser : auth.currentUser;
 
     if (!currentUser) {
+      // Check if a valid HttpOnly session cookie exists on the backend
+      try {
+        const url = buildApiUrl('/auth/session');
+        const res = await fetch(url, { credentials: 'include' });
+        if (res.ok) {
+          const sessionData = await res.json();
+          if (sessionData?.authorized && sessionData?.user) {
+            setAppUser(sessionData.user);
+            setIsAuthorized(true);
+            setAuthRole(sessionData.user.role);
+            setAuthorizationChecking(false);
+            return true;
+          }
+        }
+      } catch {
+        // No active session cookie
+      }
       setAppUser(null);
       setIsAuthorized(null);
       setAuthRole(null);
@@ -70,7 +89,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     try {
       const token = await currentUser.getIdToken();
-      // Synchronize with PostgreSQL via Express backend
+      // Synchronize with PostgreSQL via Express backend & establish session cookie
       const profile = await syncUserWithBackend(token);
 
       setAppUser(profile);
@@ -98,6 +117,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const handleSignOut = useCallback(async () => {
     try {
       await logout();
+      broadcastLogout();
     } finally {
       setUser(null);
       setAppUser(null);
@@ -107,6 +127,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setAuthorizationChecking(false);
     }
   }, []);
+
 
   const handleSignInWithGoogle = useCallback(async () => {
     setAuthorizationChecking(true);
@@ -183,6 +204,21 @@ export function AuthProvider({ children }: AuthProviderProps) {
       unsubscribe?.();
     };
   }, [verifyAuthorization]);
+
+  // Cross-tab logout listener: synchronously cleans up state if user logs out from another tab
+  useEffect(() => {
+    const unsubscribeSync = subscribeToAuthEvents(() => {
+      setUser(null);
+      setAppUser(null);
+      setIsAuthorized(null);
+      setAuthRole(null);
+      setAuthError(null);
+      setAuthorizationChecking(false);
+      logout().catch(() => {});
+    });
+    return unsubscribeSync;
+  }, []);
+
 
   const isHr = false;
   const isAdmin = false;

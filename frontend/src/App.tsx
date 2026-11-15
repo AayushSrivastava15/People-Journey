@@ -6,11 +6,10 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
 import { ProtectedRoute } from '@/components/layout/protected-route';
 import { Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
-import { LandingPage } from '@/pages/landing-page';
-import { LoginPage } from '@/pages/login-page';
 import { CookieConsentBanner } from '@/components/cookie-consent-banner';
 import { SessionInactivityTracker } from '@/components/session-inactivity-tracker';
 import { useAuth } from '@/context';
+import { DashboardShellSkeleton } from '@/components/dashboard-skeletons';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -21,6 +20,16 @@ const queryClient = new QueryClient({
       retry: 1,
     },
   },
+});
+
+const LandingPage = lazy(async () => {
+  const module = await import('@/pages/landing-page');
+  return { default: module.LandingPage };
+});
+
+const LoginPage = lazy(async () => {
+  const module = await import('@/pages/login-page');
+  return { default: module.LoginPage };
 });
 
 const DashboardPage = lazy(async () => {
@@ -41,13 +50,30 @@ function RouteFallback({ label = 'Loading…' }: { label?: string }) {
   );
 }
 
+function LandingRoute() {
+  return (
+    <Suspense fallback={<RouteFallback label="Loading People Journey…" />}>
+      <LandingPage />
+    </Suspense>
+  );
+}
+
+function LoginRoute() {
+  return (
+    <Suspense fallback={<RouteFallback label="Loading login…" />}>
+      <LoginPage />
+    </Suspense>
+  );
+}
+
 function DashboardRoute() {
   return (
-    <Suspense fallback={<RouteFallback label="Loading workspace…" />}>
+    <Suspense fallback={<DashboardShellSkeleton />}>
       <DashboardPage />
     </Suspense>
   );
 }
+
 
 function ShortLinkRoute() {
   return (
@@ -86,9 +112,9 @@ function Router() {
   return (
     <RoutedErrorBoundary>
       <Switch>
-        <Route path="/" component={LandingPage} />
+        <Route path="/" component={LandingRoute} />
         <Route path="/index.html" component={IndexHtmlRedirect} />
-        <Route path="/login" component={LoginPage} />
+        <Route path="/login" component={LoginRoute} />
         <Route path="/dashboard" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/overview" component={ProtectedWorkspaceRoute} />
         <Route path="/dashboard/settings" component={ProtectedWorkspaceRoute} />
